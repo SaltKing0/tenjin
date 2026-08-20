@@ -110,7 +110,11 @@ export interface LoadedConfig {
   sources: { global: string; project: string | null };
 }
 
-export function loadConfig(projectDir: string, home = tenjinHome()): LoadedConfig {
+export function loadConfig(
+  projectDir: string,
+  home = tenjinHome(),
+  opts: { skipModelCheck?: boolean } = {},
+): LoadedConfig {
   const globalPath = join(home, "config.yaml");
   const projectPath = join(projectDir, ".tenjin", "config.yaml");
 
@@ -124,7 +128,7 @@ export function loadConfig(projectDir: string, home = tenjinHome()): LoadedConfi
     approval: mergeApproval(mergeApproval(DEFAULTS.approval, globalCfg), projectCfg),
   };
 
-  validate(merged, globalPath);
+  validate(merged, globalPath, opts.skipModelCheck ?? false);
 
   return {
     config: merged,
@@ -135,13 +139,17 @@ export function loadConfig(projectDir: string, home = tenjinHome()): LoadedConfi
   };
 }
 
-function validate(cfg: HarnessConfig, globalPath: string): void {
+export function validateConfig(cfg: HarnessConfig): void {
+  validate(cfg, "", false);
+}
+
+function validate(cfg: HarnessConfig, globalPath: string, skipModelCheck: boolean): void {
   if (cfg.provider !== "anthropic" && cfg.provider !== "openai") {
     throw new ConfigError(
       `provider must be "anthropic" or "openai", got "${cfg.provider}"`,
     );
   }
-  if (!cfg.model || typeof cfg.model !== "string") {
+  if (!skipModelCheck && (!cfg.model || typeof cfg.model !== "string")) {
     throw new ConfigError(
       `No model configured. Set \`model\` in ${globalPath} or pass --model.\n` +
         `Examples: claude-sonnet-4-5, gpt-4o, deepseek-chat`,

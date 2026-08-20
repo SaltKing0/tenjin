@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 import { stdout } from "node:process";
-import { randomUUID } from "node:crypto";
 import {
   ensureGlobalDir,
   loadConfig,
+  validateConfig,
   tenjinHome,
+  sessionsDir,
   ConfigError,
   type HarnessConfig,
 } from "./config/loader";
@@ -14,6 +15,8 @@ import { loadSoul, loadAgentsMd, buildSystemPrompt } from "./agent/prompt";
 import { Budget, formatUSD, pricingFor } from "./agent/budget";
 import { runAgentTurn } from "./agent/loop";
 import { startRepl } from "./ui/repl";
+import { SessionLog } from "./session/log";
+import { rebuildMessages, sumUsage } from "./session/events";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
@@ -31,6 +34,7 @@ Usage:
   tenjin --model <id>        override configured model
   tenjin --provider <name>   anthropic | openai
   tenjin --budget <usd>      session spend cap
+  tenjin --resume <id>       continue a previous session
 
 Options:
   -h, --help                 show this help
@@ -42,6 +46,7 @@ interface CliArgs {
   model?: string;
   provider?: string;
   budget?: number;
+  resume?: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -68,6 +73,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--budget":
         args.budget = Number(argv[++i]);
+        break;
+      case "--resume":
+        args.resume = argv[++i];
         break;
       default:
         throw new ConfigError(`Unknown argument: ${a}\n\n${HELP}`);
@@ -107,8 +115,9 @@ async function main(): Promise<number> {
   }
 
   try {
-    const { config } = loadConfig(cwd, home);
+    const { config } = loadConfig(cwd, home, { skipModelCheck: !!cli.model });
     applyOverrides(config, cli);
+    validateConfig(config);
     const provider = createProvider(config);
     const soul = loadSoul(home, cwd);
     const system = buildSystemPrompt({
@@ -130,7 +139,28 @@ async function main(): Promise<number> {
       return await oneShot(ctx, cli.print);
     }
 
-    await startRepl({ ...ctx, sessionId: randomUUID().slice(0, 8) });
+    const dir = sessionsDir(home);
+    if (cli.resume) {
+      const log = SessionLog.resolve(dir, cli.resume);
+      const events = log.events();
+      await startRepl({
+        ...ctx,
+        sessionId: log.id,
+        logger: log,
+        sessionsDir: dir,
+        initialMessages: rebuildMessages(events),
+        initialSpentUSD: sumUsage(events).spentUSD,
+      });
+      return 0;
+    }
+
+    const log = SessionLog.create(dir);
+    await startRepl({
+      ...ctx,
+      sessionId: log.id,
+      logger: log,
+      sessionsDir: dir,
+    });
     return 0;
   } catch (e) {
     if (e instanceof ConfigError) {

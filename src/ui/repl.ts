@@ -7,6 +7,8 @@ import type { HarnessConfig } from "../config/loader";
 import { Budget, formatUSD, pricingFor, type Pricing } from "../agent/budget";
 import { runAgentTurn, type TurnEvent } from "../agent/loop";
 import type { EventLogger, SessionEvent } from "../session/events";
+import { rebuildMessages, sumUsage } from "../session/events";
+import { SessionLog } from "../session/log";
 import { VERSION } from "../version";
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -22,15 +24,20 @@ export interface ReplOptions {
   cwd: string;
   sessionId: string;
   logger?: EventLogger;
+  sessionsDir?: string;
   initialMessages?: ChatMessage[];
   initialSpentUSD?: number;
 }
 
 export async function startRepl(opts: ReplOptions): Promise<void> {
   const rl = createInterface({ input: stdin, output: stdout });
-  const messages: ChatMessage[] = [...(opts.initialMessages ?? [])];
-  const budget = new Budget(opts.config.budgetUSD, pricingOf(opts));
-  budget.spentUSD = opts.initialSpentUSD ?? 0;
+  const state = {
+    messages: [...(opts.initialMessages ?? [])],
+    budget: new Budget(opts.config.budgetUSD, pricingOf(opts)),
+    logger: opts.logger,
+    sessionId: opts.sessionId,
+  };
+  state.budget.spentUSD = opts.initialSpentUSD ?? 0;
   const sessionAllowed = new Set<string>();
 
   let turnActive = false;
@@ -46,7 +53,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   };
   process.on("SIGINT", onSigint);
 
-  logEvent(opts.logger, {
+  logEvent(state.logger, {
     t: "session_start",
     id: opts.sessionId,
     ts: now(),
@@ -62,13 +69,13 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       if (!line) continue;
 
       if (line.startsWith("/")) {
-        const handled = await handleCommand(line, rl, opts, budget, sessionAllowed);
+        const handled = await handleCommand(line, rl, opts, state, sessionAllowed);
         if (handled === "exit") break;
         continue;
       }
 
-      messages.push({ role: "user", content: line });
-      logEvent(opts.logger, { t: "message", role: "user", content: line, ts: now() });
+      state.messages.push({ role: "user", content: line });
+      logEvent(state.logger, { t: "message", role: "user", content: line, ts: now() });
 
       controller = new AbortController();
       turnActive = true;
@@ -79,25 +86,25 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           model: opts.config.model,
           system: opts.system,
           tools: opts.tools,
-          messages,
-          budget,
+          messages: state.messages,
+          budget: state.budget,
           maxTokens: opts.config.maxTokens,
           cwd: opts.cwd,
           approve: (name, group, input) =>
             approve(name, group, input, opts.config, rl, sessionAllowed),
           onTextDelta: (d) => stdout.write(d),
-          onEvent: (e) => forwardEvent(e, opts.logger, budget),
+          onEvent: (e) => forwardEvent(e, state.logger, state.budget),
           signal: controller.signal,
         });
         stdout.write("\n");
         if (result.stopReason === "budget_exhausted") {
-          stdout.write(red(`\nbudget cap reached (${formatUSD(budget.spentUSD)}). raise budgetUSD or /cost.\n`));
+          stdout.write(red(`\nbudget cap reached (${formatUSD(state.budget.spentUSD)}). raise budgetUSD or /cost.\n`));
         } else if (result.stopReason === "max_iterations") {
           stdout.write(red(`\nstopped after ${25} tool iterations.\n`));
         }
         stdout.write(
           dim(
-            `  [in ${result.usage.inputTokens} out ${result.usage.outputTokens} · ${formatUSD(result.costUSD)} turn · ${formatUSD(budget.spentUSD)} total]\n`,
+            `  [in ${result.usage.inputTokens} out ${result.usage.outputTokens} · ${formatUSD(result.costUSD)} turn · ${formatUSD(state.budget.spentUSD)} total]\n`,
           ),
         );
       } catch (e) {
@@ -107,7 +114,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         } else {
           const msg = (e as Error)?.message ?? String(e);
           stdout.write(red(`error: ${msg}\n`));
-          logEvent(opts.logger, { t: "error", message: msg, ts: now() });
+          logEvent(state.logger, { t: "error", message: msg, ts: now() });
         }
       } finally {
         turnActive = false;
@@ -124,11 +131,18 @@ function pricingOf(opts: ReplOptions): Pricing {
   return pricingFor(opts.config.model, opts.config.pricing);
 }
 
+interface ReplState {
+  messages: ChatMessage[];
+  budget: Budget;
+  logger: EventLogger | undefined;
+  sessionId: string;
+}
+
 async function handleCommand(
   line: string,
   rl: Interface,
   opts: ReplOptions,
-  budget: Budget,
+  state: ReplState,
   sessionAllowed: Set<string>,
 ): Promise<"exit" | void> {
   const [cmd, ...rest] = line.split(/\s+/);
@@ -141,6 +155,8 @@ async function handleCommand(
           "/cost            spend so far vs cap",
           "/model [id]      show or switch model",
           "/tools           list available tools",
+          "/sessions        list saved sessions",
+          "/resume <id>     continue a previous session",
           "",
         ].join("\n"),
       );
@@ -151,7 +167,7 @@ async function handleCommand(
     case "/cost":
       stdout.write(
         dim(
-          `spent ${formatUSD(budget.spentUSD)} of ${opts.config.budgetUSD > 0 ? formatUSD(opts.config.budgetUSD) : "no cap"}\n`,
+          `spent ${formatUSD(state.budget.spentUSD)} of ${opts.config.budgetUSD > 0 ? formatUSD(opts.config.budgetUSD) : "no cap"}\n`,
         ),
       );
       return;
@@ -168,6 +184,43 @@ async function handleCommand(
         stdout.write(dim(`${t.name.padEnd(12)} ${t.group}${sessionAllowed.has(t.name) ? " (approved this session)" : ""}\n`));
       }
       return;
+    case "/sessions": {
+      if (!opts.sessionsDir) {
+        stdout.write(red("sessions not available\n"));
+        return;
+      }
+      const all = SessionLog.list(opts.sessionsDir);
+      if (all.length === 0) {
+        stdout.write(dim("no sessions yet\n"));
+        return;
+      }
+      for (const s of all.slice(0, 15)) {
+        const when = new Date(s.mtimeMs).toISOString().replace("T", " ").slice(0, 16);
+        stdout.write(`${s.id}  ${dim(`${when}  ${s.preview}`)}\n`);
+      }
+      return;
+    }
+    case "/resume": {
+      if (!opts.sessionsDir || !rest[0]) {
+        stdout.write(red("usage: /resume <id>\n"));
+        return;
+      }
+      try {
+        const log = SessionLog.resolve(opts.sessionsDir, rest[0]);
+        const events = log.events();
+        state.messages = rebuildMessages(events);
+        state.budget.spentUSD = sumUsage(events).spentUSD;
+        state.logger = log;
+        state.sessionId = log.id;
+        sessionAllowed.clear();
+        stdout.write(
+          dim(`resumed ${log.id} — ${state.messages.length} messages restored\n`),
+        );
+      } catch (e) {
+        stdout.write(red(`${(e as Error).message}\n`));
+      }
+      return;
+    }
     default:
       stdout.write(red(`unknown command ${cmd} — /help\n`));
       return;
