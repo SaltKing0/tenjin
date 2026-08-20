@@ -17,6 +17,9 @@ import { startRepl } from "./ui/repl";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
+import { writeTool } from "./tools/write";
+import { editTool } from "./tools/edit";
+import { bashTool } from "./tools/bash";
 import type { ToolDef } from "./tools/registry";
 import { VERSION, PRODUCT } from "./version";
 
@@ -113,7 +116,14 @@ async function main(): Promise<number> {
       agentsMd: loadAgentsMd(cwd),
       cwd,
     });
-    const tools: ToolDef[] = [readTool, globTool, grepTool];
+    const tools: ToolDef[] = [
+      readTool,
+      globTool,
+      grepTool,
+      writeTool,
+      editTool,
+      bashTool,
+    ];
     const ctx: AppContext = { config, provider, system, tools, cwd };
 
     if (cli.print !== undefined) {
