@@ -1,0 +1,21 @@
+{
+  "name": "stealth",
+  "version": "0.1.0",
+  "description": "Tenjin — a personal agent harness. Repo codename: stealth.",
+  "module": "src/index.ts",
+  "type": "module",
+  "bin": {
+    "tenjin": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "tenjin": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.7.0"
+  }
+}
