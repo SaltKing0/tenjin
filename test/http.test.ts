@@ -406,6 +406,21 @@ test("console serves the approval-card module (#295)", async () => {
   expect(body).toContain("approvalResultLine");
 });
 
+test("console serves the minified app bundle (app.bundle.js, #292)", async () => {
+  const base = start({
+    consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
+  });
+  const res = await fetch(`${base}/console/app.bundle.js`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("application/javascript");
+  const body = await res.text();
+  // the bundle inlines the app entry + its reachable modules; must be minified
+  // (single line / no leading whitespace) and well under the raw source total
+  expect(body).toContain("console");
+  expect(body.split("\n").length).toBeLessThan(50); // minified ≈ 1 line
+  expect(body.length).toBeLessThan(50 * 1024);
+});
+
 test("SSE closes an unread (zombie) client and removes its listener on queue overflow (#199)", async () => {
   const baseline = activeSubscriberCount();
   // Build a stream but never read from it → zombie consumer. A fromId past
