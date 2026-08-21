@@ -54,7 +54,7 @@ export function inboxFile(dir: string, id: string): string {
   return join(dir, `${id}.json`);
 }
 
-function atomicWriteJson(path: string, value: unknown): void {
+export function atomicWriteJson(path: string, value: unknown): void {
   const tmp = `${path}.${randomUUID().slice(0, 8)}.tmp`;
   writeFileSync(tmp, JSON.stringify(value, null, 2));
   try {

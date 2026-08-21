@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createBot, botDir } from "../src/bots/profile";
@@ -505,5 +505,66 @@ describe("task delegation tree budget (#154)", () => {
     // each is capped by its OWN tree counter, independently
     expect(ta.treeMaxIterations).toBe(1);
     expect(tb.treeMaxIterations).toBe(1);
+  });
+});
+
+describe("corrupted task files (#183)", () => {
+  const baseTask = (over: Partial<import("../src/bots/tasks").BotTask> = {}) => ({
+    id: "T",
+    bot: "researcher",
+    message: "hi",
+    status: "pending" as const,
+    timeoutMs: 1000,
+    createdAt: new Date().toISOString(),
+    ...over,
+  });
+
+  test("writeTask is atomic: no .tmp residue and a valid file on disk", () => {
+    writeTask(home, "researcher", baseTask({ id: "T-ok", status: "done", result: "ok" }));
+    const dir = join(botDir(home, "researcher"), "tasks");
+    const files = readdirSync(dir);
+    expect(files.some((f) => f.includes(".tmp"))).toBe(false);
+    const persisted = JSON.parse(readFileSync(join(dir, "T-ok.json"), "utf8")) as {
+      status: string;
+      result: string;
+    };
+    expect(persisted.status).toBe("done");
+    expect(persisted.result).toBe("ok");
+  });
+
+  test("a corrupt task file is surfaced as an error task instead of throwing", () => {
+    const dir = join(botDir(home, "researcher"), "tasks");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "BROKEN.json"), "{ this is not valid json", "utf8");
+
+    // status lookup by id returns an error task, never throws
+    const byId = readTaskForStatus(home, "researcher", "BROKEN");
+    expect(byId?.status).toBe("error");
+    expect(byId?.error).toMatch(/corrupt task file/);
+
+    // findTaskById (across all bots) surfaces it too
+    const found = findTaskById(home, "BROKEN");
+    expect(found?.status).toBe("error");
+
+    // listTasks shows the broken file as an error entry
+    const listed = listTasks(home, "researcher");
+    expect(listed.some((t) => t.id === "BROKEN" && t.status === "error")).toBe(true);
+
+    // the system keeps working afterwards: a valid task round-trips
+    writeTask(home, "researcher", baseTask({ id: "T-ok", status: "pending" }));
+    expect(readTaskForStatus(home, "researcher", "T-ok")?.status).toBe("pending");
+  });
+
+  test("a valid task next to a corrupt one is unaffected", () => {
+    writeTask(home, "researcher", baseTask({ id: "GOOD", status: "done", result: "r" }));
+    const dir = join(botDir(home, "researcher"), "tasks");
+    writeFileSync(join(dir, "BAD.json"), "not json at all", "utf8");
+
+    const listed = listTasks(home, "researcher");
+    const good = listed.find((t) => t.id === "GOOD");
+    expect(good?.status).toBe("done");
+    expect(good?.result).toBe("r");
+    const bad = listed.find((t) => t.id === "BAD");
+    expect(bad?.status).toBe("error");
   });
 });
