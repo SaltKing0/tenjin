@@ -229,6 +229,19 @@ input, select {
 }
 .badge.ok { color: var(--ok); border-color: var(--ok); }
 .badge.err { color: var(--err); border-color: var(--err); }
+/* #285: run-status badge tones (timeout=yellow/warn, never=grey/dim) */
+.badge.warn { color: var(--warn); border-color: var(--warn); }
+.badge.run.ok { color: var(--ok); border-color: var(--ok); }
+.badge.run.err { color: var(--err); border-color: var(--err); }
+.badge.run.warn { color: var(--warn); border-color: var(--warn); }
+.badge.run.dim { color: var(--dim); border-color: var(--border); }
+.run-link { color: var(--accent); cursor: pointer; }
+.run-dots { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
+.run-dots .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.run-dots .dot.ok { background: var(--ok); }
+.run-dots .dot.err { background: var(--err); }
+.run-dots .dot.warn { background: var(--warn); }
+.run-dots .dot.dim { background: var(--border); }
 
 .login-box { max-width: 420px; margin: 15vh auto; text-align: center; }
 .login-box input { width: 100%; margin: 16px 0; }
