@@ -16,6 +16,9 @@ export interface TelegramChannelConfig {
   adminChatId?: number;
   allowWrites?: boolean;
   approvalTimeoutMs?: number;
+  rateLimitMax?: number;
+  rateLimitWindowMs?: number;
+  maxMessageLength?: number;
 }
 
 export interface HeartbeatConfig {
@@ -119,6 +122,11 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
       allowWrites: tg.allowWrites === true,
       approvalTimeoutMs:
         typeof tg.approvalTimeoutMs === "number" ? tg.approvalTimeoutMs : undefined,
+      rateLimitMax: typeof tg.rateLimitMax === "number" ? tg.rateLimitMax : undefined,
+      rateLimitWindowMs:
+        typeof tg.rateLimitWindowMs === "number" ? tg.rateLimitWindowMs : undefined,
+      maxMessageLength:
+        typeof tg.maxMessageLength === "number" ? tg.maxMessageLength : undefined,
     };
   }
 
