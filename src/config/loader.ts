@@ -2,30 +2,17 @@ import { homedir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { YAML } from "bun";
+import { resolveModelRef } from "./models";
+import {
+  ConfigError,
+  type ApprovalMode,
+  type HarnessConfig,
+  type PricingOverride,
+  type ProviderName,
+} from "./types";
 
-export type ApprovalMode = "ask" | "allow" | "deny";
-export type ProviderName = "anthropic" | "openai";
-
-export interface PricingOverride {
-  inputPerMTok: number;
-  outputPerMTok: number;
-}
-
-export interface HarnessConfig {
-  provider: ProviderName;
-  model: string;
-  maxTokens: number;
-  budgetUSD: number;
-  approval: Record<string, ApprovalMode>;
-  pricing?: PricingOverride;
-  providers?: { openai?: { baseUrl?: string } };
-  memory?: {
-    enabled?: boolean;
-    vector?: { enabled?: boolean; model?: string };
-  };
-}
-
-export class ConfigError extends Error {}
+export { ConfigError };
+export type { ApprovalMode, HarnessConfig, PricingOverride, ProviderName };
 
 const DEFAULTS: HarnessConfig = {
   provider: "anthropic",
@@ -55,6 +42,9 @@ memory:
   vector:
     enabled: true           # semantic recall; needs OPENAI_API_KEY at runtime
     # model: text-embedding-3-small
+# models:                   # optional model tiers (provider-prefixed to mix providers)
+#   default: anthropic:claude-sonnet-4-5
+#   cheap: openai:gpt-4o-mini
 # providers:
 #   openai:
 #     baseUrl: https://api.deepseek.com/v1   # any OpenAI-compatible endpoint
@@ -176,6 +166,10 @@ function validate(cfg: HarnessConfig, globalPath: string, skipModelCheck: boolea
         `Examples: claude-sonnet-4-5, gpt-4o, deepseek-chat`,
     );
   }
+  const defaultRef = cfg.models?.default?.trim();
+  if (defaultRef) resolveModelRef(defaultRef, cfg.provider);
+  const cheapRef = cfg.models?.cheap?.trim();
+  if (cheapRef) resolveModelRef(cheapRef, cfg.provider);
   if (typeof cfg.maxTokens !== "number" || cfg.maxTokens < 256) {
     throw new ConfigError(`maxTokens must be a number >= 256`);
   }
