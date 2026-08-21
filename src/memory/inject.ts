@@ -80,11 +80,15 @@ export function buildMemorySection(
 ): string | null {
   const max = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
 
-  // --- Tier-2 learnings (core) come first ---
-  const learningLines = (opts.learnings ?? []).map((l) => ({
-    prefix: `- ${l.created.slice(0, 10)} (${l.sessionId}): `,
-    text: l.fact,
-  }));
+  // --- Tier-2 learnings (core) come first, newest-first (#204) so the shared
+  // budget keeps the most recent takeaways instead of the oldest.
+  const learningLines = (opts.learnings ?? [])
+    .slice()
+    .sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0))
+    .map((l) => ({
+      prefix: `- ${l.created.slice(0, 10)} (${l.sessionId}): `,
+      text: l.fact,
+    }));
 
   // --- chronological summaries (existing relevant+score ordering) ---
   const relevant = entries.filter(

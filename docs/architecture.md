@@ -179,6 +179,8 @@ wires the `use_skill` tool.
 [`src/memory/`](../src/memory/) gives the agent durable recall:
 
 - `summaries.ts` — incremental session summaries (`generatePendingSummaries`).
+- `learnings.ts` — durable takeaways (`record_learning`), deduplicated and
+  capped per file (oldest dropped; `memory.learnings.maxEntries`, default 200).
 - `indexer.ts` — index pending sessions into the vector store.
 - `vector-store.ts` — in-memory vector index with buffered writes and
   compaction, persisted to disk.
@@ -250,7 +252,7 @@ with a dotted path; **unknown fields** only warn and are ignored.
 | `providers.openai` | map | `baseUrl`/`apiKey` for OpenAI-compatible endpoints |
 | `providers.anthropic` | map | `apiKey` for Anthropic |
 | `models.default` / `models.cheap` | string | Provider-prefixed model tiers |
-| `memory.enabled` / `memory.vector` | bool / map | Memory + vector recall |
+| `memory.enabled` / `memory.vector` / `memory.learnings` | bool / map / map | Memory + vector recall; `memory.learnings.maxEntries` caps takeaways per file (#204) |
 | `security` | map | Blocked patterns, disabled flag, workspace, redaction — see [docs/security.md](security.md) |
 | `inbox` | map | `ttlDays` / `maxMessages` for bot inboxes |
 | `globalBudget` | map | Global spend caps (USD) across solo + all bots: `dailyUSD` / `monthlyUSD`; `0` = unlimited — see [Audit & spend](#audit--spend) |

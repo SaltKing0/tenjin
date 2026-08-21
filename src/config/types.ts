@@ -47,6 +47,8 @@ export interface HarnessConfig {
     enabled?: boolean;
     vector?: { enabled?: boolean; model?: string };
     summaries?: { onSessionEnd?: boolean };
+    /** Cap on durable takeaways stored per learnings.md file (#204). */
+    learnings?: { maxEntries?: number };
   };
   /** Outbound event webhooks (#148): `events.webhooks` list; ntfy (#149): `events.ntfy`. */
   events?: {
