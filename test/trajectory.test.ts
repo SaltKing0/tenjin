@@ -67,7 +67,7 @@ test("full conversation flow renders in order", () => {
     '  -> bash {"command":"bun test"}',
     "  <- bash ERR: exit: 1",
     "tenjin> Fixed it.",
-    "$ in 12.3k out 678 · $0.0421 turn · $0.0421 spent",
+    "$ in 12.3k out 678 · $0.04 turn · $0.04 spent",
   ]);
 });
 
@@ -77,9 +77,8 @@ test("long user messages and assistant text are truncated", () => {
     { t: "message", role: "user", content: "y".repeat(300), ts: "t" },
     { t: "message", role: "assistant", content: [{ type: "text", text: "z".repeat(300) }], ts: "t" },
   ]);
-  expect(lines[2]?.length).toBe(161);
-  expect(lines[2]?.endsWith("…")).toBe(true);
-  expect(lines[3]?.length).toBeLessThanOrEqual(168);
+  expect(lines[2]).toBe(`you> ${"y".repeat(160)}…`);
+  expect(lines[3]).toBe(`tenjin> ${"z".repeat(160)}…`);
 });
 
 test("assistant tool_use blocks are not duplicated (calls come from events)", () => {
