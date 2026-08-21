@@ -71,6 +71,7 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
         maxTokens: deps.globalConfig.maxTokens,
         capUSD: cap,
         pricing: deps.globalConfig.pricing,
+        globalBudget: deps.globalConfig.globalBudget,
         policy: capPolicy("read-only", profile.config.security?.policy),
         denyTools: profile.config.security?.denyTools,
         home: deps.home,

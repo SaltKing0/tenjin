@@ -3,6 +3,8 @@ import { buildSystemPrompt } from "./prompt";
 import { createBudget } from "./budget";
 import type { PricingConfig } from "../config/loader";
 import { runAgentTurn } from "./loop";
+import { checkGlobalBudget } from "../audit/global-budget";
+import type { GlobalBudgetConfig } from "../config/types";
 import { SessionLog } from "../session/log";
 import type { TurnEvent } from "./loop";
 import { readTool } from "../tools/read";
@@ -59,6 +61,8 @@ export interface HeadlessOptions {
   audit?: (kind: "write_exec" | "budget_halt", detail: string, correlationId?: string) => void;
   /** Shared id threaded into this run's audit events (e.g. a delegation correlation id). */
   correlationId?: string;
+  /** Global spend cap (solo + all bots) enforced before each provider call. */
+  globalBudget?: GlobalBudgetConfig;
   approve?: (toolName: string, group: "read" | "write", input: unknown) => Promise<boolean>;
   onTextDelta?: (delta: string) => void;
   /** Live side-channel invoked when the agent invokes a tool (name only). */
@@ -99,6 +103,10 @@ export function toolsForPolicy(policy: ToolPolicy, skill?: SkillDirs): ToolDef[]
 export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult> {
   const policy = opts.policy ?? "read-only";
   const redactor = opts.redactor ?? new Redactor();
+  const globalBudgetGate =
+    opts.home && opts.globalBudget
+      ? () => checkGlobalBudget(opts.home!, opts.globalBudget!)
+      : undefined;
   const skills = opts.home ? listSkills(opts.home, opts.cwd) : [];
   const system = buildSystemPrompt({
     soulText: opts.soulText,
@@ -138,6 +146,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     budget,
     maxTokens: opts.maxTokens,
     cwd: opts.cwd,
+    globalBudgetGate,
     approve:
       opts.approve ??
       (async (_name, group) => group === "read"),

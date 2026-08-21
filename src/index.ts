@@ -687,6 +687,7 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     maxTokens: ctx.config.maxTokens,
     capUSD: ctx.config.budgetUSD,
     pricing: ctx.config.pricing,
+    globalBudget: ctx.config.globalBudget,
     policy: capPolicy("read-only", ctx.botSecurity?.policy),
     denyTools: ctx.botSecurity?.denyTools,
     agentsMd: loadAgentsMd(ctx.cwd),

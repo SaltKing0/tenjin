@@ -180,6 +180,7 @@ export function createMessageHandler(deps: HandlerDeps) {
         maxTokens: deps.config.maxTokens,
         capUSD: botBudgetUSD(profile, deps.config.budgetUSD),
         pricing: deps.config.pricing,
+        globalBudget: deps.config.globalBudget,
         policy: capPolicy(
           deps.allowWrites ? "full" : "read-only",
           profile.config.security?.policy,
