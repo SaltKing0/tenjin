@@ -12,6 +12,7 @@ import { YAML } from "bun";
 import { ConfigError, type HarnessConfig } from "../config/types";
 import { resolveModelRef, defaultModelRef, type ModelRef } from "../config/models";
 import { sanitizeSkillName } from "../skills/loader";
+import { parseSchedule, parseEvery } from "../gateway/schedule";
 import type { ToolPolicy } from "../agent/headless";
 
 export function botsDir(home: string): string {
@@ -34,11 +35,28 @@ export interface BotTelegramConfig {
   allowedUsers?: number[];
 }
 
+/** One scheduled routine attached to a bot (#102). */
+export interface BotRoutineConfig {
+  name: string;
+  prompt: string;
+  postTo?: string;
+  timeoutMs?: number;
+  policy?: "read-only" | "full";
+  scheduleSpec: { every?: string; cron?: string; tz?: string };
+}
+
+/** Per-bot recurring heartbeat interval (#102). */
+export interface BotHeartbeatConfig {
+  every: string;
+}
+
 export interface BotConfig {
   model?: string;
   budgetUSD?: number;
   security?: BotSecurityConfig;
   telegram?: BotTelegramConfig;
+  routines?: BotRoutineConfig[];
+  heartbeat?: BotHeartbeatConfig;
 }
 
 export interface BotProfile {
@@ -100,6 +118,78 @@ function parseBotTelegram(raw: unknown): BotTelegramConfig | undefined {
   return out;
 }
 
+/** `routines` in a bot's config.yaml — scheduled prompts tied to this bot (#102). */
+function parseBotRoutines(raw: unknown): BotRoutineConfig[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) throw new ConfigError("bot routines must be a list");
+  const out: BotRoutineConfig[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw as Record<string, unknown>[]) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new ConfigError("bot routines entries must be mappings");
+    }
+    const name = typeof entry.name === "string" ? entry.name.trim() : "";
+    const prompt = typeof entry.prompt === "string" ? entry.prompt.trim() : "";
+    if (!name) throw new ConfigError("bot routine missing `name`");
+    if (!prompt) throw new ConfigError(`bot routine "${name}" missing \`prompt\``);
+    if (seen.has(name)) throw new ConfigError(`duplicate routine name "${name}"`);
+    seen.add(name);
+    if (entry.tz !== undefined && entry.tz !== null && typeof entry.tz !== "string") {
+      throw new ConfigError(`bot routine "${name}" tz must be an IANA time zone name`);
+    }
+    const tz =
+      typeof entry.tz === "string" && entry.tz.trim() !== "" ? entry.tz.trim() : undefined;
+    const scheduleSpec = {
+      every: typeof entry.every === "string" ? entry.every : undefined,
+      cron: typeof entry.cron === "string" ? entry.cron : undefined,
+      tz,
+    };
+    // Validate the schedule with the shared parser (exactly one of every|cron).
+    parseSchedule(scheduleSpec);
+    let timeoutMs: number | undefined;
+    if (entry.timeoutMs !== undefined && entry.timeoutMs !== null) {
+      const t = entry.timeoutMs;
+      if (typeof t !== "number" || !Number.isInteger(t) || t < 1) {
+        throw new ConfigError(
+          `bot routine "${name}" timeoutMs must be a positive integer (ms)`,
+        );
+      }
+      timeoutMs = t;
+    }
+    let policy: "read-only" | "full" | undefined;
+    if (entry.policy !== undefined && entry.policy !== null) {
+      if (entry.policy !== "read-only" && entry.policy !== "full") {
+        throw new ConfigError(
+          `bot routine "${name}" policy must be "read-only" or "full"`,
+        );
+      }
+      policy = entry.policy;
+    }
+    out.push({
+      name,
+      prompt,
+      postTo: typeof entry.postTo === "string" ? entry.postTo : undefined,
+      timeoutMs,
+      policy,
+      scheduleSpec,
+    });
+  }
+  return out;
+}
+
+/** `heartbeat` in a bot's config.yaml — per-bot recurring interval (#102). */
+function parseBotHeartbeat(raw: unknown): BotHeartbeatConfig | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ConfigError("bot heartbeat must be a mapping");
+  }
+  const hb = raw as Record<string, unknown>;
+  const every = typeof hb.every === "string" ? hb.every.trim() : "";
+  if (!every) throw new ConfigError("bot heartbeat requires `every` (interval like 30m)");
+  parseEvery(every); // validate the interval, like the global heartbeat
+  return { every };
+}
+
 function parseBotConfig(raw: Record<string, unknown>): BotConfig {
   const cfg: BotConfig = {};
   if (typeof raw.model === "string") cfg.model = raw.model;
@@ -113,6 +203,10 @@ function parseBotConfig(raw: Record<string, unknown>): BotConfig {
   if (security) cfg.security = security;
   const telegram = parseBotTelegram(raw.telegram);
   if (telegram) cfg.telegram = telegram;
+  const routines = parseBotRoutines(raw.routines);
+  if (routines) cfg.routines = routines;
+  const heartbeat = parseBotHeartbeat(raw.heartbeat);
+  if (heartbeat) cfg.heartbeat = heartbeat;
   return cfg;
 }
 

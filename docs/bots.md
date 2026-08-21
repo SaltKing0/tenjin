@@ -65,6 +65,13 @@ security:
     - bash
 telegram:
   allowedUsers: [123456789] # if set, only these Telegram senders may reach this bot
+routines:                   # scheduled prompts that run as THIS bot (registered at gateway boot)
+  - name: nightly-digest
+    prompt: "Summarize today's findings into memory."
+    cron: "0 2 * * *"       # or every: "4h"; optional tz, policy, timeoutMs, postTo
+    policy: read-only
+heartbeat:                  # recurring heartbeat for this bot (per-bot interval)
+  every: 30m
 ```
 
 If `model` is unset, the bot uses the global default. `budgetUSD` overrides the
@@ -75,6 +82,14 @@ to the caller (REPL, gateway `allowWrites`, or a read-only job) — a bot cannot
 grant itself write tools the gateway has turned off. `blockedPatterns` are
 **unioned** with the global `security.blockedPatterns` (or the built-in
 defaults). See [docs/security.md](security.md#per-bot-policies).
+
+**Routines & heartbeats.** A bot can schedule its own work by declaring
+`routines` (a list of name/prompt + `cron` or `every`, with optional `policy`,
+`timeoutMs` and `postTo`) and an optional per-bot `heartbeat` interval in its
+`config.yaml`. The gateway registers these as scheduled jobs at boot, each with
+the bot's own context (SOUL, model, budget, memory and sessions — a run's session
+lands in that bot's `sessions/`). Routine names must be unique across every bot
+and the gateway's `gateway.jobs`. See [docs/architecture.md](architecture.md#gateway).
 
 ## 4. Run it as a bot
 

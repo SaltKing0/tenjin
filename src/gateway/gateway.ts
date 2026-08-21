@@ -3,11 +3,11 @@ import { join } from "node:path";
 import type { HarnessConfig } from "../config/types";
 import { ConfigError } from "../config/types";
 import { ProviderRegistry } from "../provider/registry";
-import { resolveBot, botModelRef, botBudgetUSD, type BotProfile } from "../bots/profile";
+import { resolveBot, listBots, botModelRef, botBudgetUSD, type BotProfile, type BotRoutineConfig, type BotHeartbeatConfig } from "../bots/profile";
 import { runHeadless, capPolicy, type HeadlessOptions, type HeadlessResult } from "../agent/headless";
 import { guardForBot } from "../security/guard";
 import { formatUSD } from "../agent/budget";
-import { parseSchedule, nextRun, type Schedule } from "./schedule";
+import { parseSchedule, nextRun, parseEvery, type Schedule } from "./schedule";
 import { Redactor } from "../security/redact";
 import { parseGatewaySettings, type GatewaySettings } from "./config";
 import { memorySummariesOnSessionEnd } from "../config/loader";
@@ -108,6 +108,63 @@ export function buildJobs(settings: GatewaySettings, fromMs: number): ScheduledJ
       kind: "heartbeat",
       lastRun: null,
     });
+  }
+  return jobs;
+}
+
+/** One bot's contribution to the job set: its routines + optional heartbeat (#102). */
+export interface BotJobFeed {
+  bot: string;
+  routines: BotRoutineConfig[];
+  heartbeat?: BotHeartbeatConfig;
+}
+
+/**
+ * Build scheduled jobs from per-bot `routines` and per-bot `heartbeat`
+ * (`~/.tenjin/bots/<name>/config.yaml`). Each routine becomes a `kind: "job"`
+ * scheduled entry; a per-bot heartbeat becomes a `kind: "heartbeat"` entry
+ * named `heartbeat-<bot>`. Policy resolution mirrors gateway jobs: a routine's
+ * explicit `policy` wins, otherwise the bot falls back to `read-only` (or
+ * `full` when the gateway allowWrites flag is set).
+ */
+export function buildBotJobs(
+  feeds: BotJobFeed[],
+  fromMs: number,
+  allowWrites: boolean,
+): ScheduledJob[] {
+  const jobs: ScheduledJob[] = [];
+  for (const feed of feeds) {
+    for (const r of feed.routines) {
+      const schedule = parseSchedule(r.scheduleSpec);
+      jobs.push({
+        name: r.name,
+        botName: feed.bot,
+        prompt: r.prompt,
+        postTo: r.postTo,
+        policy: r.policy ?? (allowWrites ? "full" : "read-only"),
+        schedule,
+        nextDueMs: nextRun(schedule, fromMs),
+        running: false,
+        kind: "job" as const,
+        lastRun: null,
+        ...(r.timeoutMs !== undefined ? { timeoutMs: r.timeoutMs } : {}),
+      });
+    }
+    if (feed.heartbeat) {
+      const intervalMs = parseEvery(feed.heartbeat.every);
+      const schedule: Schedule = { kind: "every", intervalMs, raw: feed.heartbeat.every };
+      jobs.push({
+        name: `heartbeat-${feed.bot}`,
+        botName: feed.bot,
+        prompt: "",
+        policy: "read-only",
+        schedule,
+        nextDueMs: nextRun(schedule, fromMs),
+        running: false,
+        kind: "heartbeat" as const,
+        lastRun: null,
+      });
+    }
   }
   return jobs;
 }
@@ -215,7 +272,7 @@ export class Gateway {
 
   constructor(private deps: GatewayDeps) {
     this.settings = parseGatewaySettings(deps.config.gateway);
-    this.jobs = buildJobs(this.settings, Date.now());
+    this.jobs = this.buildAllJobs(Date.now());
     // #19: hydrate the last run of each job from persisted state so a restart
     // knows which scheduled runs have already happened (enables catch-up).
     this.state = loadGatewayState(deps.home);
@@ -229,12 +286,54 @@ export class Gateway {
    * Re-read the jobs from a fresh config and rebuild the schedule, so the
    * running gateway picks up `tenjin job add/rm` changes without a restart
    * (wired up to SIGHUP in the CLI). Channels/handlers keep their previous
-   * settings — only the job set is refreshed.
+   * settings — only the job set (including per-bot routines) is refreshed.
    */
   reload(config: HarnessConfig): void {
     this.deps.config = config;
     this.settings = parseGatewaySettings(config.gateway);
-    this.jobs = buildJobs(this.settings, Date.now());
+    this.jobs = this.buildAllJobs(Date.now());
+  }
+
+  /**
+   * Collect each bot's `routines` + `heartbeat` from its config.yaml so they
+   * can be registered as scheduled jobs with bot context (#102). A bot that
+   * fails to resolve is skipped with a log line — a single broken bot must not
+   * prevent the gateway from booting.
+   */
+  private botFeeds(): BotJobFeed[] {
+    const feeds: BotJobFeed[] = [];
+    for (const name of listBots(this.deps.home)) {
+      try {
+        const profile = resolveBot(this.deps.home, name);
+        const routines = profile.config.routines ?? [];
+        const heartbeat = profile.config.heartbeat;
+        if (routines.length === 0 && !heartbeat) continue;
+        feeds.push({
+          bot: profile.name,
+          routines,
+          ...(heartbeat ? { heartbeat } : {}),
+        });
+      } catch (e) {
+        this.log(`bot ${name}: skipping routines (${(e as Error).message})`);
+      }
+    }
+    return feeds;
+  }
+
+  /** Gateway jobs + per-bot routines, with global duplicate-name detection. */
+  private buildAllJobs(fromMs: number): ScheduledJob[] {
+    const jobs = buildJobs(this.settings, fromMs);
+    jobs.push(...buildBotJobs(this.botFeeds(), fromMs, this.settings.allowWrites));
+    const seen = new Set<string>();
+    for (const j of jobs) {
+      if (seen.has(j.name)) {
+        throw new ConfigError(
+          `duplicate job name "${j.name}" (gateway job or bot routine)`,
+        );
+      }
+      seen.add(j.name);
+    }
+    return jobs;
   }
 
   private log(line: string): void {

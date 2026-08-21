@@ -310,8 +310,17 @@ gateway:
   A job's effective policy is still capped by the bot's `security.policy`, so a
   read-only bot can never be upgraded to write via a job — the upgrade is
   explicit and remains bounded by the bot's own security.
-- **`heartbeat`** — a recurring prompt to a bot at a fixed interval.
+- **`heartbeat`** — a global recurring prompt to a bot at a fixed interval.
 - **`listen`** — enables the web console; `token` is mandatory.
+
+**Per-bot schedules.** Jobs and heartbeats don't have to live in `gateway:`.
+Each bot can declare its own `routines` (scheduled prompts) and a per-bot
+`heartbeat` interval in `~/.tenjin/bots/<name>/config.yaml` (see
+[docs/bots.md](bots.md#3-configure-model--budget-optional)); the gateway scans
+the bot roster at boot and registers them as scheduled jobs with the bot's own
+context (a run's session lands in that bot's `sessions/`). A per-bot heartbeat
+registers under the name `heartbeat-<bot>`. Routine names must be unique across
+every bot and `gateway.jobs` — a collision is a config error at boot.
 
 ## Data layout
 
@@ -327,7 +336,7 @@ gateway:
 ├── gateway-state.json          # last run per scheduled job (catch-up bookkeeping)
 └── bots/<name>/
     ├── SOUL.md                 # bot personality
-    ├── config.yaml             # per-bot model / budget / security / telegram allowlist (optional)
+    ├── config.yaml             # per-bot model / budget / security / routines / heartbeat (optional)
     ├── sessions/ · memory/ · inbox/
 ```
 
