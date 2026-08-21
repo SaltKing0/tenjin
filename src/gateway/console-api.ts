@@ -188,6 +188,7 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
         hasBot: listBots(deps.home).length > 0,
         hasGatewayToken: !!settings.listen?.token,
         channelsEnabled: settings.channels.length > 0,
+        hasBudgetLimit: (deps.config.budgetUSD ?? 0) > 0,
       });
     }
 

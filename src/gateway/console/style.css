@@ -86,6 +86,10 @@ pre.approval-input {
 }
 
 .dim { color: var(--dim); }
+.setup-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.setup-row .setup-mark { color: var(--err); font-weight: 600; }
+.setup-row.ok .setup-mark { color: var(--ok); }
+.setup-link { text-decoration: none; margin-left: auto; }
 .ok { color: var(--ok); }
 .warn { color: var(--warn); }
 .err { color: var(--err); }
