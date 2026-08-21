@@ -8,6 +8,7 @@ import { resolveBot, botModelRef, botBudgetUSD, botDir, listBots } from "./profi
 import { runHeadless, capPolicy } from "../agent/headless";
 import { guardForBot } from "../security/guard";
 import { formatUSD } from "../agent/budget";
+import { sendMessage } from "./inbox";
 import type { ToolDef } from "../tools/registry";
 import type { Budget } from "../agent/budget";
 
@@ -16,6 +17,10 @@ import type { Budget } from "../agent/budget";
  * transitions, and a per-task timeout. This is the #29 task abstraction on top
  * of `runHeadless` — it lives in its own file so it does NOT entangle with the
  * sync `ask_bot` tool in `delegate.ts`.
+ *
+ * #128 adds dependency chains: a task may `dependsOn` another task (it only
+ * starts once the dependency is `done`, receiving its result in the prompt) and
+ * may `notifyBot` another bot's inbox on completion.
  */
 
 export type TaskStatus = "pending" | "running" | "done" | "error";
@@ -31,9 +36,15 @@ export interface BotTask {
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
+  /** #128: this task only starts once the referenced task is `done`. */
+  dependsOn?: string;
+  /** #128: bot inbox notified on completion instead of only the caller. */
+  notifyBot?: string;
 }
 
 export const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
+/** Poll interval while a dependent task waits for its dependency. */
+const DEP_POLL_MS = 100;
 
 export function tasksDir(home: string, bot: string): string {
   return join(botDir(home, bot), "tasks");
@@ -49,7 +60,8 @@ function readTask(home: string, bot: string, id: string): BotTask | null {
   return JSON.parse(readFileSync(p, "utf8")) as BotTask;
 }
 
-function writeTask(home: string, bot: string, task: BotTask): void {
+/** @internal — exported so tests can fabricate a dependency graph. */
+export function writeTask(home: string, bot: string, task: BotTask): void {
   const dir = tasksDir(home, bot);
   mkdirSync(dir, { recursive: true });
   writeFileSync(taskPath(dir, task.id), JSON.stringify(task, null, 2), "utf8");
@@ -67,6 +79,15 @@ export function listTasks(home: string, bot: string): BotTask[] {
 /** Read a single persisted task (by target bot + task id). */
 export function readTaskForStatus(home: string, bot: string, taskId: string): BotTask | null {
   return readTask(home, bot, taskId);
+}
+
+/** Task ids are globally unique (UUIDs); locate a task across every bot. */
+export function findTaskById(home: string, taskId: string): BotTask | null {
+  for (const bot of listBots(home)) {
+    const t = readTask(home, bot, taskId);
+    if (t) return t;
+  }
+  return null;
 }
 
 export interface AsyncTaskDeps {
@@ -88,16 +109,77 @@ export interface StartedTask {
   settled: Promise<BotTask>;
 }
 
-/**
- * Kick off an async delegation. Creates a `pending` task, then runs the target
- * bot headless in the background, transitioning it to `running` and persisting
- * it under the target bot. Returns immediately with the task id.
- */
-export function startAsyncTask(deps: AsyncTaskDeps, args: {
+export interface StartTaskArgs {
   targetBot: string;
   message: string;
   timeoutMs?: number;
-}): StartedTask {
+  /** #128: only start once this task is `done`; its result is injected into the prompt. */
+  dependsOn?: string;
+  /** #128: bot expected to have an inbox that is notified on completion. */
+  notifyBot?: string;
+}
+
+/** True when `dependsOnId` (directly or transitively) forms a cycle with `newId`. */
+function assertNoCycle(home: string, newId: string, dependsOnId: string): void {
+  const seen = new Set<string>([dependsOnId]);
+  let cur = findTaskById(home, dependsOnId);
+  while (cur?.dependsOn) {
+    const next = cur.dependsOn;
+    if (next === newId || seen.has(next)) {
+      throw new ConfigError(
+        `circular dependency: task ${newId} depends on itself (via ${dependsOnId})`,
+      );
+    }
+    seen.add(next);
+    cur = findTaskById(home, next);
+  }
+}
+
+/**
+ * Poll for a dependency until it reaches a terminal state. Resolves with the
+ * dependency task, or null once `deadlineMs` passes or the signal aborts.
+ */
+async function waitForTask(
+  home: string,
+  depId: string,
+  controller: AbortController,
+  deadlineMs: number,
+): Promise<BotTask | null> {
+  while (Date.now() < deadlineMs && !controller.signal.aborted) {
+    const dep = findTaskById(home, depId);
+    if (dep && (dep.status === "done" || dep.status === "error")) return dep;
+    await new Promise((r) => setTimeout(r, DEP_POLL_MS));
+  }
+  return null;
+}
+
+/** Leave a completion note in `notifyBot`'s inbox (from the task's target bot). */
+function notifyCompletion(home: string, task: BotTask): void {
+  if (!task.notifyBot) return;
+  const inboxDir = join(botDir(home, task.notifyBot), "inbox");
+  const done = task.status === "done";
+  const body = done
+    ? `Task ${task.id} completed.\n\n${(task.result ?? "").slice(0, 4000)}`
+    : `Task ${task.id} failed: ${task.error ?? task.status}`;
+  try {
+    sendMessage(inboxDir, {
+      from: task.bot,
+      to: task.notifyBot,
+      subject: `Delegation task ${done ? "done" : "failed"}: ${task.message.slice(0, 80)}`,
+      body,
+    });
+  } catch {
+    // Best-effort: a notification must never fail the task itself.
+  }
+}
+
+/**
+ * Kick off an async delegation. Creates a `pending` task, then runs the target
+ * bot headless in the background, transitioning it to `running` and persisting
+ * it under the target bot. Returns immediately with the task id. When
+ * `dependsOn` is set the run is deferred until that task is `done`.
+ */
+export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): StartedTask {
   const targetName = String(args.targetBot ?? "").trim();
   if (targetName === deps.fromBot) {
     throw new ConfigError("cannot delegate to yourself");
@@ -106,9 +188,32 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: {
   const message = String(args.message ?? "").trim();
   if (!message) throw new ConfigError("message must not be empty");
 
+  // #128: notifyBot must be a real, distinct bot (its inbox is written on completion).
+  const notifyBot = args.notifyBot ? String(args.notifyBot).trim() : "";
+  if (notifyBot) {
+    if (notifyBot === targetName) {
+      throw new ConfigError("notifyBot must be a different bot");
+    }
+    resolveBot(deps.home, notifyBot); // throws when unknown
+  }
+
   const id = randomUUID();
   const timeoutMs = args.timeoutMs ?? deps.defaultTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS;
   const now = new Date().toISOString();
+
+  // #128: validate the dependency exists and reject cycles at creation time.
+  let dependsOnId = "";
+  if (args.dependsOn !== undefined && args.dependsOn !== null && String(args.dependsOn).trim() !== "") {
+    dependsOnId = String(args.dependsOn).trim();
+    if (dependsOnId === id) {
+      throw new ConfigError("circular dependency: task cannot depend on itself");
+    }
+    if (!findTaskById(deps.home, dependsOnId)) {
+      throw new ConfigError(`unknown dependency "${dependsOnId}"`);
+    }
+    assertNoCycle(deps.home, id, dependsOnId);
+  }
+
   const task: BotTask = {
     id,
     bot: targetName,
@@ -116,11 +221,14 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: {
     status: "pending",
     timeoutMs,
     createdAt: now,
+    ...(dependsOnId ? { dependsOn: dependsOnId } : {}),
+    ...(notifyBot ? { notifyBot } : {}),
   };
   writeTask(deps.home, targetName, task);
 
   const correlationId = randomUUID();
-  deps.audit?.("delegation", `ask_bot_async -> ${targetName}: ${message.slice(0, 120)}`, correlationId);
+  const depNote = dependsOnId ? ` (dependsOn ${dependsOnId})` : "";
+  deps.audit?.("delegation", `ask_bot_async -> ${targetName}: ${message.slice(0, 120)}${depNote}`, correlationId);
 
   const settled = (async (): Promise<BotTask> => {
     const controller = new AbortController();
@@ -129,6 +237,26 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: {
       timeoutMs > 0 ? timeoutMs : DEFAULT_TASK_TIMEOUT_MS,
     );
     try {
+      // #128: wait for the dependency before starting.
+      let runMessage = message;
+      if (dependsOnId) {
+        const deadline = Date.now() + (timeoutMs > 0 ? timeoutMs : DEFAULT_TASK_TIMEOUT_MS);
+        const dep = await waitForTask(deps.home, dependsOnId, controller, deadline);
+        if (!dep || dep.status !== "done") {
+          task.status = "error";
+          task.error = controller.signal.aborted
+            ? `timed out waiting for dependency task ${dependsOnId} (after ${timeoutMs}ms)`
+            : dep?.status === "error"
+              ? `dependency task ${dependsOnId} failed: ${dep.error ?? "error"}`
+              : `dependency task ${dependsOnId} did not complete`;
+          task.finishedAt = new Date().toISOString();
+          return task; // persisted + notified in finally
+        }
+        runMessage =
+          `Result from dependency task ${dependsOnId} (${dep.bot}):\n${dep.result ?? "(no result)"}\n\n` +
+          `Now handle the original request:\n${message}`;
+      }
+
       // mark running
       task.status = "running";
       task.startedAt = new Date().toISOString();
@@ -148,7 +276,7 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: {
         model: ref.model,
         soulText: profile.soulText,
         cwd: deps.cwd,
-        message,
+        message: runMessage,
         maxTokens: deps.globalConfig.maxTokens,
         capUSD: cap,
         pricing: deps.globalConfig.pricing,
@@ -179,6 +307,7 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: {
     } finally {
       clearTimeout(timer);
       writeTask(deps.home, targetName, task);
+      notifyCompletion(deps.home, task);
     }
     return task;
   })();
@@ -192,13 +321,15 @@ export function createAskBotAsyncTool(deps: AsyncTaskDeps): ToolDef {
     name: "ask_bot_async",
     group: "write",
     description:
-      "Ask another bot a question WITHOUT waiting for its answer. Returns a task_id immediately; poll bot_task_status to read the result. The target bot runs headless with its own model and soul, read-only.",
+      "Ask another bot a question WITHOUT waiting for its answer. Returns a task_id immediately; poll bot_task_status to read the result. The target bot runs headless with its own model and soul, read-only. Optionally dependsOn another async task (start only once that task is done, with its result in the prompt) and/or notifyBot (a bot inbox that is messaged on completion).",
     inputSchema: {
       type: "object",
       properties: {
         bot: { type: "string", description: "Target bot name" },
         message: { type: "string", description: "What you want to know or done" },
         timeoutMs: { type: "number", description: "Optional per-task timeout in ms" },
+        dependsOn: { type: "string", description: "Optional task_id this task waits for before starting" },
+        notifyBot: { type: "string", description: "Optional bot inbox to notify on completion" },
       },
       required: ["bot", "message"],
     },
@@ -207,6 +338,8 @@ export function createAskBotAsyncTool(deps: AsyncTaskDeps): ToolDef {
         targetBot: String(args.bot ?? "").trim(),
         message: String(args.message ?? "").trim(),
         timeoutMs: args.timeoutMs == null ? undefined : Number(args.timeoutMs),
+        dependsOn: args.dependsOn == null ? undefined : String(args.dependsOn).trim(),
+        notifyBot: args.notifyBot == null ? undefined : String(args.notifyBot).trim(),
       });
       return JSON.stringify({ task_id: started.task_id, status: "pending" });
     },
