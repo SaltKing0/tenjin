@@ -78,6 +78,13 @@ pre {
   font-size: 13px;
 }
 
+pre.approval-input {
+  max-height: 16rem;
+  overflow: auto;
+  margin-top: 8px;
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+
 .dim { color: var(--dim); }
 .ok { color: var(--ok); }
 .warn { color: var(--warn); }

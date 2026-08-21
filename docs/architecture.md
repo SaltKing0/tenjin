@@ -213,6 +213,8 @@ gateway:
     enabled: true
     defaultBot: researcher
     allowedUsers: [123456789] # REQUIRED allowlist (security)
+    bindings:                 # optional per-bot sender allowlists
+      researcher: [123456789]
     adminChatId: 123456789
     allowWrites: true
     approvalTimeoutMs: 120000
@@ -225,6 +227,7 @@ gateway:
       bot: researcher
       prompt: "Summarize today's changes."
       cron: "0 9 * * *"       # or every: "4h"
+      tz: Europe/Berlin       # optional IANA zone; default is server local time
       postTo: telegram
   listen:
     port: 8787
@@ -240,7 +243,8 @@ gateway:
 - **`telegram`** — requires a non-empty `allowedUsers` allowlist and a
   `TELEGRAM_BOT_TOKEN` env var.
 - **`jobs`** — scheduled prompts to a bot on a cron or `every` schedule
-  (`postTo` routes the result to a channel).
+  (`postTo` routes the result to a channel). Optional `tz` (IANA name) interprets
+  cron fields in that zone, including across DST; omitted `tz` keeps server local time.
 - **`heartbeat`** — a recurring prompt to a bot at a fixed interval.
 - **`listen`** — enables the web console; `token` is mandatory.
 
@@ -257,7 +261,7 @@ gateway:
 ├── audit.jsonl                 # audit event trail
 └── bots/<name>/
     ├── SOUL.md                 # bot personality
-    ├── config.yaml             # per-bot model / budget (optional)
+    ├── config.yaml             # per-bot model / budget / security / telegram allowlist (optional)
     ├── sessions/ · memory/ · inbox/
 ```
 

@@ -63,3 +63,27 @@ test("summarizeInput truncates and flattens", () => {
   expect(out.length).toBeLessThanOrEqual(300);
   expect(summarizeInput({ a: 1 })).toContain('"a":1');
 });
+
+test("createRequest stores an untruncated copy when only inputSummary is given", () => {
+  const long = "echo " + "a".repeat(400);
+  expect(long.length).toBeGreaterThan(300);
+  const req = createRequest(home, { bot: "b", tool: "bash", inputSummary: long });
+  expect(req.inputSummary.length).toBe(300);
+  expect(req.input).toBe(long);
+  expect(getRequest(home, req.id)?.input).toBe(long);
+});
+
+test("createRequest stores the full tool input even when the summary is truncated", () => {
+  const command = `echo ${"secret-payload-".repeat(30)}`;
+  expect(command.length).toBeGreaterThan(300);
+  const req = createRequest(home, {
+    bot: "researcher",
+    tool: "bash",
+    input: { command },
+  });
+  expect(req.inputSummary.length).toBeLessThanOrEqual(300);
+  expect(req.input).toEqual({ command });
+  const fetched = getRequest(home, req.id);
+  expect(fetched?.input).toEqual({ command });
+  expect((fetched?.input as { command: string }).command).toBe(command);
+});

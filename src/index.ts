@@ -22,7 +22,7 @@ import { defaultModelRef, cheapModelRef, resolveModelRef, type ModelRef } from "
 import { loadSoul, loadAgentsMd, buildSystemPrompt } from "./agent/prompt";
 import { formatUSD } from "./agent/budget";
 import { runAgentTurn } from "./agent/loop";
-import { runHeadless } from "./agent/headless";
+import { runHeadless, capPolicy, applyDenyTools } from "./agent/headless";
 import { startRepl } from "./ui/repl";
 import { SessionLog } from "./session/log";
 import { rebuildMessages, sumUsage } from "./session/events";
@@ -35,6 +35,7 @@ import { vectorEnabled } from "./config/loader";
 import { createRecallTool, createRememberTool, readFacts } from "./tools/memory";
 import { createUseSkillTool } from "./skills/activate";
 import { createSaveSkillTool } from "./tools/skill-writer";
+import { createListSkillsTool } from "./tools/skill-lister";
 import {
   resolveBot,
   botModelRef,
@@ -43,6 +44,7 @@ import {
   listBots,
   EXAMPLE_BOTS,
   type BotProfile,
+  type BotSecurityConfig,
 } from "./bots/profile";
 import { createSendMessageTool, createCheckInboxTool } from "./bots/tools";
 import { createAskBotTool } from "./bots/delegate";
@@ -51,6 +53,7 @@ import {
   SecurityGuard,
   announceGuardDisabled,
   buildGuardStatus,
+  guardForBot,
 } from "./security/guard";
 import { Redactor } from "./security/redact";
 import { AuditLog, formatAudit, auditPath } from "./audit/log";
@@ -87,6 +90,7 @@ interface AppContext {
   home: string;
   memoryDir: string;
   guard: ReturnType<typeof SecurityGuard.fromConfig>;
+  botSecurity?: BotSecurityConfig;
 }
 
 async function main(): Promise<number> {
@@ -252,7 +256,7 @@ async function main(): Promise<number> {
           ? buildMemorySection(listSummaries(memDir), { currentProject: cwd })
           : null,
     });
-    const tools: ToolDef[] = [
+    let tools: ToolDef[] = [
       readTool,
       globTool,
       grepTool,
@@ -266,11 +270,16 @@ async function main(): Promise<number> {
     }
     tools.push(createUseSkillTool({ home, projectDir: cwd }));
     tools.push(createSaveSkillTool({ projectDir: cwd }));
+    tools.push(createListSkillsTool({ home, projectDir: cwd }));
     if (profile) {
       tools.push(createSendMessageTool({ home, fromBot: profile.name, policy: inboxPolicy }));
       tools.push(createCheckInboxTool({ profile, policy: inboxPolicy }));
+      const policy = capPolicy("full", profile.config.security?.policy);
+      if (policy === "none") tools = [];
+      else if (policy === "read-only") tools = tools.filter((t) => t.group === "read");
+      tools = applyDenyTools(tools, profile.config.security?.denyTools);
     }
-    const guard = SecurityGuard.fromConfig(config.security, (detail) =>
+    const guard = guardForBot(config.security, profile?.config.security, (detail) =>
       audit.append("tool_block", "user", detail),
     );
     const ctx: AppContext = {
@@ -284,6 +293,7 @@ async function main(): Promise<number> {
       home,
       memoryDir: memDir,
       guard,
+      botSecurity: profile?.config.security,
     };
 
     if (cli.print !== undefined) {
@@ -516,6 +526,7 @@ async function gatewayCommand(args: string[]): Promise<number> {
         audit,
         log,
         notifyApproval,
+        telegramBindings: tg.bindings,
       });
       channel = new TelegramChannel(
         {
@@ -538,6 +549,7 @@ async function gatewayCommand(args: string[]): Promise<number> {
             actor: String(msg.userId),
             source: "telegram",
             chatId: msg.chatId,
+            userId: msg.userId,
           }),
         log,
       );
@@ -665,13 +677,14 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     maxTokens: ctx.config.maxTokens,
     capUSD: ctx.config.budgetUSD,
     pricing: ctx.config.pricing,
-    policy: "read-only",
+    policy: capPolicy("read-only", ctx.botSecurity?.policy),
+    denyTools: ctx.botSecurity?.denyTools,
     agentsMd: loadAgentsMd(ctx.cwd),
     home: ctx.home,
     memoryDir: ctx.memoryDir,
     guard: ctx.guard,
-    audit: (kind, detail) =>
-      new AuditLog(auditPath(ctx.home)).append(kind, "user", detail),
+    audit: (kind, detail, correlationId) =>
+      new AuditLog(auditPath(ctx.home)).append(kind, "user", detail, undefined, correlationId),
     redactor: Redactor.fromConfig(ctx.config.security),
   });
   stdout.write(`${result.text}\n`);

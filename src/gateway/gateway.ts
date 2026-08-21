@@ -1,12 +1,16 @@
 import type { HarnessConfig } from "../config/types";
 import { ConfigError } from "../config/types";
 import { ProviderRegistry } from "../provider/registry";
-import { resolveBot, botModelRef, botBudgetUSD } from "../bots/profile";
-import { runHeadless, type HeadlessOptions } from "../agent/headless";
+import { resolveBot, botModelRef, botBudgetUSD, type BotProfile } from "../bots/profile";
+import { runHeadless, capPolicy, type HeadlessOptions } from "../agent/headless";
+import { guardForBot } from "../security/guard";
 import { formatUSD } from "../agent/budget";
 import { parseSchedule, nextRun, type Schedule } from "./schedule";
 import { Redactor } from "../security/redact";
 import { parseGatewaySettings, type GatewaySettings } from "./config";
+import { memorySummariesOnSessionEnd } from "../config/loader";
+import { cheapModelRef, type ModelRef } from "../config/models";
+import { summarizeLatestSession } from "../memory/summaries";
 import { createCheckInboxTool, createSendMessageTool } from "../bots/tools";
 import { createRememberTool } from "../tools/memory";
 import { formatInbox, inboxPolicyFromConfig, markRead, unreadMessages } from "../bots/inbox";
@@ -166,19 +170,28 @@ export class Gateway {
       maxTokens: this.deps.config.maxTokens,
       capUSD: botBudgetUSD(profile, this.deps.config.budgetUSD),
       pricing: this.deps.config.pricing,
-      policy: "read-only",
+      policy: capPolicy("read-only", profile.config.security?.policy),
+      denyTools: profile.config.security?.denyTools,
       extraTools,
       approve,
       home: this.deps.home,
       memoryDir: profile.memoryDir,
       sessionLogDir: profile.sessionsDir,
       sessionBot: profile.name,
-      guard: this.deps.guard,
+      guard: guardForBot(
+        this.deps.config.security,
+        profile.config.security,
+        this.deps.guard?.onBlock,
+      ),
       redactor: Redactor.fromConfig(this.deps.config.security),
     });
     this.log(
       `job ${job.name} done (${result.stopReason}, ${formatUSD(result.costUSD)})`,
     );
+
+    // #37: fold the bot's just-finished session into its memory summary when
+    // gateway-driven summaries are enabled. Best-effort — never fails the job.
+    await this.summarizeAfterRun(profile, ref);
 
     const output = result.text.trim();
     if (!output) {
@@ -193,6 +206,35 @@ export class Gateway {
       }
       await post(output);
       this.log(`job ${job.name}: posted to ${job.postTo}`);
+    }
+  }
+
+  /**
+   * #37: summarize the bot's most recent session into its memory summary, if
+   * enabled. Best-effort — a summarizer failure is logged but never fails a job.
+   */
+  private async summarizeAfterRun(
+    profile: BotProfile,
+    runRef: ModelRef,
+  ): Promise<void> {
+    if (!memorySummariesOnSessionEnd(this.deps.config)) return;
+    try {
+      const sumRef = cheapModelRef(this.deps.config) ?? runRef;
+      const res = await summarizeLatestSession({
+        sessionsDirPath: profile.sessionsDir,
+        memoryDirPath: profile.memoryDir,
+        provider: this.deps.registry.get(sumRef.provider),
+        model: sumRef.model,
+        maxTokens: this.deps.config.maxTokens,
+        projectPath: this.deps.cwd,
+      });
+      if (res) {
+        this.log(
+          `job summary: ${profile.name} session ${res.sessionId} (${res.words} words)`,
+        );
+      }
+    } catch (e) {
+      this.log(`job summary failed for ${profile.name}: ${(e as Error).message}`);
     }
   }
 

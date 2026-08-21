@@ -148,6 +148,12 @@ describe("e2e: web console flow — login, streamed chat, approve write, verify 
       }
       expect(pending?.tool).toBe("write_file");
 
+      // full tool input is on GET /api/approvals/:id, not the truncated list summary
+      const detailRes = await fetch(`${base}/api/approvals/${pending.id}`, { headers: auth });
+      expect(detailRes.status).toBe(200);
+      const detail = (await detailRes.json()) as { input?: { path?: string; content?: string } };
+      expect(detail.input).toEqual({ path: "foo.txt", content: "console made this" });
+
       // click approve (what the button does)
       const approveRes = await fetch(`${base}/api/approvals/${pending.id}`, {
         method: "POST",

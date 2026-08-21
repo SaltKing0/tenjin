@@ -8,7 +8,7 @@ import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { aggregateSpend, perBotBreakdown } from "../audit/spend";
 import { AuditLog, formatAuditMarkdown, type AuditKind, type AuditQuery } from "../audit/log";
-import { approvalsDir, getRequest, resolveRequest } from "./approvals";
+import { approvalsDir, getRequest, resolveRequest, type ApprovalRequest } from "./approvals";
 import { getSettings, applySettings, detectModels, testProvider, verifySettingsApply, DetectTimeoutError } from "./settings";
 import { sessionsDir } from "../config/loader";
 
@@ -30,6 +30,18 @@ function scopeSessionsDir(home: string, bot: string | null): string | null {
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
+}
+
+/** List cards show the truncated summary; full input is GET /api/approvals/:id. */
+function approvalListItem(req: ApprovalRequest): Omit<ApprovalRequest, "input"> {
+  return {
+    id: req.id,
+    bot: req.bot,
+    tool: req.tool,
+    inputSummary: req.inputSummary,
+    ts: req.ts,
+    status: req.status,
+  };
 }
 
 function parseIsoBound(raw: string | null, field: "from" | "to"): { ms?: number; error?: string } {
@@ -55,6 +67,8 @@ function auditQueryFromUrl(
   if (kindParam) opts.kind = kindParam as AuditKind;
   if (tailParam) opts.tail = Number(tailParam);
   else if (defaultTail !== undefined) opts.tail = defaultTail;
+  const correlationParam = url.searchParams.get("correlationId");
+  if (correlationParam) opts.correlationId = correlationParam;
   return { opts };
 }
 
@@ -246,13 +260,20 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
         for (const file of readdirSync(dir)) {
           if (!file.endsWith(".json")) continue;
           const reqData = getRequest(deps.home, file.replace(/\.json$/, ""));
-          if (reqData && reqData.status === "pending") pending.push(reqData);
+          if (reqData && reqData.status === "pending") pending.push(approvalListItem(reqData));
         }
       }
       return json({ pending });
     }
 
     const approvalMatch = /^\/api\/approvals\/([a-z0-9-]+)$/.exec(path);
+    if (approvalMatch && req.method === "GET") {
+      const id = approvalMatch[1];
+      if (!id) return json({ error: "missing id" }, 400);
+      const found = getRequest(deps.home, id);
+      if (!found) return json({ error: "not found" }, 404);
+      return json({ ...found, input: found.input ?? found.inputSummary });
+    }
     if (approvalMatch && req.method === "POST") {
       const id = approvalMatch[1];
       if (!id) return json({ error: "missing id" }, 400);

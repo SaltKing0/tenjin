@@ -19,8 +19,23 @@ import { listSummaries } from "../memory/summaries";
 import { listSkills } from "../skills/loader";
 import { createUseSkillTool, summarizeSkills } from "../skills/activate";
 import { createSaveSkillTool } from "../tools/skill-writer";
+import { createListSkillsTool } from "../tools/skill-lister";
 
 export type ToolPolicy = "read-only" | "none" | "full";
+
+const POLICY_RANK: Record<ToolPolicy, number> = { none: 0, "read-only": 1, full: 2 };
+
+/** A bot policy can only tighten the caller's policy, never upgrade it. */
+export function capPolicy(base: ToolPolicy, botCap?: ToolPolicy): ToolPolicy {
+  if (!botCap) return base;
+  return POLICY_RANK[botCap] < POLICY_RANK[base] ? botCap : base;
+}
+
+export function applyDenyTools(defs: ToolDef[], deny?: string[]): ToolDef[] {
+  if (!deny?.length) return defs;
+  const blocked = new Set(deny);
+  return defs.filter((d) => !blocked.has(d.name));
+}
 
 export interface HeadlessOptions {
   provider: Provider;
@@ -32,6 +47,7 @@ export interface HeadlessOptions {
   capUSD: number;
   pricing?: PricingConfig;
   policy?: ToolPolicy;
+  denyTools?: string[];
   agentsMd?: string | null;
   extraTools?: ToolDef[];
   home?: string;
@@ -40,9 +56,13 @@ export interface HeadlessOptions {
   sessionBot?: string;
   guard?: import("../security/guard").SecurityGuard | null;
   redactor?: Redactor | null;
-  audit?: (kind: "write_exec" | "budget_halt", detail: string) => void;
+  audit?: (kind: "write_exec" | "budget_halt", detail: string, correlationId?: string) => void;
+  /** Shared id threaded into this run's audit events (e.g. a delegation correlation id). */
+  correlationId?: string;
   approve?: (toolName: string, group: "read" | "write", input: unknown) => Promise<boolean>;
   onTextDelta?: (delta: string) => void;
+  /** Live side-channel invoked when the agent invokes a tool (name only). */
+  onToolActivity?: (name: string) => void;
 }
 
 export interface HeadlessResult {
@@ -61,6 +81,7 @@ export function toolsForPolicy(policy: ToolPolicy, skill?: SkillDirs): ToolDef[]
   const skillTools: ToolDef[] = [];
   if (skill && policy !== "none") {
     skillTools.push(createUseSkillTool({ home: skill.home, projectDir: skill.projectDir }));
+    skillTools.push(createListSkillsTool({ home: skill.home, projectDir: skill.projectDir }));
     if (policy === "full") {
       skillTools.push(createSaveSkillTool({ projectDir: skill.projectDir }));
     }
@@ -109,7 +130,10 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     provider: opts.provider,
     model: opts.model,
     system,
-    tools: [...toolsForPolicy(policy, skillDirs), ...(opts.extraTools ?? [])],
+    tools: applyDenyTools(
+      [...toolsForPolicy(policy, skillDirs), ...(opts.extraTools ?? [])],
+      opts.denyTools,
+    ),
     messages: [{ role: "user", content: opts.message }],
     budget,
     maxTokens: opts.maxTokens,
@@ -118,42 +142,43 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       opts.approve ??
       (async (_name, group) => group === "read"),
     guard: opts.guard,
-    onTextDelta: opts.onTextDelta,
     audit: opts.audit,
-    onEvent: logger
-      ? (e: TurnEvent) => {
-          const ts = new Date().toISOString();
-          if (e.t === "assistant_message") {
-            logger?.append({ t: "message", role: "assistant", content: e.content, ts });
-          } else if (e.t === "tool_call") {
-            logger?.append({
-              t: "tool_call",
-              id: e.id,
-              name: e.name,
-              input: redactor.redactValue(e.input),
-              ts,
-            });
-          } else if (e.t === "tool_result") {
-            logger?.append({
-              t: "tool_result",
-              id: e.id,
-              name: e.name,
-              ok: e.ok,
-              output: redactor.redact(e.output),
-              ts,
-            });
-          } else if (e.t === "usage") {
-            logger?.append({
-              t: "usage",
-              inputTokens: e.usage.inputTokens,
-              outputTokens: e.usage.outputTokens,
-              costUSD: e.costUSD,
-              spentUSD: budget.spentUSD,
-              ts,
-            });
-          }
-        }
-      : undefined,
+    correlationId: opts.correlationId,
+    onTextDelta: opts.onTextDelta,
+    onEvent: (e: TurnEvent) => {
+      if (e.t === "tool_call") opts.onToolActivity?.(e.name);
+      if (!logger) return;
+      const ts = new Date().toISOString();
+      if (e.t === "assistant_message") {
+        logger?.append({ t: "message", role: "assistant", content: e.content, ts });
+      } else if (e.t === "tool_call") {
+        logger?.append({
+          t: "tool_call",
+          id: e.id,
+          name: e.name,
+          input: redactor.redactValue(e.input),
+          ts,
+        });
+      } else if (e.t === "tool_result") {
+        logger?.append({
+          t: "tool_result",
+          id: e.id,
+          name: e.name,
+          ok: e.ok,
+          output: redactor.redact(e.output),
+          ts,
+        });
+      } else if (e.t === "usage") {
+        logger?.append({
+          t: "usage",
+          inputTokens: e.usage.inputTokens,
+          outputTokens: e.usage.outputTokens,
+          costUSD: e.costUSD,
+          spentUSD: budget.spentUSD,
+          ts,
+        });
+      }
+    },
   });
   return {
     text: result.text,

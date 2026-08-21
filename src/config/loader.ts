@@ -88,6 +88,12 @@ const SCHEMA: Record<string, FieldDef> = {
           model: { types: ["string"] },
         },
       },
+      summaries: {
+        types: ["mapping"],
+        children: {
+          onSessionEnd: { types: ["boolean"] },
+        },
+      },
     },
   },
   // `inbox` from #64 (yaml TTL/max config); added here so schema-validate
@@ -210,6 +216,8 @@ memory:
   vector:
     enabled: true           # semantic recall; needs OPENAI_API_KEY at runtime
     # model: text-embedding-3-small
+  # summaries:
+  #   onSessionEnd: true     # gateway: summarize a bot's session after each job run (default: off)
 # security:
 #   redaction: true          # mask secrets (sk-…, AKIA…, keys) in session/audit logs
 # inbox:
@@ -258,6 +266,18 @@ export function memoryEnabled(cfg: HarnessConfig): boolean {
 
 export function vectorEnabled(cfg: HarnessConfig): boolean {
   return memoryEnabled(cfg) && cfg.memory?.vector?.enabled !== false;
+}
+
+/**
+ * Whether the gateway should summarize a bot's session after each job run (#37).
+ * Opt-in: requires memory to be enabled AND `memory.summaries.onSessionEnd` to
+ * be explicitly true, so existing deployments don't gain an extra per-job
+ * provider call unless they ask for it.
+ */
+export function memorySummariesOnSessionEnd(
+  cfg: Pick<HarnessConfig, "memory">,
+): boolean {
+  return cfg.memory?.enabled !== false && cfg.memory?.summaries?.onSessionEnd === true;
 }
 
 export function providersFile(home = tenjinHome()): string {

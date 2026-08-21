@@ -2,6 +2,8 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   TelegramChannel,
   routeText,
+  botsAllowedForUser,
+  routeBoundText,
   type TgUpdate,
   type TelegramRejection,
 } from "../src/gateway/telegram";
@@ -38,6 +40,44 @@ describe("routeText", () => {
     const r = routeText("@ghost hi", "researcher", bots);
     expect(r.bot).toBe("researcher");
     expect(r.rest).toBe("@ghost hi");
+  });
+});
+
+describe("per-bot telegram allowlists (#59)", () => {
+  const bots = ["researcher", "writer"];
+  const allowlists: Record<string, number[] | undefined> = {
+    researcher: [42],
+    writer: [99],
+  };
+
+  test("botsAllowedForUser only returns bots that list the sender", () => {
+    expect(botsAllowedForUser(42, bots, allowlists)).toEqual(["researcher"]);
+    expect(botsAllowedForUser(99, bots, allowlists)).toEqual(["writer"]);
+    expect(botsAllowedForUser(7, bots, allowlists)).toEqual([]);
+  });
+
+  test("unlisted bots stay reachable by any globally allowed sender", () => {
+    expect(botsAllowedForUser(42, bots, { writer: [99] })).toEqual(["researcher"]);
+  });
+
+  test("an empty allowlist means nobody (distinct from unset)", () => {
+    expect(botsAllowedForUser(42, bots, { researcher: [], writer: [99] })).toEqual([]);
+  });
+
+  test("plain text lands on the bound bot even when defaultBot is a different one", () => {
+    const r = routeBoundText("hello", "writer", bots, ["researcher"]);
+    expect(r).toEqual({ ok: true, bot: "researcher", rest: "hello" });
+  });
+
+  test("@mention of an unbound bot is rejected, not silently rerouted", () => {
+    const r = routeBoundText("@writer draft", "researcher", bots, ["researcher"]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/writer/);
+  });
+
+  test("sender bound to no bot is rejected", () => {
+    const r = routeBoundText("hello", "researcher", bots, []);
+    expect(r.ok).toBe(false);
   });
 });
 

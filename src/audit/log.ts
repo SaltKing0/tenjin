@@ -20,6 +20,8 @@ export interface AuditEvent {
   actor: string;
   bot?: string;
   detail: string;
+  /** Optional correlation id linking related audit events (e.g. a delegation run). */
+  correlationId?: string;
 }
 
 export interface AuditQuery {
@@ -30,6 +32,7 @@ export interface AuditQuery {
   from?: number;
   /** Inclusive upper bound, epoch ms. */
   to?: number;
+  correlationId?: string;
 }
 
 export function auditPath(home: string): string {
@@ -42,12 +45,19 @@ export class AuditLog {
     readonly redactor: Redactor = new Redactor(),
   ) {}
 
-  append(kind: AuditKind, actor: string, detail: string, bot?: string): void {
+  append(
+    kind: AuditKind,
+    actor: string,
+    detail: string,
+    bot?: string,
+    correlationId?: string,
+  ): void {
     const event: AuditEvent = {
       ts: new Date().toISOString(),
       kind,
       actor,
       ...(bot ? { bot } : {}),
+      ...(correlationId ? { correlationId } : {}),
       detail: this.redactor.redact(detail),
     };
     appendFileSync(this.path, `${JSON.stringify(event)}\n`);
@@ -64,6 +74,7 @@ export class AuditLog {
         const e = JSON.parse(line) as AuditEvent;
         if (opts.bot && e.bot !== opts.bot) continue;
         if (opts.kind && e.kind !== opts.kind) continue;
+        if (opts.correlationId && e.correlationId !== opts.correlationId) continue;
         if (windowed) {
           const ts = Date.parse(e.ts);
           if (!Number.isFinite(ts)) continue;

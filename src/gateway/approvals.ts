@@ -9,6 +9,8 @@ export interface ApprovalRequest {
   bot: string;
   tool: string;
   inputSummary: string;
+  /** Full tool input. Optional on records written before this field existed. */
+  input?: unknown;
   ts: string;
   status: ApprovalStatus;
 }
@@ -23,14 +25,22 @@ function requestPath(home: string, id: string): string {
 
 export function createRequest(
   home: string,
-  input: { bot: string; tool: string; inputSummary: string },
+  fields: {
+    bot: string;
+    tool: string;
+    inputSummary?: string;
+    input?: unknown;
+  },
 ): ApprovalRequest {
   mkdirSync(approvalsDir(home), { recursive: true });
+  const rawInput = fields.input !== undefined ? fields.input : fields.inputSummary ?? "";
+  const summarySource = fields.inputSummary ?? summarizeInput(rawInput);
   const req: ApprovalRequest = {
     id: randomUUID().slice(0, 8),
-    bot: input.bot,
-    tool: input.tool,
-    inputSummary: input.inputSummary.replace(/\s+/g, " ").trim().slice(0, 300),
+    bot: fields.bot,
+    tool: fields.tool,
+    inputSummary: summarySource.replace(/\s+/g, " ").trim().slice(0, 300),
+    input: rawInput,
     ts: new Date().toISOString(),
     status: "pending",
   };

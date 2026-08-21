@@ -375,6 +375,8 @@ async function panelChat(main) {
           if (frame.type === "delta") {
             reply += frame.text;
             replyMsg.textContent = reply;
+          } else if (frame.type === "tool") {
+            log.append(el("div", { class: "msg tool-status dim" }, `· ${frame.name} …`));
           } else if (frame.type === "done") {
             const finalText = frame.reply ?? reply ?? "(no reply)";
             replyMsg.replaceChildren(renderMarkdown(finalText));
@@ -398,12 +400,80 @@ async function panelChat(main) {
   });
 }
 
+function formatApprovalInput(input) {
+  if (input == null) return "";
+  if (typeof input === "string") return input;
+  try {
+    return JSON.stringify(input, null, 2);
+  } catch {
+    return String(input);
+  }
+}
+
+function approvalActionButtons(req, onDone) {
+  return el(
+    "div",
+    { style: "margin-top:8px; display:flex; gap:8px" },
+    el(
+      "button",
+      {
+        class: "primary",
+        onclick: async () => {
+          await apiJson(`/api/approvals/${req.id}`, {
+            method: "POST",
+            body: JSON.stringify({ action: "approve" }),
+          });
+          onDone();
+        },
+      },
+      "approve",
+    ),
+    el(
+      "button",
+      {
+        class: "danger",
+        onclick: async () => {
+          await apiJson(`/api/approvals/${req.id}`, {
+            method: "POST",
+            body: JSON.stringify({ action: "deny" }),
+          });
+          onDone();
+        },
+      },
+      "deny",
+    ),
+  );
+}
+
 async function panelApprovals(main) {
   main.replaceChildren(el("h1", {}, "Approvals"));
   const container = el("div");
   main.append(container);
+  let viewingId = null;
+
+  function closeFull() {
+    viewingId = null;
+    refresh();
+  }
+
+  async function showFull(req) {
+    viewingId = req.id;
+    try {
+      const detail = await apiJson(`/api/approvals/${req.id}`);
+      container.replaceChildren(
+        el("button", { onclick: closeFull }, "< back"),
+        el("h2", {}, `[${detail.id}] ${detail.tool} `, el("span", { class: "badge" }, detail.bot)),
+        el("pre", { class: "approval-input" }, formatApprovalInput(detail.input ?? detail.inputSummary)),
+        approvalActionButtons(detail, closeFull),
+      );
+    } catch {
+      viewingId = null;
+      await refresh();
+    }
+  }
 
   async function refresh() {
+    if (viewingId) return;
     const data = await apiJson("/api/approvals");
     container.replaceChildren();
     if (data.pending.length === 0) {
@@ -414,43 +484,20 @@ async function panelApprovals(main) {
       container.append(
         el(
           "div",
-          { class: "card" },
+          {
+            class: "card",
+            style: "cursor:pointer",
+            title: "view full input",
+            onclick: (e) => {
+              if (e.target.closest("button")) return;
+              showFull(req);
+            },
+          },
           el("strong", {}, `[${req.id}] ${req.tool}`),
           " ",
           el("span", { class: "badge" }, req.bot),
           el("div", { class: "dim" }, req.inputSummary),
-          el(
-            "div",
-            { style: "margin-top:8px; display:flex; gap:8px" },
-            el(
-              "button",
-              {
-                class: "primary",
-                onclick: async () => {
-                  await apiJson(`/api/approvals/${req.id}`, {
-                    method: "POST",
-                    body: JSON.stringify({ action: "approve" }),
-                  });
-                  refresh();
-                },
-              },
-              "approve",
-            ),
-            el(
-              "button",
-              {
-                class: "danger",
-                onclick: async () => {
-                  await apiJson(`/api/approvals/${req.id}`, {
-                    method: "POST",
-                    body: JSON.stringify({ action: "deny" }),
-                  });
-                  refresh();
-                },
-              },
-              "deny",
-            ),
-          ),
+          approvalActionButtons(req, refresh),
         ),
       );
     }
@@ -592,6 +639,15 @@ async function panelSettings(main) {
       modelSelect.append(el("option", { value: provider + ":" + model }, provider + ":" + model));
     }
   }
+
+  // Select (and if needed add) a model in the default dropdown. Used to
+  // surface a model id the user typed manually even when it is not in any
+  // detected list.
+  function setDefaultModel(value) {
+    const already = [...modelSelect.options].some((o) => o.value === value);
+    if (!already) modelSelect.append(el("option", { value }, value));
+    modelSelect.value = value;
+  }
   const cheapSelect = el("select", { style: "width:100%" },
     el("option", { value: "" }, "(none)"));
   main.append(statusLine);
@@ -644,6 +700,23 @@ async function panelSettings(main) {
       }
     }
 
+    // Manual entry: lets the user type a model id even when /models returned
+    // nothing or an incomplete list. A bare id (e.g. deepseek-chat) is prefixed
+    // with this card's provider; a qualified ref (openai:…) is used as-is. The
+    // result becomes the default model so it is sent to the backend on save.
+    const manualInput = el("input", {
+      type: "text",
+      placeholder:
+        "or type a model id — e.g. " + (name === "openai" ? "deepseek-chat" : "claude-sonnet-4-6"),
+      style: "width:100%; margin-bottom:8px",
+      oninput: () => {
+        const v = manualInput.value.trim();
+        if (!v) return;
+        const prefixed = v.indexOf(":") !== -1 ? v : name + ":" + v;
+        setDefaultModel(prefixed);
+      },
+    });
+
     return el(
       "div",
       { class: "card" },
@@ -657,6 +730,8 @@ async function panelSettings(main) {
       el("div", { style: "display:flex; gap:8px; margin-bottom:4px" },
         el("button", { onclick: detect }, "test & detect models")),
       detectOut,
+      el("div", { class: "dim", style: "margin:2px 0 4px" }, "or type a model id (skip detect)"),
+      manualInput,
     );
   }
 

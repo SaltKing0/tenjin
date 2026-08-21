@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -61,6 +61,31 @@ describe("parseGatewaySettings", () => {
     expect(s.jobs[0]?.scheduleSpec.every).toBe("10m");
   });
 
+  test("job tz is parsed and validated", () => {
+    const s = parseGatewaySettings({
+      jobs: [
+        {
+          name: "a",
+          bot: "worker",
+          prompt: "do it",
+          cron: "0 9 * * *",
+          tz: "Europe/Berlin",
+        },
+      ],
+    });
+    expect(s.jobs[0]?.scheduleSpec.tz).toBe("Europe/Berlin");
+    expect(() =>
+      parseGatewaySettings({
+        jobs: [{ name: "a", bot: "b", prompt: "p", cron: "0 9 * * *", tz: "Not/AZone" }],
+      }),
+    ).toThrow(/time zone/);
+    expect(() =>
+      parseGatewaySettings({
+        jobs: [{ name: "a", bot: "b", prompt: "p", cron: "0 9 * * *", tz: 1 }],
+      }),
+    ).toThrow(/IANA time zone/);
+  });
+
   test("invalid schedule rejected", () => {
     expect(() =>
       parseGatewaySettings({ jobs: [{ name: "a", bot: "b", prompt: "p", every: "nope" }] }),
@@ -89,6 +114,31 @@ describe("parseGatewaySettings", () => {
     expect(() =>
       parseGatewaySettings({ telegram: { enabled: true, allowedUsers: [42] } }),
     ).toThrow(/defaultBot/);
+  });
+
+  test("telegram bindings map bot → allowed senders", () => {
+    const s = parseGatewaySettings({
+      telegram: {
+        enabled: true,
+        allowedUsers: [42, 99],
+        defaultBot: "researcher",
+        bindings: { researcher: [42], writer: [99] },
+      },
+    });
+    expect(s.telegram?.bindings).toEqual({ researcher: [42], writer: [99] });
+  });
+
+  test("telegram bindings reject non-numeric user ids", () => {
+    expect(() =>
+      parseGatewaySettings({
+        telegram: {
+          enabled: true,
+          allowedUsers: [42],
+          defaultBot: "researcher",
+          bindings: { researcher: ["alice"] },
+        },
+      }),
+    ).toThrow(/bindings/);
   });
 
   test("telegram rate-limit and length config parsed (#69)", () => {
@@ -125,6 +175,23 @@ describe("job scheduling helpers", () => {
     if (!fast || !slow) throw new Error("unreachable");
     expect(fast.nextDueMs).toBe(t0 + 60_000);
     expect(new Date(slow.nextDueMs).getHours()).toBe(9);
+  });
+
+  test("buildJobs honors per-job tz across DST", () => {
+    const zoned = parseGatewaySettings({
+      jobs: [
+        {
+          name: "morning",
+          bot: "worker",
+          prompt: "p",
+          cron: "0 9 * * *",
+          tz: "Europe/Berlin",
+        },
+      ],
+    });
+    const from = Date.UTC(2026, 2, 28, 9, 0, 0);
+    const jobs = buildJobs(zoned, from);
+    expect(jobs[0]?.nextDueMs).toBe(Date.UTC(2026, 2, 29, 7, 0, 0));
   });
 
   test("dueJobs respects running flag and time", () => {
@@ -434,5 +501,59 @@ describe("heartbeat", () => {
     expect(() =>
       parseGatewaySettings({ heartbeat: { enabled: true } }),
     ).toThrow(/requires a `bot`/);
+  });
+});
+
+describe("onSessionEnd summaries (#37)", () => {
+  test("enabled: a finished job writes a summary for the bot session", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        memory: { enabled: true, summaries: { onSessionEnd: true } },
+        gateway: {
+          jobs: [{ name: "j", bot: "worker", prompt: "summarize me", every: "1m" }],
+        },
+      }),
+      registry: { get: () => mockProvider("run output") } as never,
+      log: () => {},
+    });
+
+    await gw.fireDue(Date.now() + 120_000);
+
+    const summariesDir = join(home, "bots", "worker", "memory", "summaries");
+    let summaryFile: string | undefined;
+    for (let i = 0; i < 60; i++) {
+      const files = existsSync(summariesDir) ? readdirSync(summariesDir) : [];
+      if (files.length > 0) {
+        summaryFile = files[0];
+        break;
+      }
+      await Bun.sleep(20);
+    }
+    expect(summaryFile).toBeDefined();
+    // The summary is a real file with YAML frontmatter (uptoEvent written).
+    const text = readFileSync(join(summariesDir, summaryFile!), "utf8");
+    expect(text).toMatch(/uptoEvent:/);
+  });
+
+  test("disabled by default: no summary file is produced", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: {
+          jobs: [{ name: "j", bot: "worker", prompt: "summarize me", every: "1m" }],
+        },
+      }),
+      registry: { get: () => mockProvider("run output") } as never,
+      log: () => {},
+    });
+
+    await gw.fireDue(Date.now() + 120_000);
+    await Bun.sleep(100);
+
+    const summariesDir = join(home, "bots", "worker", "memory", "summaries");
+    expect(existsSync(summariesDir)).toBe(false);
   });
 });

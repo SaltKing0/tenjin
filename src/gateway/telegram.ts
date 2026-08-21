@@ -53,20 +53,70 @@ const DEFAULT_RATE_LIMIT_MAX = 20;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_MESSAGE_LENGTH = 4096;
 
+function mentionedBot(text: string): { name: string; rest: string } | null {
+  const mention = /^@([a-z0-9-]+)\s+([\s\S]+)$/i.exec(text.trim());
+  if (!mention || !mention[1] || mention[2] === undefined) return null;
+  return { name: mention[1].toLowerCase(), rest: mention[2].trim() };
+}
+
 export function routeText(
   text: string,
   defaultBot: string,
   availableBots: string[],
 ): { bot: string; rest: string } {
-  const trimmed = text.trim();
-  const mention = /^@([a-z0-9-]+)\s+([\s\S]+)$/i.exec(trimmed);
-  if (mention && mention[1] && mention[2] !== undefined) {
-    const name = mention[1].toLowerCase();
-    if (availableBots.includes(name)) {
-      return { bot: name, rest: mention[2].trim() };
-    }
+  const mention = mentionedBot(text);
+  if (mention && availableBots.includes(mention.name)) {
+    return { bot: mention.name, rest: mention.rest };
   }
-  return { bot: defaultBot, rest: trimmed };
+  return { bot: defaultBot, rest: text.trim() };
+}
+
+/** Merge a bot's own allowlist with the gateway binding for that bot. */
+export function mergeBotAllowlist(
+  fromBot?: number[],
+  fromGateway?: number[],
+): number[] | undefined {
+  if (fromBot === undefined && fromGateway === undefined) return undefined;
+  return [...new Set([...(fromBot ?? []), ...(fromGateway ?? [])])];
+}
+
+/**
+ * Bots this sender may reach. A missing allowlist means "any globally
+ * allowed user"; an explicit list is a per-bot restriction.
+ */
+export function botsAllowedForUser(
+  userId: number,
+  availableBots: string[],
+  allowlists: Record<string, number[] | undefined>,
+): string[] {
+  return availableBots.filter((bot) => {
+    const list = allowlists[bot];
+    if (list === undefined) return true;
+    return list.includes(userId);
+  });
+}
+
+export type BoundRoute =
+  | { ok: true; bot: string; rest: string }
+  | { ok: false; error: string };
+
+/** Route a Telegram message through a sender's allowed-bot set. */
+export function routeBoundText(
+  text: string,
+  defaultBot: string,
+  availableBots: string[],
+  allowedBots: string[],
+): BoundRoute {
+  if (allowedBots.length === 0) {
+    return { ok: false, error: "you are not allowed to talk to any bot on this gateway" };
+  }
+  const mention = mentionedBot(text);
+  if (mention && availableBots.includes(mention.name) && !allowedBots.includes(mention.name)) {
+    return { ok: false, error: `you are not allowed to talk to bot ${mention.name}` };
+  }
+  const fallback = allowedBots.includes(defaultBot) ? defaultBot : allowedBots[0]!;
+  const routed = routeText(text, fallback, allowedBots);
+  return { ok: true, bot: routed.bot, rest: routed.rest };
 }
 
 export class TelegramChannel {

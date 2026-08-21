@@ -9,6 +9,8 @@ export interface Skill {
   content: string;
   source: "global" | "project";
   path: string;
+  /** Set when the SKILL.md could not be parsed; carries the reason. */
+  broken?: string;
 }
 
 export function globalSkillsDir(home: string): string {
@@ -19,26 +21,33 @@ export function projectSkillsDir(projectDir: string): string {
   return join(projectDir, ".tenjin", "skills");
 }
 
-function parseSkillFile(path: string, source: "global" | "project"): Skill | null {
+interface ParseResult {
+  skill?: Skill;
+  error?: string;
+}
+
+function parseSkillFile(path: string, source: "global" | "project"): ParseResult {
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
-  } catch {
-    return null;
+  } catch (e) {
+    return { error: `unreadable: ${(e as Error).message}` };
   }
   const match = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
-  if (!match || !match[1]) return null;
+  if (!match || !match[1]) return { error: "missing YAML frontmatter" };
   let meta: any;
   try {
     meta = YAML.parse(match[1]);
-  } catch {
-    return null;
+  } catch (e) {
+    return { error: `invalid YAML: ${(e as Error).message}` };
   }
-  if (!meta || typeof meta !== "object") return null;
+  if (!meta || typeof meta !== "object") return { error: "invalid frontmatter" };
   const name = typeof meta.name === "string" ? meta.name.trim() : "";
-  if (!name) return null;
+  if (!name) return { error: "missing name field" };
   const description = typeof meta.description === "string" ? meta.description.trim() : "";
-  return { name, description, content: (match[2] ?? "").trim(), source, path };
+  return {
+    skill: { name, description, content: (match[2] ?? "").trim(), source, path },
+  };
 }
 
 function scanDir(dir: string, source: "global" | "project"): Skill[] {
@@ -48,8 +57,21 @@ function scanDir(dir: string, source: "global" | "project"): Skill[] {
     if (!entry.isDirectory()) continue;
     const path = join(dir, entry.name, "SKILL.md");
     if (!existsSync(path)) continue;
-    const skill = parseSkillFile(path, source);
-    if (skill) skills.push(skill);
+    const { skill, error } = parseSkillFile(path, source);
+    if (skill) {
+      skills.push(skill);
+      continue;
+    }
+    const reason = error ?? "unknown parse error";
+    console.warn(`[skills] ${path}: broken skill (${reason})`);
+    skills.push({
+      name: entry.name,
+      description: "",
+      content: "",
+      source,
+      path,
+      broken: reason,
+    });
   }
   return skills;
 }
@@ -70,7 +92,7 @@ export function getSkill(
   projectDir: string,
   name: string,
 ): Skill | null {
-  return listSkills(home, projectDir).find((s) => s.name === name) ?? null;
+  return listSkills(home, projectDir).find((s) => !s.broken && s.name === name) ?? null;
 }
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;

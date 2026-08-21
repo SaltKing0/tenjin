@@ -1,8 +1,10 @@
 import type { Provider } from "../provider/types";
 import type { HarnessConfig, ProviderName } from "../config/types";
 import { resolveBot, botModelRef, botBudgetUSD } from "./profile";
-import { runHeadless } from "../agent/headless";
+import { runHeadless, capPolicy } from "../agent/headless";
+import { guardForBot } from "../security/guard";
 import { Budget, formatUSD } from "../agent/budget";
+import { randomUUID } from "node:crypto";
 import type { ToolDef } from "../tools/registry";
 
 export interface AskBotDeps {
@@ -13,7 +15,11 @@ export interface AskBotDeps {
   globalConfig: HarnessConfig;
   sessionBudget?: Budget;
   guard?: import("../security/guard").SecurityGuard | null;
-  audit?: (kind: "delegation", detail: string) => void;
+  audit?: (
+    kind: "delegation" | "write_exec" | "budget_halt",
+    detail: string,
+    correlationId?: string,
+  ) => void;
 }
 
 const DEFAULT_DELEGATION_CAP_USD = 1.0;
@@ -39,7 +45,13 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
       const message = String(args.message ?? "").trim();
       if (!message) throw new Error("message must not be empty");
 
-      deps.audit?.("delegation", `ask_bot -> ${targetName}: ${message.slice(0, 120)}`);
+      const correlationId = randomUUID();
+
+      deps.audit?.(
+        "delegation",
+        `ask_bot -> ${targetName}: ${message.slice(0, 120)}`,
+        correlationId,
+      );
       const ref = botModelRef(profile, deps.globalConfig);
       const provider = deps.getProvider(ref.provider);
 
@@ -59,10 +71,17 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
         maxTokens: deps.globalConfig.maxTokens,
         capUSD: cap,
         pricing: deps.globalConfig.pricing,
-        policy: "read-only",
+        policy: capPolicy("read-only", profile.config.security?.policy),
+        denyTools: profile.config.security?.denyTools,
         home: deps.home,
         memoryDir: profile.memoryDir,
-        guard: deps.guard,
+        guard: guardForBot(
+          deps.globalConfig.security,
+          profile.config.security,
+          deps.guard?.onBlock,
+        ),
+        correlationId,
+        audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
         sessionLogDir: profile.sessionsDir,
         sessionBot: profile.name,
       });

@@ -4,6 +4,7 @@ import { YAML } from "bun";
 import { ConfigError, type HarnessConfig } from "../config/types";
 import { resolveModelRef, defaultModelRef, type ModelRef } from "../config/models";
 import { sanitizeSkillName } from "../skills/loader";
+import type { ToolPolicy } from "../agent/headless";
 
 export function botsDir(home: string): string {
   return join(home, "bots");
@@ -13,9 +14,23 @@ export function botDir(home: string, name: string): string {
   return join(botsDir(home), name);
 }
 
+const BOT_POLICIES = new Set<ToolPolicy>(["read-only", "none", "full"]);
+
+export interface BotSecurityConfig {
+  blockedPatterns?: string[];
+  policy?: ToolPolicy;
+  denyTools?: string[];
+}
+
+export interface BotTelegramConfig {
+  allowedUsers?: number[];
+}
+
 export interface BotConfig {
   model?: string;
   budgetUSD?: number;
+  security?: BotSecurityConfig;
+  telegram?: BotTelegramConfig;
 }
 
 export interface BotProfile {
@@ -26,6 +41,71 @@ export interface BotProfile {
   sessionsDir: string;
   memoryDir: string;
   inboxDir: string;
+}
+
+function parseStringList(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some((p) => typeof p !== "string")) {
+    throw new ConfigError(`${label} must be a list of strings`);
+  }
+  return value as string[];
+}
+
+function parseUserIds(value: unknown, label: string): number[] {
+  if (!Array.isArray(value) || value.some((u) => typeof u !== "number")) {
+    throw new ConfigError(`${label} must be a list of numeric ids`);
+  }
+  return value as number[];
+}
+
+function parseBotSecurity(raw: unknown): BotSecurityConfig | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ConfigError("bot security must be a mapping");
+  }
+  const s = raw as Record<string, unknown>;
+  const out: BotSecurityConfig = {};
+  if (s.policy !== undefined) {
+    if (typeof s.policy !== "string" || !BOT_POLICIES.has(s.policy as ToolPolicy)) {
+      throw new ConfigError("bot security.policy must be read-only, none, or full");
+    }
+    out.policy = s.policy as ToolPolicy;
+  }
+  if (s.blockedPatterns !== undefined) {
+    out.blockedPatterns = parseStringList(s.blockedPatterns, "bot security.blockedPatterns");
+  }
+  if (s.denyTools !== undefined) {
+    out.denyTools = parseStringList(s.denyTools, "bot security.denyTools");
+  }
+  return out;
+}
+
+function parseBotTelegram(raw: unknown): BotTelegramConfig | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ConfigError("bot telegram must be a mapping");
+  }
+  const t = raw as Record<string, unknown>;
+  const out: BotTelegramConfig = {};
+  if (t.allowedUsers !== undefined) {
+    out.allowedUsers = parseUserIds(t.allowedUsers, "bot telegram.allowedUsers");
+  }
+  return out;
+}
+
+function parseBotConfig(raw: Record<string, unknown>): BotConfig {
+  const cfg: BotConfig = {};
+  if (typeof raw.model === "string") cfg.model = raw.model;
+  if (raw.budgetUSD !== undefined) {
+    if (typeof raw.budgetUSD !== "number") {
+      throw new ConfigError(`bot budgetUSD must be a number >= 0`);
+    }
+    cfg.budgetUSD = raw.budgetUSD;
+  }
+  const security = parseBotSecurity(raw.security);
+  if (security) cfg.security = security;
+  const telegram = parseBotTelegram(raw.telegram);
+  if (telegram) cfg.telegram = telegram;
+  return cfg;
 }
 
 function botSoulTemplate(name: string): string {
@@ -86,7 +166,7 @@ export function resolveBot(home: string, name: string): BotProfile {
       if (typeof parsed !== "object") {
         throw new ConfigError(`bot config root must be a mapping: ${cfgPath}`);
       }
-      cfg = parsed as BotConfig;
+      cfg = parseBotConfig(parsed as Record<string, unknown>);
     }
   }
   if (cfg.model?.trim()) resolveModelRef(cfg.model, "anthropic");

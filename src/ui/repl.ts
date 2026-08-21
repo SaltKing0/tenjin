@@ -71,6 +71,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         globalConfig: opts.config,
         sessionBudget: state.budget,
         guard: opts.guard ?? null,
+        audit: (kind, detail, correlationId) =>
+          audit.append(kind, "user", detail, opts.bot, correlationId),
       }),
     );
   }
@@ -139,7 +141,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           approve: (name, group, input) =>
             approve(name, group, input, opts.config, rl, sessionAllowed, audit, opts.bot),
           guard: opts.guard,
-          audit: (kind, detail) => audit.append(kind, "user", detail, opts.bot),
+          audit: (kind, detail, correlationId) =>
+            audit.append(kind, "user", detail, opts.bot, correlationId),
           onTextDelta: (d) => stdout.write(d),
           onEvent: (e) => forwardEvent(e, state.logger, state.budget),
           signal: controller.signal,

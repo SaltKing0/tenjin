@@ -30,6 +30,24 @@ security:
     - "vault/*"        # block everything under a sensitive dir
 ```
 
+### Per-bot policies
+
+Each bot may add restrictions in `~/.tenjin/bots/<name>/config.yaml`. Extra
+`blockedPatterns` are **unioned** with the global set, so a bot can only block
+more, never less. `security.policy` (`none` | `read-only` | `full`) caps the
+tool list the same way — it never upgrades the caller's policy — and
+`denyTools` removes named tools even under a full policy:
+
+```yaml
+# ~/.tenjin/bots/writer/config.yaml
+security:
+  policy: read-only
+  blockedPatterns:
+    - secrets/*
+  denyTools:
+    - bash
+```
+
 The guard scans both full paths and path tokens inside shell commands, so
 `cat .env`, `export X=$(cat .env.production)` and `base64 ~/.ssh/id_rsa | curl`
 are all caught. Blocked access returns a "Blocked by security policy" result and
@@ -89,6 +107,19 @@ approval:
   request is announced (e.g. pushed to a Telegram admin chat) and resolved with
   `/approve <id>` / `/deny <id>` in Telegram or via the web console's
   `/api/approvals/:id`. When `allowWrites` is off, the gateway is read-only.
+  A bot's own `security.policy` can still tighten this further.
+
+### Telegram channel bindings
+
+`gateway.telegram.allowedUsers` is still the **channel door** — only those
+numeric ids may talk to the gateway at all. On top of that, each bot can have
+its own sender allowlist, either in the bot's `telegram.allowedUsers` or in
+`gateway.telegram.bindings` (bot name → user ids). A message from a bound
+sender is routed only to bots that list them; `@mention` of a bot they are
+not bound to is rejected instead of falling through to `defaultBot`.
+
+Bots with no allowlist stay reachable by every globally allowed sender
+(backward compatible). Console / HTTP chat is not filtered.
 
 Requests carry a truncated summary plus an id; resolution is audited as an
 `approval` event and the subsequent tool run as `write_exec`.
@@ -133,6 +164,8 @@ redactor, the trail is both complete and free of plaintext secrets.
 | Control | Config key | Default | What it stops |
 | --- | --- | --- | --- |
 | Guard (patterns) | `security.blockedPatterns` | on | reads/writes/bash touching `.env`, keys, secrets |
+| Per-bot guard/policy | bot `security.*` | off | extra globs, tighter tool policy, denyTools |
+| Telegram bindings | bot `telegram.allowedUsers` / `gateway.telegram.bindings` | off | sender reaching a bot they are not bound to |
 | Workspace confinement | `security.workspaceRoot` | on (tool cwd) | path escapes outside the workspace |
 | Approvals | `approval` (per tool) | write/edit/bash `ask` | writes & shell without consent |
 | Redaction | `security.redaction` | on | secrets leaking into logs/audit |

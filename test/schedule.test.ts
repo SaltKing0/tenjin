@@ -68,6 +68,25 @@ describe("parseSchedule", () => {
     expect(parseSchedule({ every: "5m" }).kind).toBe("every");
     expect(parseSchedule({ cron: "0 9 * * *" }).kind).toBe("cron");
   });
+
+  test("optional IANA tz is stored on the schedule", () => {
+    const cron = parseSchedule({ cron: "0 9 * * *", tz: "Europe/Berlin" });
+    expect(cron.kind).toBe("cron");
+    expect(cron.tz).toBe("Europe/Berlin");
+    const every = parseSchedule({ every: "15m", tz: "UTC" });
+    expect(every.kind).toBe("every");
+    expect(every.tz).toBe("UTC");
+    expect(parseSchedule({ cron: "0 9 * * *" }).tz).toBeUndefined();
+  });
+
+  test("unknown IANA tz is rejected", () => {
+    expect(() => parseSchedule({ cron: "0 9 * * *", tz: "Europe/Neverland" })).toThrow(
+      ConfigError,
+    );
+    expect(() => parseSchedule({ cron: "0 9 * * *", tz: "UTC+1" })).toThrow(
+      /time zone/,
+    );
+  });
 });
 
 function at(local: string): number {
@@ -189,6 +208,87 @@ function bruteNextRun(schedule: Schedule, fromMs: number): number | undefined {
   }
   return undefined;
 }
+
+/**
+ * Europe/Berlin DST 2026:
+ *   spring 29 Mar 02:00 CET → 03:00 CEST  (01:00 UTC)
+ *   fall   25 Oct 03:00 CEST → 02:00 CET  (01:00 UTC)
+ *
+ * Expected instants are UTC milliseconds so the assertions do not depend
+ * on the host timezone.
+ */
+describe("nextRun — IANA timezone (DST-safe)", () => {
+  const berlin0900 = parseSchedule({ cron: "0 9 * * *", tz: "Europe/Berlin" });
+
+  test("09:00 Europe/Berlin across the spring-forward (CET → CEST)", () => {
+    // Sat 28 Mar 10:00 CET = 09:00 UTC; next civil 09:00 is Sun 29 Mar 09:00 CEST = 07:00 UTC.
+    const from = Date.UTC(2026, 2, 28, 9, 0, 0);
+    expect(nextRun(berlin0900, from)).toBe(Date.UTC(2026, 2, 29, 7, 0, 0));
+  });
+
+  test("09:00 Europe/Berlin still same-day after the spring gap", () => {
+    // Sun 29 Mar 08:00 CEST = 06:00 UTC; 09:00 CEST the same morning is 07:00 UTC.
+    const from = Date.UTC(2026, 2, 29, 6, 0, 0);
+    expect(nextRun(berlin0900, from)).toBe(Date.UTC(2026, 2, 29, 7, 0, 0));
+  });
+
+  test("09:00 Europe/Berlin across the fall-back (CEST → CET)", () => {
+    // Sat 24 Oct 10:00 CEST = 08:00 UTC; next civil 09:00 is Sun 25 Oct 09:00 CET = 08:00 UTC.
+    const from = Date.UTC(2026, 9, 24, 8, 0, 0);
+    expect(nextRun(berlin0900, from)).toBe(Date.UTC(2026, 9, 25, 8, 0, 0));
+  });
+
+  test("09:00 America/New_York across US spring-forward", () => {
+    // 8 Mar 2026 02:00 EST → 03:00 EDT. Sat 7 Mar 10:00 EST = 15:00 UTC;
+    // next 09:00 is Sun 8 Mar 09:00 EDT = 13:00 UTC.
+    const sched = parseSchedule({ cron: "0 9 * * *", tz: "America/New_York" });
+    const from = Date.UTC(2026, 2, 7, 15, 0, 0);
+    expect(nextRun(sched, from)).toBe(Date.UTC(2026, 2, 8, 13, 0, 0));
+  });
+
+  test("non-existent 02:30 Europe/Berlin on the spring-forward day is skipped", () => {
+    // 29 Mar 02:30 CET does not exist (clocks jump 02:00 → 03:00).
+    // From Sat 28 Mar 03:00 CET the next 02:30 is Mon 30 Mar 02:30 CEST = 00:30 UTC.
+    const sched = parseSchedule({ cron: "30 2 * * *", tz: "Europe/Berlin" });
+    const from = Date.UTC(2026, 2, 28, 2, 0, 0); // 03:00 CET
+    expect(nextRun(sched, from)).toBe(Date.UTC(2026, 2, 30, 0, 30, 0));
+  });
+
+  test("ambiguous 02:30 Europe/Berlin on the fall-back day fires at the first occurrence", () => {
+    // 25 Oct 02:30 happens twice. From Sat 24 Oct 03:00 CEST pick the first
+    // (CEST) occurrence: 02:30 CEST = 00:30 UTC, not 02:30 CET = 01:30 UTC.
+    const sched = parseSchedule({ cron: "30 2 * * *", tz: "Europe/Berlin" });
+    const from = Date.UTC(2026, 9, 24, 1, 0, 0); // 03:00 CEST
+    expect(nextRun(sched, from)).toBe(Date.UTC(2026, 9, 25, 0, 30, 0));
+  });
+
+  test("impossible zoned schedule still throws", () => {
+    expect(() =>
+      nextRun(
+        parseSchedule({ cron: "0 0 30 2 *", tz: "Europe/Berlin" }),
+        Date.UTC(2026, 0, 1),
+      ),
+    ).toThrow(ConfigError);
+  });
+
+  test("tz-aware nextRun is independent of the process timezone", () => {
+    const from = Date.UTC(2026, 2, 28, 9, 0, 0);
+    const expected = Date.UTC(2026, 2, 29, 7, 0, 0);
+    const src = [
+      `import { nextRun, parseSchedule } from ${JSON.stringify(`${import.meta.dir}/../src/gateway/schedule.ts`)};`,
+      `const n = nextRun(parseSchedule({ cron: "0 9 * * *", tz: "Europe/Berlin" }), ${from});`,
+      `process.stdout.write(String(n));`,
+    ].join("\n");
+    const proc = Bun.spawnSync({
+      cmd: ["bun", "-e", src],
+      env: { ...process.env, TZ: "Pacific/Auckland" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(proc.exitCode).toBe(0);
+    expect(Number(proc.stdout.toString())).toBe(expected);
+  });
+});
 
 describe("nextRun — direct computation matches brute-force baseline", () => {
   const expressions = [
