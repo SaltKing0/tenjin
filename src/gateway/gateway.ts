@@ -5,6 +5,7 @@ import { ConfigError } from "../config/types";
 import { ProviderRegistry } from "../provider/registry";
 import { resolveBot, listBots, botModelRef, botBudgetUSD, type BotProfile, type BotRoutineConfig, type BotHeartbeatConfig } from "../bots/profile";
 import { scanInstalledBots } from "../bots/catalog";
+import { reconcileOrphanedTasks } from "../bots/tasks";
 import { runHeadless, capPolicy, type HeadlessOptions, type HeadlessResult } from "../agent/headless";
 import { guardForBot } from "../security/guard";
 import { resolveParanoid, hardenUntrustedInput } from "../security/injection";
@@ -901,6 +902,12 @@ export class Gateway {
     const { broken } = scanInstalledBots(this.deps.home);
     for (const b of broken) {
       this.log(`broken bot package "${b.name}" at ${b.dir}: ${b.reason}`);
+    }
+    // #180: fail tasks orphaned by a previous process's restart so their
+    // dependents fail fast instead of burning a full timeout.
+    const orphaned = reconcileOrphanedTasks(this.deps.home);
+    if (orphaned > 0) {
+      this.log(`reconcile: ${orphaned} task(s) orphaned by restart — failed`);
     }
     // #19: fire scheduled runs that fell due while the gateway was down before
     // the main loop starts polling future cadences.

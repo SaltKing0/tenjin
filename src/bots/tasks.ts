@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Provider } from "../provider/types";
@@ -128,6 +128,49 @@ export function listTasks(home: string, bot: string): BotTask[] {
 /** Read a single persisted task (by target bot + task id). */
 export function readTaskForStatus(home: string, bot: string, taskId: string): BotTask | null {
   return readTask(home, bot, taskId);
+}
+
+/**
+ * #180: sweep every task dir for running/pending tasks whose owning process
+ * is gone (gateway restart / REPL exit). A task's lifetime can never legally
+ * exceed its own timeoutMs — the live promise either finishes or is aborted
+ * by its timeout timer — so a task still stuck in running/pending for longer
+ * than that bound (measured from the file's write time) must be an orphan of
+ * a dead process. It is failed with "orphaned by restart"; a later dependent
+ * that references it then fails fast instead of burning its full timeout.
+ * Returns how many tasks were swept.
+ */
+export function reconcileOrphanedTasks(
+  home: string,
+  opts: { nowMs?: number; graceMs?: number } = {},
+): number {
+  const now = opts.nowMs ?? Date.now();
+  const grace = opts.graceMs ?? 0;
+  let swept = 0;
+  for (const bot of listBots(home)) {
+    const dir = tasksDir(home, bot);
+    if (!existsSync(dir)) continue;
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith(".json")) continue;
+      let t: BotTask;
+      try {
+        t = JSON.parse(readFileSync(join(dir, file), "utf8")) as BotTask;
+      } catch {
+        continue; // corrupted files are handled elsewhere (#183)
+      }
+      if (t.status !== "running" && t.status !== "pending") continue;
+      const maxLife = t.timeoutMs > 0 ? t.timeoutMs : DEFAULT_TASK_TIMEOUT_MS;
+      const mtimeMs = statSync(join(dir, file)).mtimeMs;
+      if (now - mtimeMs > maxLife + grace) {
+        t.status = "error";
+        t.error = "orphaned by restart";
+        t.finishedAt = new Date(now).toISOString();
+        writeTask(home, bot, t);
+        swept++;
+      }
+    }
+  }
+  return swept;
 }
 
 /** Task ids are globally unique (UUIDs); locate a task across every bot. */
