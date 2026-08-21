@@ -322,6 +322,18 @@ test("console serves the chat-history module (#284)", async () => {
   expect(body).toContain("messageText");
 });
 
+test("console serves the theme module (#286)", async () => {
+  const base = start({
+    consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
+  });
+  const res = await fetch(`${base}/console/theme.js`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("application/javascript");
+  const body = await res.text();
+  expect(body).toContain("resolveTheme");
+  expect(body).toContain("nextTheme");
+});
+
 test("console serves the tables module (#258)", async () => {
   const base = start({
     consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
