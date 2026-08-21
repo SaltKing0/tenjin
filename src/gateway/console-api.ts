@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { HarnessConfig } from "../config/types";
 import { ConfigError } from "../config/types";
@@ -61,6 +61,54 @@ function json(data: unknown, status = 200): Response {
 }
 
 /** List cards show the truncated summary; full input is GET /api/approvals/:id. */
+/**
+ * #147: best-effort old/new extraction for an edit/write approval so the
+ * console can render a real diff instead of raw tool input. Tolerates the
+ * common field spellings across tools; for a write it falls back to the target
+ * file's current content as the "old" baseline. Returns undefined when nothing
+ * old/new can be derived (console then shows the raw input as before).
+ */
+function approvalDiff(
+  tool: string,
+  input: unknown,
+  cwd: string,
+): { old: string; new: string } | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const obj = input as Record<string, unknown>;
+  const pathField = typeof obj.path === "string" ? obj.path : undefined;
+  const isEdit = tool === "edit_file" || tool === "edit";
+  const isWrite = tool === "write_file" || tool === "write";
+  if (!isEdit && !isWrite && pathField === undefined) return undefined;
+
+  const one = (...keys: string[]): string | undefined => {
+    for (const k of keys) {
+      const v = obj[k];
+      if (typeof v === "string") return v;
+    }
+    return undefined;
+  };
+  let oldText = one("oldText", "old_string", "oldContent", "old", "oldString");
+  const newText = one(
+    "newText",
+    "new_string",
+    "newContent",
+    "new",
+    "content",
+    "newString",
+  );
+  // write: old baseline = current file at path, new = provided content
+  if (pathField && !oldText && newText) {
+    try {
+      const p = join(cwd, pathField);
+      oldText = existsSync(p) ? readFileSync(p, "utf8") : "";
+    } catch {
+      oldText = "";
+    }
+  }
+  if (oldText === undefined && newText === undefined) return undefined;
+  return { old: oldText ?? "", new: newText ?? "" };
+}
+
 function approvalListItem(req: ApprovalRequest): Omit<ApprovalRequest, "input"> {
   return {
     id: req.id,
@@ -444,13 +492,64 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
       return json({ pending });
     }
 
+    // #147: bulk approve/deny — resolve several pending requests at once,
+    // emitting one audit event per request.
+    if (path === "/api/approvals/bulk" && req.method === "POST") {
+      let body: { ids?: unknown; action?: unknown };
+      try {
+        body = (await req.json()) as typeof body;
+      } catch {
+        return json({ error: "invalid json" }, 400);
+      }
+      const action = body.action;
+      if (action !== "approve" && action !== "deny") {
+        return json({ error: 'action must be "approve" or "deny"' }, 400);
+      }
+      const ids = Array.isArray(body.ids)
+        ? body.ids.filter((x): x is string => typeof x === "string" && x.length > 0)
+        : [];
+      if (ids.length === 0) return json({ error: "ids is required" }, 400);
+      const resolved: string[] = [];
+      const failed: string[] = [];
+      for (const id of ids) {
+        const r = resolveRequest(
+          deps.home,
+          id,
+          action === "approve" ? "approved" : "denied",
+        );
+        if (!r) {
+          failed.push(id);
+          continue;
+        }
+        resolved.push(id);
+        deps.audit.append(
+          "approval",
+          "console",
+          `${action} ${id} (${getRequest(deps.home, id)?.tool ?? "?"})`,
+        );
+      }
+      return json({
+        ok: true,
+        action,
+        resolved,
+        failed,
+        resolvedCount: resolved.length,
+      });
+    }
+
     const approvalMatch = /^\/api\/approvals\/([a-z0-9-]+)$/.exec(path);
     if (approvalMatch && req.method === "GET") {
       const id = approvalMatch[1];
       if (!id) return json({ error: "missing id" }, 400);
+      // `/api/approvals/bulk` is handled above; guard here anyway.
+      if (id === "bulk") return json({ error: "not found" }, 404);
       const found = getRequest(deps.home, id);
       if (!found) return json({ error: "not found" }, 404);
-      return json({ ...found, input: found.input ?? found.inputSummary });
+      return json({
+        ...found,
+        input: found.input ?? found.inputSummary,
+        diff: approvalDiff(found.tool, found.input, deps.cwd),
+      });
     }
     if (approvalMatch && req.method === "POST") {
       const id = approvalMatch[1];
