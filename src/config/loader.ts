@@ -156,6 +156,12 @@ const SCHEMA: Record<string, FieldDef> = {
       },
     },
   },
+  events: {
+    types: ["mapping"],
+    children: {
+      webhooks: { types: ["list"] },
+    },
+  },
   // `inbox` from #64 (yaml TTL/max config); added here so schema-validate
   // (#74) doesn't warn "unknown field inbox".
   inbox: {

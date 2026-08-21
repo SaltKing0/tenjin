@@ -61,7 +61,7 @@ export function createRequest(
     status: "pending",
   };
   writeFileSync(requestPath(home, req.id), JSON.stringify(req, null, 2));
-  emit("approval.new", { id: req.id });
+  emit("approval.created", { id: req.id });
   return req;
 }
 

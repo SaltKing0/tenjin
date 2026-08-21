@@ -10,6 +10,7 @@ import { guardForBot } from "../security/guard";
 import { resolveParanoid } from "../security/injection";
 import { formatUSD } from "../agent/budget";
 import { sendMessage } from "./inbox";
+import { emit } from "../gateway/events";
 import type { ToolDef } from "../tools/registry";
 import type { Budget } from "../agent/budget";
 import type { EffortLevel } from "../agent/effort";
@@ -318,6 +319,7 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
       clearTimeout(timer);
       writeTask(deps.home, targetName, task);
       notifyCompletion(deps.home, task);
+      emit("task.done", { id: task.id, bot: task.bot, status: task.status });
     }
     return task;
   })();

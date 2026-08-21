@@ -48,6 +48,10 @@ export interface HarnessConfig {
     vector?: { enabled?: boolean; model?: string };
     summaries?: { onSessionEnd?: boolean };
   };
+  /** Outbound event webhooks (#148): `events.webhooks` list. */
+  events?: {
+    webhooks?: unknown;
+  };
   inbox?: InboxConfig;
   retry?: RetryConfig;
   /** Global spend limits (USD) across all scopes — see audit/global-budget.ts. */

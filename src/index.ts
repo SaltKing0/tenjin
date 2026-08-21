@@ -72,6 +72,7 @@ import { WebhookChannel } from "./gateway/webhook";
 import { createMessageHandler, chatStreamResponse, type HandleContext } from "./gateway/handler";
 import { startHttpServer } from "./gateway/http";
 import { createConsoleApi } from "./gateway/console-api";
+import { attachWebhooks, parseWebhooks } from "./gateway/webhooks";
 import {
   createRequest,
   resolveRequest,
@@ -808,6 +809,12 @@ async function gatewayCommand(args: string[]): Promise<number> {
       audit.append("tool_block", "gateway", detail),
     );
     const gateway = new Gateway({ home, cwd, config, registry, log, guard });
+    // #148: outbound event webhooks from events.webhooks config.
+    const webhookTargets = parseWebhooks(config.events?.webhooks);
+    if (webhookTargets.length > 0) {
+      attachWebhooks(webhookTargets);
+      log(`webhooks: ${webhookTargets.length} target(s) subscribed`);
+    }
 
     // Hot-reload job changes (made via `tenjin job add/rm`) on SIGHUP, without
     // a restart. Re-reads config.yaml and rebuilds the job schedule.

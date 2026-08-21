@@ -572,6 +572,7 @@ export class Gateway {
           costUSD: 0,
           error: (e as Error).message,
         };
+        emit("job.failed", { name: job.name, bot: job.botName, error: (e as Error).message });
         this.persistJob(job);
       }
       throw e;
