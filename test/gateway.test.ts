@@ -14,6 +14,7 @@ import { parseGatewaySettings as pgs } from "../src/gateway/config";
 const parseGatewaySettings = pgs;
 import type { ChatRequest, ChatResponse, Provider } from "../src/provider/types";
 import { createBot } from "../src/bots/profile";
+import { listMessages } from "../src/bots/inbox";
 
 let home: string;
 
@@ -241,6 +242,74 @@ describe("heartbeat", () => {
     expect(message).toContain("look here");
     const toolNames = (capture.req?.tools ?? []).map((t: any) => t.name);
     expect(toolNames).toContain("check_inbox");
+    expect(toolNames).toContain("send_message");
+    expect(toolNames).toContain("remember");
+  });
+
+  test("heartbeat replies to the sender via send_message, landing in the sender inbox", async () => {
+    createBot(home, "alice");
+    // alice leaves a message in worker's inbox
+    mkdirSync(join(home, "bots", "worker", "inbox"), { recursive: true });
+    writeFileSync(
+      join(home, "bots", "worker", "inbox", "m1.json"),
+      JSON.stringify({
+        id: "m1",
+        from: "alice",
+        to: "worker",
+        subject: "status",
+        body: "whats up",
+        ts: "t",
+        read: false,
+      }),
+    );
+
+    // first turn asks to send_message, second turn ends
+    let calls = 0;
+    const provider: Provider = {
+      name: "mock",
+      async chat(req: ChatRequest): Promise<ChatResponse> {
+        if (calls === 0) {
+          calls++;
+          return {
+            stopReason: "tool_use",
+            content: [
+              {
+                type: "tool_use",
+                id: "t1",
+                name: "send_message",
+                input: { to: "alice", subject: "re: status", body: "all good" },
+              },
+            ],
+            usage: { inputTokens: 10, outputTokens: 5 },
+          };
+        }
+        calls++;
+        return {
+          stopReason: "end_turn",
+          content: [{ type: "text", text: "sent" }],
+          usage: { inputTokens: 5, outputTokens: 5 },
+        };
+      },
+    };
+
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: { heartbeat: { enabled: true, bot: "worker", every: "30m" } },
+      }),
+      registry: { get: () => provider } as never,
+    });
+
+    await gw.fireDue(Date.now() + 60 * 60_000);
+    await Bun.sleep(30);
+
+    // sender's inbox now holds the reply written by worker's heartbeat
+    const replies = listMessages(join(home, "bots", "alice", "inbox"));
+    const reply = replies.find((m) => m.from === "worker" && m.to === "alice");
+    expect(reply).toBeDefined();
+    expect(reply?.subject).toBe("re: status");
+    expect(reply?.body).toBe("all good");
   });
 
   test("disabled heartbeat produces no job", () => {
