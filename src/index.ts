@@ -149,7 +149,11 @@ async function main(): Promise<number> {
       mkdirSync(profile.inboxDir, { recursive: true });
       config.budgetUSD = botBudgetUSD(profile, config.budgetUSD);
     }
-    const registry = new ProviderRegistry(config.providers?.openai?.baseUrl);
+    const registry = new ProviderRegistry(
+      config.providers?.openai?.baseUrl,
+      undefined,
+      config.retry,
+    );
     const defaultRef = cli.model
       ? resolveModelRef(cli.model, config.provider)
       : profile
@@ -394,10 +398,14 @@ async function gatewayCommand(args: string[]): Promise<number> {
   const cwd = process.cwd();
   try {
     const { config } = loadConfig(cwd, home, { skipModelCheck: true });
-    const registry = new ProviderRegistry(config.providers?.openai?.baseUrl, {
-      anthropic: config.providers?.anthropic?.apiKey,
-      openai: config.providers?.openai?.apiKey,
-    });
+    const registry = new ProviderRegistry(
+      config.providers?.openai?.baseUrl,
+      {
+        anthropic: config.providers?.anthropic?.apiKey,
+        openai: config.providers?.openai?.apiKey,
+      },
+      config.retry,
+    );
     const controller = new AbortController();
     process.on("SIGINT", () => controller.abort());
     process.on("SIGTERM", () => controller.abort());

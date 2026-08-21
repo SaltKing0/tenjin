@@ -10,6 +10,8 @@ import type {
   Usage,
 } from "./types";
 import { parseSse, type SseFrame } from "./sse";
+import { fetchWithRetry, normalizeRetry, type RetryPolicy } from "./retry";
+import type { RetryConfig } from "../config/types";
 
 const API_VERSION = "2023-06-01";
 const DEFAULT_BASE_URL = "https://api.anthropic.com/v1";
@@ -169,26 +171,34 @@ function parseJsonLoose(raw: string): unknown {
 
 export class AnthropicProvider implements Provider {
   readonly name = "anthropic";
+  private policy: RetryPolicy;
   constructor(
     private apiKey: string,
     private baseUrl: string = process.env.ANTHROPIC_BASE_URL || DEFAULT_BASE_URL,
-  ) {}
+    retry?: RetryConfig,
+  ) {
+    this.policy = normalizeRetry(retry);
+  }
 
   async chat(
     req: ChatRequest,
     callbacks?: StreamCallbacks,
     signal?: AbortSignal,
   ): Promise<ChatResponse> {
-    const res = await fetch(`${this.baseUrl.replace(/\/$/, "")}/messages`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": this.apiKey,
-        "anthropic-version": API_VERSION,
+    const res = await fetchWithRetry(
+      `${this.baseUrl.replace(/\/$/, "")}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": this.apiKey,
+          "anthropic-version": API_VERSION,
+        },
+        body: JSON.stringify(buildRequestBody(req)),
       },
-      body: JSON.stringify(buildRequestBody(req)),
+      this.policy,
       signal,
-    });
+    );
     if (!res.ok || !res.body) {
       throw new Error(`anthropic api ${res.status}: ${(await res.text()).slice(0, 500)}`);
     }

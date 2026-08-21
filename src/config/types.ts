@@ -42,10 +42,25 @@ export interface HarnessConfig {
     vector?: { enabled?: boolean; model?: string };
   };
   inbox?: InboxConfig;
+  retry?: RetryConfig;
 }
 
 /** `inbox` in config.yaml. 0 disables the corresponding limit. */
 export interface InboxConfig {
   ttlDays?: number;
   maxMessages?: number;
+}
+
+/** `retry` in config.yaml — provider request retry with exponential backoff. */
+export interface RetryConfig {
+  /** Master switch; retries are on by default. */
+  enabled?: boolean;
+  /** Total attempts including the first (>= 1). */
+  maxAttempts?: number;
+  /** Backoff delay before the first retry, doubling each attempt (ms). */
+  initialDelayMs?: number;
+  /** Upper bound on the per-attempt backoff (ms). */
+  maxDelayMs?: number;
+  /** HTTP statuses that trigger a retry (429 or 5xx by default). */
+  retryableStatuses?: number[];
 }

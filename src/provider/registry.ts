@@ -2,6 +2,7 @@ import { env } from "node:process";
 import type { Provider } from "../provider/types";
 import { AnthropicProvider } from "../provider/anthropic";
 import { OpenAIProvider } from "../provider/openai";
+import type { RetryConfig } from "../config/types";
 import { ConfigError, type ProviderName } from "../config/types";
 
 export interface ProviderKeys {
@@ -16,6 +17,7 @@ export class ProviderRegistry {
   constructor(
     private openaiBaseUrl?: string,
     keys: ProviderKeys = {},
+    private retry?: RetryConfig,
   ) {
     this.keys = { ...keys };
   }
@@ -53,8 +55,8 @@ export class ProviderRegistry {
         }
         const baseUrl = env.ANTHROPIC_BASE_URL || undefined;
         return baseUrl
-          ? new AnthropicProvider(apiKey, baseUrl)
-          : new AnthropicProvider(apiKey);
+          ? new AnthropicProvider(apiKey, baseUrl, this.retry)
+          : new AnthropicProvider(apiKey, undefined, this.retry);
       }
       case "openai": {
         const apiKey = this.keys.openai || env.OPENAI_API_KEY;
@@ -65,8 +67,8 @@ export class ProviderRegistry {
         }
         const baseUrl = this.openaiBaseUrl || env.OPENAI_BASE_URL || undefined;
         return baseUrl
-          ? new OpenAIProvider(apiKey, baseUrl)
-          : new OpenAIProvider(apiKey);
+          ? new OpenAIProvider(apiKey, baseUrl, this.retry)
+          : new OpenAIProvider(apiKey, undefined, this.retry);
       }
     }
   }

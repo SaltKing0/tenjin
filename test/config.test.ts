@@ -368,3 +368,45 @@ describe("inbox config", () => {
     expect(() => loadConfig(project, home)).toThrow(/inbox\.maxMessages/);
   });
 });
+
+describe("retry config", () => {
+  test("loads retry settings from config.yaml", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "config.yaml"),
+      [
+        "model: m",
+        "retry:",
+        "  enabled: true",
+        "  maxAttempts: 5",
+        "  initialDelayMs: 250",
+        "  maxDelayMs: 4000",
+        "  retryableStatuses: [429, 503]",
+        "",
+      ].join("\n"),
+    );
+    const { config } = loadConfig(project, home);
+    expect(config.retry).toEqual({
+      enabled: true,
+      maxAttempts: 5,
+      initialDelayMs: 250,
+      maxDelayMs: 4000,
+      retryableStatuses: [429, 503],
+    });
+  });
+
+  test("rejects maxAttempts below 1", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: m\nretry:\n  maxAttempts: 0\n");
+    expect(() => loadConfig(project, home)).toThrow(/retry\.maxAttempts/);
+  });
+
+  test("rejects non-integer status codes in retryableStatuses", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "config.yaml"),
+      "model: m\nretry:\n  retryableStatuses: [500, \"x\"]\n",
+    );
+    expect(() => loadConfig(project, home)).toThrow(/retry\.retryableStatuses/);
+  });
+});

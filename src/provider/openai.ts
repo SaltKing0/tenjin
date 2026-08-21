@@ -10,6 +10,8 @@ import type {
   Usage,
 } from "./types";
 import { parseSse } from "./sse";
+import { fetchWithRetry, normalizeRetry, type RetryPolicy } from "./retry";
+import type { RetryConfig } from "../config/types";
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
@@ -182,26 +184,34 @@ export class OpenAiStreamAssembler {
 
 export class OpenAIProvider implements Provider {
   readonly name = "openai";
+  private policy: RetryPolicy;
 
   constructor(
     private apiKey: string,
     private baseUrl: string = process.env.OPENAI_BASE_URL || DEFAULT_BASE_URL,
-  ) {}
+    retry?: RetryConfig,
+  ) {
+    this.policy = normalizeRetry(retry);
+  }
 
   async chat(
     req: ChatRequest,
     callbacks?: StreamCallbacks,
     signal?: AbortSignal,
   ): Promise<ChatResponse> {
-    const res = await fetch(`${this.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${this.apiKey}`,
+    const res = await fetchWithRetry(
+      `${this.baseUrl.replace(/\/$/, "")}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(buildRequestBody(req)),
       },
-      body: JSON.stringify(buildRequestBody(req)),
+      this.policy,
       signal,
-    });
+    );
     if (!res.ok || !res.body) {
       throw new Error(`openai api ${res.status}: ${(await res.text()).slice(0, 500)}`);
     }

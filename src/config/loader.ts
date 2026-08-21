@@ -11,6 +11,7 @@ import {
   type PricingConfig,
   type PricingOverride,
   type ProviderName,
+  type RetryConfig,
 } from "./types";
 
 export { ConfigError };
@@ -96,6 +97,17 @@ const SCHEMA: Record<string, FieldDef> = {
     children: {
       ttlDays: { types: ["number"] },
       maxMessages: { types: ["number"] },
+    },
+  },
+  // `retry` from #54 (provider request retry + backoff).
+  retry: {
+    types: ["mapping"],
+    children: {
+      enabled: { types: ["boolean"] },
+      maxAttempts: { types: ["number"] },
+      initialDelayMs: { types: ["number"] },
+      maxDelayMs: { types: ["number"] },
+      retryableStatuses: { types: ["list"] },
     },
   },
 };
@@ -209,6 +221,11 @@ memory:
 # providers:
 #   openai:
 #     baseUrl: https://api.deepseek.com/v1   # any OpenAI-compatible endpoint
+# retry:                       # provider request retry on 429/5xx/network errors
+#   enabled: true              # false disables retries entirely (default: on)
+#   maxAttempts: 3             # total attempts including the first
+#   initialDelayMs: 500        # backoff before the first retry, doubles each attempt (ms)
+#   maxDelayMs: 8000           # upper bound on the per-attempt backoff (ms)
 `;
 
 const SOUL_TEMPLATE = `# SOUL
@@ -418,6 +435,7 @@ function validate(cfg: HarnessConfig, globalPath: string, skipModelCheck: boolea
   }
   validatePricing(cfg.pricing);
   validateInbox(cfg.inbox);
+  validateRetry(cfg.retry);
 }
 
 function validateRatePair(pair: unknown, label: string): void {
@@ -446,6 +464,38 @@ function validateInbox(inbox: InboxConfig | undefined): void {
     (typeof inbox.maxMessages !== "number" || inbox.maxMessages < 0 || !Number.isInteger(inbox.maxMessages))
   ) {
     throw new ConfigError(`inbox.maxMessages must be an integer >= 0 (0 = unlimited)`);
+  }
+}
+
+function validateRetry(retry: RetryConfig | undefined): void {
+  if (retry === undefined) return;
+  if (typeof retry !== "object" || retry === null) {
+    throw new ConfigError(`retry must be a mapping`);
+  }
+  if (retry.enabled !== undefined && typeof retry.enabled !== "boolean") {
+    throw new ConfigError(`retry.enabled must be a boolean`);
+  }
+  if (
+    retry.maxAttempts !== undefined &&
+    (typeof retry.maxAttempts !== "number" || retry.maxAttempts < 1 || !Number.isInteger(retry.maxAttempts))
+  ) {
+    throw new ConfigError(`retry.maxAttempts must be an integer >= 1`);
+  }
+  if (retry.initialDelayMs !== undefined && (typeof retry.initialDelayMs !== "number" || retry.initialDelayMs < 0)) {
+    throw new ConfigError(`retry.initialDelayMs must be a number >= 0`);
+  }
+  if (retry.maxDelayMs !== undefined && (typeof retry.maxDelayMs !== "number" || retry.maxDelayMs < 0)) {
+    throw new ConfigError(`retry.maxDelayMs must be a number >= 0`);
+  }
+  if (retry.retryableStatuses !== undefined) {
+    if (
+      !Array.isArray(retry.retryableStatuses) ||
+      retry.retryableStatuses.some(
+        (s) => typeof s !== "number" || !Number.isInteger(s) || s < 100 || s > 599,
+      )
+    ) {
+      throw new ConfigError(`retry.retryableStatuses must be a list of HTTP status codes (100-599)`);
+    }
   }
 }
 
