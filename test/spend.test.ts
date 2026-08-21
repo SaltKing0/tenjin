@@ -18,7 +18,12 @@ function seedSession(
   provider: string,
   model: string,
   ts: string,
-  usages: Array<{ inputTokens: number; outputTokens: number; costUSD: number }>,
+  usages: Array<{
+    inputTokens: number;
+    outputTokens: number;
+    costUSD: number;
+    cacheReadInputTokens?: number;
+  }>,
 ): void {
   mkdirSync(dir, { recursive: true });
   const events = [
@@ -59,6 +64,25 @@ test("aggregates across solo and bot scopes", () => {
   expect(rows[0]?.inputTokens).toBe(3000);
   expect(rows[0]?.sessions).toBe(1);
   expect(rows[1]?.scope).toBe("researcher");
+});
+
+test("aggregates cache-read tokens and shows cached column", () => {
+  seedSession(
+    join(home, "sessions"),
+    "s1",
+    "anthropic",
+    "claude-sonnet-4-5",
+    "2026-08-21T10:00:00Z",
+    [
+      { inputTokens: 1000, outputTokens: 100, costUSD: 0.01, cacheReadInputTokens: 800 },
+      { inputTokens: 2000, outputTokens: 200, costUSD: 0.02, cacheReadInputTokens: 1500 },
+    ],
+  );
+  const rows = aggregateSpend(home);
+  expect(rows[0]?.cacheReadInputTokens).toBe(2300);
+  const out = renderSpend(rows);
+  expect(out).toContain("cached");
+  expect(out).toContain("2.3k");
 });
 
 test("--bot filter scopes to one bot", () => {

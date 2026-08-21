@@ -44,21 +44,39 @@ function blockToApi(b: ContentBlock): unknown {
   }
 }
 
-function toApiTools(tools: ToolSchema[]): unknown[] {
-  return tools.map((t) => ({
+function toApiTools(tools: ToolSchema[], caching: boolean): unknown[] {
+  return tools.map((t, i) => ({
     name: t.name,
     description: t.description,
     input_schema: t.inputSchema,
+    ...(caching && i === tools.length - 1
+      ? { cache_control: { type: "ephemeral" } }
+      : {}),
   }));
 }
 
-export function buildRequestBody(req: ChatRequest): Record<string, unknown> {
+export interface RequestOptions {
+  /** Emit Anthropic prompt-cache breakpoints on system + last tool (default on). */
+  caching?: boolean;
+}
+
+export function buildRequestBody(
+  req: ChatRequest,
+  opts: RequestOptions = {},
+): Record<string, unknown> {
+  const caching = opts.caching !== false;
   return {
     model: req.model,
     max_tokens: req.maxTokens,
-    system: req.system,
+    ...(caching
+      ? req.system
+        ? { system: [{ type: "text", text: req.system, cache_control: { type: "ephemeral" } }] }
+        : {}
+      : req.system
+        ? { system: req.system }
+        : {}),
     messages: toApiMessages(req.messages),
-    ...(req.tools.length ? { tools: toApiTools(req.tools) } : {}),
+    ...(req.tools.length ? { tools: toApiTools(req.tools, caching) } : {}),
     stream: true,
   };
 }
@@ -100,9 +118,15 @@ export class AnthropicStreamAssembler {
     }
     const type = frame.event ?? data.type;
     switch (type) {
-      case "message_start":
+      case "message_start": {
         this.usage.inputTokens = data.message?.usage?.input_tokens ?? 0;
+        const u = data.message?.usage;
+        if (typeof u?.cache_read_input_tokens === "number")
+          this.usage.cacheReadInputTokens = u.cache_read_input_tokens;
+        if (typeof u?.cache_creation_input_tokens === "number")
+          this.usage.cacheCreationInputTokens = u.cache_creation_input_tokens;
         break;
+      }
       case "content_block_start": {
         const cb = data.content_block;
         if (cb?.type === "text") {
@@ -176,6 +200,7 @@ export class AnthropicProvider implements Provider {
     private apiKey: string,
     private baseUrl: string = process.env.ANTHROPIC_BASE_URL || DEFAULT_BASE_URL,
     retry?: RetryConfig,
+    private caching: boolean = true,
   ) {
     this.policy = normalizeRetry(retry);
   }
@@ -194,7 +219,7 @@ export class AnthropicProvider implements Provider {
           "x-api-key": this.apiKey,
           "anthropic-version": API_VERSION,
         },
-        body: JSON.stringify(buildRequestBody(req)),
+        body: JSON.stringify(buildRequestBody(req, { caching: this.caching })),
       },
       this.policy,
       signal,

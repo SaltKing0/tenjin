@@ -74,7 +74,7 @@ describe("anthropic request building", () => {
     });
   });
 
-  test("body includes system, tools, stream flag", () => {
+  test("body includes system (cached), tools, stream flag by default", () => {
     const body = buildRequestBody({
       model: "claude-sonnet-4-5",
       system: "sys",
@@ -83,10 +83,49 @@ describe("anthropic request building", () => {
       maxTokens: 1024,
     }) as any;
     expect(body.model).toBe("claude-sonnet-4-5");
-    expect(body.system).toBe("sys");
+    expect(body.system).toEqual([
+      { type: "text", text: "sys", cache_control: { type: "ephemeral" } },
+    ]);
     expect(body.max_tokens).toBe(1024);
     expect(body.stream).toBe(true);
     expect(body.tools[0].input_schema.type).toBe("object");
+  });
+
+  test("caching on adds cache_control to system and last tool", () => {
+    const body = buildRequestBody(
+      {
+        model: "claude-sonnet-4-5",
+        system: "sys",
+        messages: [{ role: "user", content: "hi" }],
+        tools: [
+          { name: "a", description: "A", inputSchema: { type: "object", properties: {} } },
+          { name: "b", description: "B", inputSchema: { type: "object", properties: {} } },
+        ],
+        maxTokens: 100,
+      },
+      { caching: true },
+    ) as any;
+    expect(body.system).toEqual([
+      { type: "text", text: "sys", cache_control: { type: "ephemeral" } },
+    ]);
+    // Only the last tool carries the breakpoint.
+    expect(body.tools[0].cache_control).toBeUndefined();
+    expect(body.tools[1].cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  test("caching off leaves system as string and no cache_control", () => {
+    const body = buildRequestBody(
+      {
+        model: "claude-sonnet-4-5",
+        system: "sys",
+        messages: [{ role: "user", content: "hi" }],
+        tools,
+        maxTokens: 100,
+      },
+      { caching: false },
+    ) as any;
+    expect(body.system).toBe("sys");
+    expect(body.tools[0].cache_control).toBeUndefined();
   });
 });
 
@@ -118,6 +157,30 @@ describe("anthropic stream assembler", () => {
       id: "tu_1",
       name: "read_file",
       input: { path: "f.ts" },
+    });
+  });
+
+  test("parses prompt-cache read/creation tokens from message_start", () => {
+    const a = new AnthropicStreamAssembler();
+    a.handle({
+      event: "message_start",
+      data: JSON.stringify({
+        message: {
+          usage: {
+            input_tokens: 500,
+            cache_creation_input_tokens: 400,
+            cache_read_input_tokens: 100,
+          },
+        },
+      }),
+    });
+    a.handle({ event: "message_delta", data: JSON.stringify({ usage: { output_tokens: 7 } }) });
+    const resp = a.done();
+    expect(resp.usage).toEqual({
+      inputTokens: 500,
+      outputTokens: 7,
+      cacheReadInputTokens: 100,
+      cacheCreationInputTokens: 400,
     });
   });
 

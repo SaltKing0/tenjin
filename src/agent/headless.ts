@@ -182,6 +182,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           t: "usage",
           inputTokens: e.usage.inputTokens,
           outputTokens: e.usage.outputTokens,
+          cacheReadInputTokens: e.usage.cacheReadInputTokens,
           costUSD: e.costUSD,
           spentUSD: budget.spentUSD,
           ts,

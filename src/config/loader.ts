@@ -59,7 +59,13 @@ const SCHEMA: Record<string, FieldDef> = {
     types: ["mapping"],
     children: {
       openai: { types: ["mapping"], valueType: "string" },
-      anthropic: { types: ["mapping"], valueType: "string" },
+      anthropic: {
+        types: ["mapping"],
+        children: {
+          apiKey: { types: ["string"] },
+          caching: { types: ["boolean"] },
+        },
+      },
     },
   },
   models: {
@@ -238,6 +244,8 @@ memory:
 # providers:
 #   openai:
 #     baseUrl: https://api.deepseek.com/v1   # any OpenAI-compatible endpoint
+#   anthropic:
+#     caching: false                         # prompt caching (default: on) — off to disable cache_control markers
 # retry:                       # provider request retry on 429/5xx/network errors
 #   enabled: true              # false disables retries entirely (default: on)
 #   maxAttempts: 3             # total attempts including the first

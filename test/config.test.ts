@@ -333,6 +333,16 @@ describe("providers.yaml (console-managed)", () => {
     expect(config.providers?.anthropic?.apiKey).toBe("sk-test-123");
   });
 
+  test("anthropic caching flag is accepted and defaults on when unset", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "providers.yaml"),
+      "providers:\n  anthropic:\n    caching: false\n",
+    );
+    const { config } = loadConfig(project, home, { skipModelCheck: true });
+    expect(config.providers?.anthropic?.caching).toBe(false);
+  });
+
   test("writeProvidersYaml writes 0600 with both sections", () => {
     writeProvidersYaml(home, {
       providers: { anthropic: { apiKey: "sk-live" } },

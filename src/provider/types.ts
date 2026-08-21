@@ -39,6 +39,10 @@ export interface ToolSchema {
 export interface Usage {
   inputTokens: number;
   outputTokens: number;
+  /** Anthropic prompt-cache tokens read from the cache (0 when no hit). */
+  cacheReadInputTokens?: number;
+  /** Anthropic prompt-cache tokens written to the cache on this call. */
+  cacheCreationInputTokens?: number;
 }
 
 export type StopReason = "end_turn" | "tool_use" | "max_tokens" | "other";
