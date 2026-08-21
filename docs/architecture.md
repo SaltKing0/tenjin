@@ -99,7 +99,12 @@ crossed the shared budget is marked exhausted (`budget.exceeded` audit event)
 and every deeper run in the tree halts immediately with a clear error instead
 of starting fresh work. `ask_bot_async` accepts a per-task `maxTreeIterations`
 and reports the consumed tree share on the task (`treeUsedIterations` /
-`treeMaxIterations` / …) via `bot_task_status`.
+`treeMaxIterations` / …) via `bot_task_status`. #184 extends this cover where
+the counter used to be dropped: the interactive REPL now seeds its turn from
+`config.maxTreeIterations` like the gateway and one-shot runners, and a chain
+carried across a process boundary (where the in-memory `TreeBudget` object
+cannot be passed) continues the counter from the prior task's persisted
+snapshot (`TreeBudget.continueFrom`) instead of restarting at 0.
 
 **Outbound notifications.** On gateway events (`approval.created`,
 `approval.resolved`, `job.failed`, `budget.exceeded`, `task.done`) Tenjin can

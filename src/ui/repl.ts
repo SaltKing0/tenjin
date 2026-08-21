@@ -7,7 +7,7 @@ import { resolveModelRef, formatModelRef, type ModelRef } from "../config/models
 import { ConfigError } from "../config/types";
 import type { ToolDef } from "../tools/registry";
 import type { HarnessConfig } from "../config/loader";
-import { Budget, createBudget, formatUSD } from "../agent/budget";
+import { Budget, createBudget, formatUSD, TreeBudget } from "../agent/budget";
 import { runAgentTurn, type TurnEvent } from "../agent/loop";
 import { checkGlobalBudget } from "../audit/global-budget";
 import type { EventLogger, SessionEvent } from "../session/events";
@@ -61,6 +61,12 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   const state = {
     messages: [...(opts.initialMessages ?? [])],
     budget: createBudget(opts.config.budgetUSD, opts.config.pricing),
+    // #184: the interactive turn (and any ask_bot / ask_bot_async delegate it
+    // spawns) counts against the configured delegation-tree safety-net, the
+    // same way the gateway and one-shot runner do.
+    treeBudget: opts.config.maxTreeIterations
+      ? new TreeBudget(opts.config.maxTreeIterations ?? 0, 0)
+      : undefined,
     logger: opts.logger,
     sessionId: opts.sessionId,
     active: opts.defaultRef,
@@ -154,6 +160,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           tools: opts.tools,
           messages: state.messages,
           budget: state.budget,
+          treeBudget: state.treeBudget,
           maxTokens: opts.config.maxTokens,
           cwd: opts.cwd,
           globalBudgetGate:
@@ -204,6 +211,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
 interface ReplState {
   messages: ChatMessage[];
   budget: Budget;
+  treeBudget?: TreeBudget;
   logger: SessionLog | undefined;
   sessionId: string;
   active: ModelRef;
