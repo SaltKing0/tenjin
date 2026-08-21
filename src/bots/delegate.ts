@@ -3,6 +3,7 @@ import type { HarnessConfig, ProviderName } from "../config/types";
 import { resolveBot, botModelRef, botBudgetUSD } from "./profile";
 import { runHeadless } from "../agent/headless";
 import { Budget, formatUSD } from "../agent/budget";
+import { randomUUID } from "node:crypto";
 import type { ToolDef } from "../tools/registry";
 
 export interface AskBotDeps {
@@ -13,7 +14,11 @@ export interface AskBotDeps {
   globalConfig: HarnessConfig;
   sessionBudget?: Budget;
   guard?: import("../security/guard").SecurityGuard | null;
-  audit?: (kind: "delegation", detail: string) => void;
+  audit?: (
+    kind: "delegation" | "write_exec" | "budget_halt",
+    detail: string,
+    correlationId?: string,
+  ) => void;
 }
 
 const DEFAULT_DELEGATION_CAP_USD = 1.0;
@@ -39,7 +44,13 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
       const message = String(args.message ?? "").trim();
       if (!message) throw new Error("message must not be empty");
 
-      deps.audit?.("delegation", `ask_bot -> ${targetName}: ${message.slice(0, 120)}`);
+      const correlationId = randomUUID();
+
+      deps.audit?.(
+        "delegation",
+        `ask_bot -> ${targetName}: ${message.slice(0, 120)}`,
+        correlationId,
+      );
       const ref = botModelRef(profile, deps.globalConfig);
       const provider = deps.getProvider(ref.provider);
 
@@ -63,6 +74,8 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
         home: deps.home,
         memoryDir: profile.memoryDir,
         guard: deps.guard,
+        correlationId,
+        audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
         sessionLogDir: profile.sessionsDir,
         sessionBot: profile.name,
       });

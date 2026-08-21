@@ -55,6 +55,8 @@ function auditQueryFromUrl(
   if (kindParam) opts.kind = kindParam as AuditKind;
   if (tailParam) opts.tail = Number(tailParam);
   else if (defaultTail !== undefined) opts.tail = defaultTail;
+  const correlationParam = url.searchParams.get("correlationId");
+  if (correlationParam) opts.correlationId = correlationParam;
   return { opts };
 }
 
@@ -210,6 +212,7 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     }
 
     if (path === "/api/audit" && req.method === "GET") {
+<<<<<<< Updated upstream
       const parsed = auditQueryFromUrl(url, 100);
       if ("error" in parsed) return json({ error: parsed.error }, 400);
       return json({ events: deps.audit.query(parsed.opts) });
@@ -234,6 +237,17 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
         "text/markdown; charset=utf-8",
         `audit-${day}.md`,
       );
+=======
+      const tailParam = url.searchParams.get("tail");
+      const kindParam = url.searchParams.get("kind");
+      const correlationParam = url.searchParams.get("correlationId");
+      const events = deps.audit.query({
+        tail: tailParam ? Number(tailParam) : 100,
+        kind: kindParam ? (kindParam as never) : undefined,
+        correlationId: correlationParam ? correlationParam : undefined,
+      });
+      return json({ events });
+>>>>>>> Stashed changes
     }
 
     if (path === "/api/approvals" && req.method === "GET") {

@@ -670,8 +670,8 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     home: ctx.home,
     memoryDir: ctx.memoryDir,
     guard: ctx.guard,
-    audit: (kind, detail) =>
-      new AuditLog(auditPath(ctx.home)).append(kind, "user", detail),
+    audit: (kind, detail, correlationId) =>
+      new AuditLog(auditPath(ctx.home)).append(kind, "user", detail, undefined, correlationId),
     redactor: Redactor.fromConfig(ctx.config.security),
   });
   stdout.write(`${result.text}\n`);
