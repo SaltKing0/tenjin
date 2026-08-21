@@ -223,7 +223,11 @@ Beyond the per-session `budgetUSD`, a **global budget**
 across solo sessions **and** every bot for a UTC day and/or month
 (`globalBudget.dailyUSD` / `globalBudget.monthlyUSD`). It is consulted before
 each provider call, so a runaway bot or cron loop can't burn past the cap; a hit
-is recorded as a `budget_halt` audit event.
+is recorded as a `budget_halt` audit event. Because it runs before every call,
+the aggregated spend totals are cached for a short window (~20s,
+`GLOBAL_BUDGET_CACHE_TTL_MS`): budget exhaustion is detected at most one TTL
+late, and in-run cost still counts against the per-session budget layer
+immediately (only the cross-session global gate is refreshed on the TTL).
 
 ## Configuration
 
