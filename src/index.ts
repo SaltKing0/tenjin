@@ -24,6 +24,7 @@ import { buildMemorySection } from "./memory/inject";
 import { indexPendingSessions } from "./memory/indexer";
 import { createEmbeddings } from "./provider/embeddings";
 import { vectorEnabled } from "./config/loader";
+import { createRecallTool, createRememberTool, readFacts } from "./tools/memory";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
@@ -71,6 +72,9 @@ async function main(): Promise<number> {
     const provider = createProvider(config);
 
     const memDir = memoryDir(home);
+    const embeddings = vectorEnabled(config)
+      ? createEmbeddings({ model: config.memory?.vector?.model })
+      : null;
     if (memoryEnabled(config) && cli.print === undefined && !cli.fork && !cli.resume) {
       try {
         const report = await generatePendingSummaries({
@@ -88,25 +92,22 @@ async function main(): Promise<number> {
         stdout.write(`memory: skipped (${(e as Error).message})\n`);
       }
 
-      if (vectorEnabled(config)) {
-        const embeddings = createEmbeddings({ model: config.memory?.vector?.model });
-        if (embeddings) {
-          try {
-            const report = await indexPendingSessions({
-              sessionsDirPath: sessionsDir(home),
-              memoryDirPath: memDir,
-              projectPath: cwd,
-              embeddings,
-            });
-            for (const err of report.errors) {
-              stdout.write(`memory: ${err}\n`);
-            }
-          } catch (e) {
-            stdout.write(`memory: vector index skipped (${(e as Error).message})\n`);
+      if (embeddings) {
+        try {
+          const report = await indexPendingSessions({
+            sessionsDirPath: sessionsDir(home),
+            memoryDirPath: memDir,
+            projectPath: cwd,
+            embeddings,
+          });
+          for (const err of report.errors) {
+            stdout.write(`memory: ${err}\n`);
           }
-        } else if (config.memory?.vector?.enabled === true) {
-          stdout.write("memory: vector layer requested but OPENAI_API_KEY is not set\n");
+        } catch (e) {
+          stdout.write(`memory: vector index skipped (${(e as Error).message})\n`);
         }
+      } else if (config.memory?.vector?.enabled === true) {
+        stdout.write("memory: vector layer requested but OPENAI_API_KEY is not set\n");
       }
     }
 
@@ -115,9 +116,11 @@ async function main(): Promise<number> {
       soulText: soul.text,
       agentsMd: loadAgentsMd(cwd),
       cwd,
-      memorySection: memoryEnabled(config)
-        ? buildMemorySection(listSummaries(memDir), { currentProject: cwd })
-        : null,
+      facts: readFacts(memDir),
+      memorySection:
+        memoryEnabled(config)
+          ? buildMemorySection(listSummaries(memDir), { currentProject: cwd })
+          : null,
     });
     const tools: ToolDef[] = [
       readTool,
@@ -127,6 +130,10 @@ async function main(): Promise<number> {
       editTool,
       bashTool,
     ];
+    if (memoryEnabled(config)) {
+      tools.push(createRememberTool({ memoryDirPath: memDir }));
+      tools.push(createRecallTool({ memoryDirPath: memDir, projectPath: cwd, embeddings }));
+    }
     const ctx: AppContext = { config, provider, system, tools, cwd };
 
     if (cli.print !== undefined) {

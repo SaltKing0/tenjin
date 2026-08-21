@@ -1,5 +1,6 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import { join } from "node:path";
 import type { Provider } from "../provider/types";
 import type { ChatMessage } from "../provider/types";
 import type { ToolDef } from "../tools/registry";
@@ -11,6 +12,8 @@ import { rebuildMessages, sumUsage } from "../session/events";
 import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { listSummaries, sessionsWithoutSummary } from "../memory/summaries";
+import { loadChunks, indexedSessionIds } from "../memory/vector-store";
+import { readFacts } from "../tools/memory";
 import { memoryEnabled } from "../config/loader";
 import { VERSION } from "../version";
 
@@ -259,11 +262,21 @@ async function handleCommand(
       const total = SessionLog.list(opts.sessionsDir).length;
       const pending = sessionsWithoutSummary(opts.sessionsDir, opts.memoryDir).length;
       const on = memoryEnabled(opts.config);
+      const chunks = loadChunks(join(opts.memoryDir, "vectors.jsonl"));
+      const facts = readFacts(opts.memoryDir);
+      const factCount = facts ? facts.split("\n").length : 0;
       stdout.write(
         dim(
           `memory ${on ? "on" : "off"} · ${summaries.length} summaries (${projectSummaries.length} this project) · ${total} sessions · ${pending} pending\n`,
         ),
       );
+      if (on) {
+        stdout.write(
+          dim(
+            `vector: ${chunks.length} chunks indexed${chunks.length ? ` (${indexedSessionIds(chunks).size} sessions)` : ""} · facts: ${factCount}\n`,
+          ),
+        );
+      }
       return;
     }
     default:

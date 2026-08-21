@@ -37,8 +37,13 @@ export function buildSystemPrompt(inputs: {
   agentsMd: string | null;
   cwd: string;
   memorySection?: string | null;
+  facts?: string | null;
 }): string {
   const parts: string[] = [inputs.soulText];
+
+  if (inputs.facts) {
+    parts.push(`# Facts\n${inputs.facts}`);
+  }
 
   parts.push(
     [
