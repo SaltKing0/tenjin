@@ -1,6 +1,8 @@
 /* Tenjin Console — vanilla JS, zero dependencies. */
 "use strict";
 
+import { renderMarkdown } from "./markdown.js";
+
 const $app = document.getElementById("app");
 
 // auto-accept ?token=… from the URL (then strip it from the address bar)
@@ -323,7 +325,8 @@ async function panelChat(main) {
             reply += frame.text;
             replyMsg.textContent = reply;
           } else if (frame.type === "done") {
-            replyMsg.textContent = frame.reply ?? reply ?? "(no reply)";
+            const finalText = frame.reply ?? reply ?? "(no reply)";
+            replyMsg.replaceChildren(renderMarkdown(finalText));
           } else if (frame.type === "error") {
             replyMsg.textContent = `error: ${frame.message}`;
             replyMsg.classList.add("err");

@@ -164,3 +164,16 @@ test("console responses carry security headers", async () => {
   expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   expect(res.headers.get("x-frame-options")).toBe("DENY");
 });
+
+test("console serves the markdown renderer module", async () => {
+  const base = start({
+    consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
+  });
+  const res = await fetch(`${base}/console/markdown.js`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("application/javascript");
+  const body = await res.text();
+  expect(body).toContain("export function parseMarkdown");
+  expect(body).toContain("export function sanitizeHref");
+  expect(body).toContain("export function renderMarkdown");
+});
