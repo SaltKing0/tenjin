@@ -11,6 +11,8 @@ Usage:
   tenjin --budget <usd>      session spend cap
   tenjin --resume <id>       continue a previous session
   tenjin --fork <id> [n]     branch a copy at event n (default: end)
+  tenjin --bot <name>        run as a specific bot
+  tenjin bot new|list|init-examples   manage bots
 
 Options:
   -h, --help                 show this help
@@ -29,6 +31,7 @@ export interface CliArgs {
   budget?: number;
   resume?: string;
   fork?: ForkSpec;
+  bot?: string;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -58,6 +61,9 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case "--resume":
         args.resume = argv[++i];
+        break;
+      case "--bot":
+        args.bot = argv[++i];
         break;
       case "--fork": {
         const id = argv[++i];

@@ -13,6 +13,7 @@ export type SessionEvent =
       provider: string;
       model: string;
       parent?: SessionParent;
+      bot?: string;
     }
   | { t: "message"; role: Role; content: string | ContentBlock[]; ts: string }
   | { t: "tool_call"; id: string; name: string; input: unknown; ts: string }

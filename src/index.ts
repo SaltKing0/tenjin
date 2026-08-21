@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { stdout } from "node:process";
+import { mkdirSync } from "node:fs";
 import {
   ensureGlobalDir,
   loadConfig,
@@ -13,7 +14,7 @@ import {
 } from "./config/loader";
 import { createProvider } from "./provider/factory";
 import { ProviderRegistry } from "./provider/registry";
-import { defaultModelRef, cheapModelRef, type ModelRef } from "./config/models";
+import { defaultModelRef, cheapModelRef, resolveModelRef, type ModelRef } from "./config/models";
 import { loadSoul, loadAgentsMd, buildSystemPrompt } from "./agent/prompt";
 import { Budget, formatUSD, pricingFor } from "./agent/budget";
 import { runAgentTurn } from "./agent/loop";
@@ -28,6 +29,15 @@ import { vectorEnabled } from "./config/loader";
 import { createRecallTool, createRememberTool, readFacts } from "./tools/memory";
 import { createUseSkillTool } from "./skills/activate";
 import { createSaveSkillTool } from "./tools/skill-writer";
+import {
+  resolveBot,
+  botModelRef,
+  botBudgetUSD,
+  createBot,
+  listBots,
+  EXAMPLE_BOTS,
+  type BotProfile,
+} from "./bots/profile";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
@@ -49,6 +59,10 @@ interface AppContext {
 }
 
 async function main(): Promise<number> {
+  if (process.argv[2] === "bot") {
+    return botCommand(process.argv.slice(3));
+  }
+
   let cli: CliArgs;
   try {
     cli = parseArgs(process.argv.slice(2));
@@ -71,14 +85,28 @@ async function main(): Promise<number> {
   }
 
   try {
-    const { config } = loadConfig(cwd, home, { skipModelCheck: !!cli.model });
+    const { config } = loadConfig(cwd, home, {
+      skipModelCheck: !!cli.model || !!cli.bot,
+    });
+    const profile = cli.bot ? resolveBot(home, cli.bot) : null;
     applyOverrides(config, cli);
     validateConfig(config);
+    if (profile) {
+      mkdirSync(profile.sessionsDir, { recursive: true });
+      mkdirSync(profile.memoryDir, { recursive: true });
+      mkdirSync(profile.inboxDir, { recursive: true });
+      config.budgetUSD = botBudgetUSD(profile, config.budgetUSD);
+    }
     const registry = new ProviderRegistry(config.providers?.openai?.baseUrl);
-    const defaultRef = defaultModelRef(config);
+    const defaultRef = cli.model
+      ? resolveModelRef(cli.model, config.provider)
+      : profile
+        ? botModelRef(profile, config)
+        : defaultModelRef(config);
     const cheapRef = cheapModelRef(config);
 
-    const memDir = memoryDir(home);
+    const dir = profile ? profile.sessionsDir : sessionsDir(home);
+    const memDir = profile ? profile.memoryDir : memoryDir(home);
     const embeddings = vectorEnabled(config)
       ? createEmbeddings({ model: config.memory?.vector?.model })
       : null;
@@ -86,7 +114,7 @@ async function main(): Promise<number> {
       try {
         const sumRef = cheapRef ?? defaultRef;
         const report = await generatePendingSummaries({
-          sessionsDirPath: sessionsDir(home),
+          sessionsDirPath: dir,
           memoryDirPath: memDir,
           provider: registry.get(sumRef.provider),
           model: sumRef.model,
@@ -103,7 +131,7 @@ async function main(): Promise<number> {
       if (embeddings) {
         try {
           const report = await indexPendingSessions({
-            sessionsDirPath: sessionsDir(home),
+            sessionsDirPath: dir,
             memoryDirPath: memDir,
             projectPath: cwd,
             embeddings,
@@ -119,7 +147,9 @@ async function main(): Promise<number> {
       }
     }
 
-    const soul = loadSoul(home, cwd);
+    const soul = profile
+      ? { text: profile.soulText, source: "bot" as const }
+      : loadSoul(home, cwd);
     const system = buildSystemPrompt({
       soulText: soul.text,
       agentsMd: loadAgentsMd(cwd),
@@ -150,7 +180,6 @@ async function main(): Promise<number> {
       return await oneShot(ctx, cli.print);
     }
 
-    const dir = sessionsDir(home);
     if (cli.fork) {
       const log = SessionLog.fork(dir, cli.fork.id, cli.fork.uptoEvent);
       stdout.write(`forked ${cli.fork.id} → ${log.id}\n`);
@@ -171,6 +200,7 @@ async function main(): Promise<number> {
       sessionsDir: dir,
       memoryDir: memDir,
       home,
+      bot: profile?.name,
     });
     return 0;
   } catch (e) {
@@ -179,6 +209,60 @@ async function main(): Promise<number> {
       return 2;
     }
     stdout.write(`error: ${(e as Error)?.message ?? e}\n`);
+    return 1;
+  }
+}
+
+function botCommand(args: string[]): number {
+  const [sub, name] = args;
+  const home = tenjinHome();
+  try {
+    switch (sub) {
+      case "new": {
+        if (!name) {
+          stdout.write("usage: tenjin bot new <name>\n");
+          return 2;
+        }
+        const dir = createBot(home, name);
+        stdout.write(`created bot at ${dir} — edit SOUL.md to give it a role\n`);
+        return 0;
+      }
+      case "list": {
+        const bots = listBots(home);
+        if (bots.length === 0) {
+          stdout.write("no bots yet — tenjin bot init-examples or tenjin bot new <name>\n");
+          return 0;
+        }
+        for (const b of bots) stdout.write(`${b}\n`);
+        return 0;
+      }
+      case "init-examples": {
+        let created = 0;
+        for (const ex of EXAMPLE_BOTS) {
+          try {
+            createBot(home, ex.name, { soul: ex.soul });
+            created++;
+          } catch {
+            // already exists
+          }
+        }
+        stdout.write(
+          created > 0
+            ? `created ${created} example bot(s): ${EXAMPLE_BOTS.map((b) => b.name).join(", ")}\n`
+            : "example bots already exist\n",
+        );
+        return 0;
+      }
+      default:
+        stdout.write("usage: tenjin bot new|list|init-examples\n");
+        return 2;
+    }
+  } catch (e) {
+    if (e instanceof ConfigError) {
+      stdout.write(`config error: ${e.message}\n`);
+      return 2;
+    }
+    stdout.write(`error: ${(e as Error).message}\n`);
     return 1;
   }
 }

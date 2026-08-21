@@ -32,6 +32,7 @@ export interface ReplOptions {
   defaultRef: ModelRef;
   cheapRef: ModelRef | null;
   home: string;
+  bot?: string;
   system: string;
   tools: ToolDef[];
   cwd: string;
@@ -75,6 +76,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     ts: now(),
     provider: state.active.provider,
     model: state.active.model,
+    ...(opts.bot ? { bot: opts.bot } : {}),
   });
 
   printBanner(opts, state);
@@ -186,6 +188,7 @@ async function handleCommand(
           "/fork [n]        branch current conversation at event n",
           "/replay          print trajectory of this session",
           "/memory          memory layer status",
+          "/whoami          current identity and model",
           "/skills          list installed skills",
           "/skill <n> [off] pin a skill into every turn",
           "",
@@ -195,6 +198,13 @@ async function handleCommand(
     case "/exit":
     case "/quit":
       return "exit";
+    case "/whoami":
+      stdout.write(
+        dim(
+          `${opts.bot ?? "solo"} · ${state.active.provider}:${state.active.model} · cwd ${opts.cwd}\n`,
+        ),
+      );
+      return;
     case "/cost": {
       stdout.write(
         dim(
@@ -432,9 +442,10 @@ function logEvent(logger: EventLogger | undefined, event: SessionEvent): void {
 }
 
 function printBanner(opts: ReplOptions, state: ReplState): void {
+  const identity = opts.bot ? `${opts.bot} (bot)` : "solo";
   stdout.write(
     bold(`Tenjin v${VERSION}`) +
-      dim(` · ${state.active.provider}:${state.active.model}`) +
+      dim(` · ${identity} · ${state.active.provider}:${state.active.model}`) +
       "\n",
   );
   stdout.write(
