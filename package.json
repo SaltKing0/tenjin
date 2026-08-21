@@ -2,6 +2,7 @@
   "name": "stealth",
   "version": "0.1.0",
   "description": "Tenjin — a personal agent harness. Repo codename: stealth.",
+  "license": "MIT",
   "module": "src/index.ts",
   "type": "module",
   "bin": {
