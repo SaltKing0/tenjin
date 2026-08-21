@@ -97,6 +97,53 @@ test("handler errors become error frame, not throw", async () => {
   expect(raw).toContain("boom");
 });
 
+test("chatStreamResponse emits tool-activity frames", async () => {
+  const handle = (text: string, ctx: { onTool?: (name: string) => void }) => {
+    ctx.onTool?.("read_file");
+    ctx.onTool?.("grep");
+    return Promise.resolve("ok");
+  };
+  const res = chatStreamResponse(handle, "hi", { actor: "console", source: "http" });
+  const frames = framesOf(await res.text());
+  const tools = frames.filter((f) => f.type === "tool");
+  expect(tools).toEqual([
+    { type: "tool", name: "read_file" },
+    { type: "tool", name: "grep" },
+  ]);
+});
+
+test("createMessageHandler forwards tool activity from the agent loop", async () => {
+  let calls = 0;
+  const provider: Provider = {
+    name: "mock",
+    async chat(): Promise<ChatResponse> {
+      calls++;
+      if (calls === 1) {
+        return {
+          stopReason: "tool_use",
+          content: [{ type: "tool_use", id: "tu_1", name: "read_file", input: { path: "file.txt" } }],
+          usage: { inputTokens: 5, outputTokens: 2 },
+        };
+      }
+      return {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "read done" }],
+        usage: { inputTokens: 5, outputTokens: 2 },
+      };
+    },
+  };
+  writeFileSync(join(home, "file.txt"), "hello\n");
+  const handle = makeHandler(provider);
+  const tools: string[] = [];
+  const reply = await handle("read the file", {
+    actor: "console",
+    source: "http",
+    onTool: (n) => tools.push(n),
+  });
+  expect(tools).toEqual(["read_file"]);
+  expect(reply).toBe("read done");
+});
+
 test("chat injects bot facts.md and exposes use_skill", async () => {
   const mem = join(home, "bots", "tester", "memory");
   mkdirSync(mem, { recursive: true });
@@ -136,7 +183,7 @@ test("createMessageHandler forwards onDelta to the model stream", async () => {
   expect(deltas.join("")).toBe("Hello world");
 });
 
-function framesOf(raw: string): Array<{ type: string; message?: string }> {
+function framesOf(raw: string): Array<{ type: string; [k: string]: unknown }> {
   return raw
     .split("\n\n")
     .filter(Boolean)
