@@ -7,6 +7,7 @@ import { resolveMemoryScope } from "./memory-scope.js";
 import { setupChecklist } from "./setup-checklist.js";
 import { headerLabels, stackLabels, isHeaderRow } from "./tables.js";
 import { firstRunView, shouldShowFirstRun } from "./first-run.js";
+import { botSectionItems } from "./sidebar-bots.js";
 
 import { connectionView } from "./topbar-state.js";
 
@@ -347,8 +348,12 @@ async function panelStatus(main) {
     main.append(table);
     prepareTables(main);
   }
+}
 
-  main.append(el("h2", {}, "bots"));
+/* ---------- bots panel (bot list + create / edit / delete) ---------- */
+
+async function panelBots(main) {
+  main.replaceChildren(el("h1", {}, "Bots"));
   main.append(botCreateForm(main));
   for (const bot of await loadBots()) {
     main.append(await botEditorCard(main, bot));
@@ -381,7 +386,7 @@ async function botEditorCard(main, bot) {
       });
       status.textContent = `saved → ${data.name}`;
       status.className = "ok";
-      await panelStatus(main);
+      await panelBots(main);
     } catch (e) {
       status.textContent = e.message;
       status.className = "err";
@@ -393,7 +398,7 @@ async function botEditorCard(main, bot) {
     if (!confirm(`Delete bot ${bot.name}? Its directory and data will be removed.`)) return;
     try {
       await api(`/api/bots/${encodeURIComponent(bot.name)}`, { method: "DELETE" });
-      await panelStatus(main);
+      await panelBots(main);
     } catch (e) {
       status.textContent = e.message;
       status.className = "err";
@@ -503,7 +508,7 @@ function botCreateForm(main) {
       status.className = "ok";
       nameInput.value = "";
       soulArea.value = "";
-      await panelStatus(main);
+      await panelBots(main);
     } catch (e) {
       status.textContent = e.message;
       status.className = "err";
@@ -1259,6 +1264,7 @@ const PANELS = [
   ["spend", "Spend", panelSpend],
   ["audit", "Audit", panelAudit],
   ["status", "Status", panelStatus],
+  ["bots", "Bots", panelBots],
 ];
 
 // #251: the 3-step first-run guide (progress + links into the real panels).
@@ -1346,6 +1352,40 @@ async function render() {
       ),
     ),
   );
+
+  // #276: list the bots as a sidebar section under the panels. Clicking one
+  // preselects that bot in chat (native hashchange re-renders when not already
+  // on Chat; otherwise we re-render in place so the switch takes effect).
+  const botLinks = botSectionItems(bots, currentBot);
+  if (botLinks.length > 0) {
+    sidebar.append(
+      el(
+        "div",
+        { class: "sidebar-bots" },
+        el("div", { class: "sidebar-bots-label" }, "Bots"),
+        el(
+          "nav",
+          {},
+          ...botLinks.map((b) =>
+            el(
+              "a",
+              {
+                class: b.active ? "active" : "",
+                href: "#chat",
+                onclick: () => {
+                  currentBot = b.name;
+                  localStorage.setItem("tenjin_bot", b.name);
+                  if (location.hash === "#chat") render();
+                },
+              },
+              b.name,
+              b.model ? el("span", { class: "badge" }, b.model) : null,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   const topbar = buildTopBar();
   const main = el("div", { class: "main" });
