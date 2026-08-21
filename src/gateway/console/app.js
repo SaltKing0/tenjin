@@ -3,6 +3,13 @@
 
 const $app = document.getElementById("app");
 
+// auto-accept ?token=… from the URL (then strip it from the address bar)
+const urlToken = new URLSearchParams(location.search).get("token");
+if (urlToken && urlToken.trim()) {
+  localStorage.setItem("tenjin_token", urlToken.trim());
+  history.replaceState(null, "", location.pathname);
+}
+
 let token = localStorage.getItem("tenjin_token") || "";
 let currentBot = localStorage.getItem("tenjin_bot") || "solo";
 let bots = [];
