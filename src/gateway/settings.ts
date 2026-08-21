@@ -110,11 +110,25 @@ export function applySettings(
 const ANTHROPIC_DEFAULT_BASE = "https://api.anthropic.com/v1";
 const OPENAI_DEFAULT_BASE = "https://api.openai.com/v1";
 
-export async function detectModels(input: {
-  provider: string;
-  baseUrl?: string;
-  apiKey?: string;
-}): Promise<string[]> {
+export const DETECT_TIMEOUT_MS = 10_000;
+
+export class DetectTimeoutError extends Error {
+  constructor(provider: string, timeoutMs: number) {
+    super(
+      `${provider} /models — request timed out after ${Math.round(timeoutMs / 1000)}s. Check the baseUrl and that the provider is reachable.`,
+    );
+    this.name = "DetectTimeoutError";
+  }
+}
+
+export async function detectModels(
+  input: {
+    provider: string;
+    baseUrl?: string;
+    apiKey?: string;
+  },
+  timeoutMs: number = DETECT_TIMEOUT_MS,
+): Promise<string[]> {
   const provider = input.provider.toLowerCase();
   let base: string;
   let url: string;
@@ -135,13 +149,19 @@ export async function detectModels(input: {
     throw new ConfigError(`unknown provider "${input.provider}"`);
   }
 
-  const res = await fetch(url, { headers });
-  if (!res.ok) {
-    throw new Error(`${provider} /models ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DetectTimeoutError(provider, timeoutMs)), timeoutMs);
+  try {
+    const res = await fetch(url, { headers, signal: controller.signal });
+    if (!res.ok) {
+      throw new Error(`${provider} /models ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    }
+    const data = (await res.json()) as { data?: Array<{ id?: string }> };
+    const ids = (data.data ?? [])
+      .map((m) => m.id)
+      .filter((id): id is string => typeof id === "string");
+    return ids.sort();
+  } finally {
+    clearTimeout(timer);
   }
-  const data = (await res.json()) as { data?: Array<{ id?: string }> };
-  const ids = (data.data ?? [])
-    .map((m) => m.id)
-    .filter((id): id is string => typeof id === "string");
-  return ids.sort();
 }
