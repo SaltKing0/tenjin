@@ -80,6 +80,31 @@ export function maskToolOutput(output: string): string {
   return "[output withheld — security.paranoid masked suspected prompt-injection content]";
 }
 
+export interface UntrustedInputOpts {
+  paranoid: boolean;
+  audit?: (kind: "prompt_injection", detail: string, correlationId?: string) => void;
+  correlationId?: string;
+}
+
+/**
+ * #189: scan + frame untrusted data that reaches a prompt OUTSIDE the normal
+ * tool-result path — bot-to-bot inbox messages and dependency task results.
+ * These never went through runAgentTurn's tool framing, so a hostile bot (or a
+ * webhook-forwarded message a bot relays) could steer the agent. Mirrors the
+ * tool-output hardening: flag suspicious content, audit it, (under paranoid)
+ * mask it, and always frame the result as a delimited data block — with a
+ * warning footer on a hit.
+ */
+export function hardenUntrustedInput(text: string, opts: UntrustedInputOpts): string {
+  const suspicious = detectSuspiciousOutput(text);
+  if (suspicious) {
+    opts.audit?.("prompt_injection", `untrusted input flagged: ${suspicious}`, opts.correlationId);
+    if (opts.paranoid) return maskToolOutput(text);
+    return frameToolOutput(text, { warning: `suspected prompt injection (${suspicious})` });
+  }
+  return frameToolOutput(text);
+}
+
 /**
  * Effective paranoid flag for a run: the bot's setting wins over the global
  * one, both defaulting to false. Mirrors how `guardForBot` merges security.
