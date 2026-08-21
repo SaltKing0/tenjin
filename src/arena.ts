@@ -34,6 +34,10 @@ export interface ArenaOptions {
   winnerIndex?: number;
   /** Optional separate judge model that ranks the outputs after the race (#152). */
   judge?: ArenaJudgeOptions;
+  /** #178: security guard threaded into every candidate run (parity with REPL/gateway). */
+  guard?: import("./security/guard").SecurityGuard | null;
+  /** #178: redactor threaded into every candidate run for output masking. */
+  redactor?: import("./security/redact").Redactor | null;
 }
 
 export interface ArenaJudgeOptions {
@@ -95,6 +99,8 @@ export async function runArena(opts: ArenaOptions): Promise<ArenaResult> {
           pricing: opts.pricing,
           budget,
           policy: opts.policy,
+          guard: opts.guard,
+          redactor: opts.redactor,
         });
         return {
           ref: entry.ref,
