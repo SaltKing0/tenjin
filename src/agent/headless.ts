@@ -30,6 +30,7 @@ export interface HeadlessOptions {
   guard?: import("../security/guard").SecurityGuard | null;
   audit?: (kind: "write_exec" | "budget_halt", detail: string) => void;
   approve?: (toolName: string, group: "read" | "write", input: unknown) => Promise<boolean>;
+  onTextDelta?: (delta: string) => void;
 }
 
 export interface HeadlessResult {
@@ -85,6 +86,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       opts.approve ??
       (async (_name, group) => group === "read"),
     guard: opts.guard,
+    onTextDelta: opts.onTextDelta,
     audit: opts.audit,
     onEvent: logger
       ? (e: TurnEvent) => {

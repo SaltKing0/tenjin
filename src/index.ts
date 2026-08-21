@@ -50,7 +50,7 @@ import { SecurityGuard } from "./security/guard";
 import { AuditLog, formatAudit, auditPath } from "./audit/log";
 import { aggregateSpend, renderSpend } from "./audit/spend";
 import { TelegramChannel } from "./gateway/telegram";
-import { createMessageHandler } from "./gateway/handler";
+import { createMessageHandler, chatStreamResponse, type HandleContext } from "./gateway/handler";
 import { startHttpServer } from "./gateway/http";
 import { createConsoleApi } from "./gateway/console-api";
 import {
@@ -380,7 +380,12 @@ async function gatewayCommand(args: string[]): Promise<number> {
 
     const channels: Record<string, (text: string) => Promise<void>> = {};
     let telegramRun: Promise<void> | null = null;
-    let telegramHandle: ((text: string) => Promise<string | null>) | null = null;
+    let telegramHandle:
+      | ((
+          text: string,
+          opts?: { onDelta?: (d: string) => void },
+        ) => Promise<string | null>)
+      | null = null;
     const tg = gateway.settings.telegram;
     if (tg?.enabled || gateway.settings.listen) {
       const available = listBots(home);
@@ -404,7 +409,8 @@ async function gatewayCommand(args: string[]): Promise<number> {
         audit,
         log,
       });
-      telegramHandle = (text) => handleMessage(text, { actor: "http", source: "http" });
+      telegramHandle = (text, opts) =>
+        handleMessage(text, { actor: "http", source: "http", onDelta: opts?.onDelta });
     }
     if (tg?.enabled) {
       const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -481,6 +487,27 @@ async function gatewayCommand(args: string[]): Promise<number> {
           channels: Object.keys(channels),
         }),
         api: createConsoleApi({ home, cwd, config, registry, audit }),
+        streamChat: async (req) => {
+          if (!telegramHandle) return null;
+          let body: { text?: unknown; bot?: unknown };
+          try {
+            body = (await req.json()) as { text?: unknown; bot?: unknown };
+          } catch {
+            return Response.json({ error: "invalid json" }, { status: 400 });
+          }
+          if (typeof body.text !== "string" || !body.text.trim()) {
+            return Response.json({ error: "text is required" }, { status: 400 });
+          }
+          const text = body.bot
+            ? `@${String(body.bot)} ${body.text}`
+            : body.text;
+          const ctx: HandleContext = { actor: "console", source: "http" };
+          return chatStreamResponse(
+            (t, handleCtx) => telegramHandle!(t, { onDelta: handleCtx.onDelta }),
+            text,
+            ctx,
+          );
+        },
         consoleDir: join(import.meta.dir, "gateway", "console"),
         log,
       });

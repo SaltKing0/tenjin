@@ -33,6 +33,37 @@ export interface HandleContext {
   actor: string;
   source: "telegram" | "http";
   chatId?: number;
+  onDelta?: (delta: string) => void;
+}
+
+export function chatStreamResponse(
+  handle: (text: string, ctx: HandleContext) => Promise<string | null>,
+  text: string,
+  ctx: HandleContext,
+): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (payload: unknown) => {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+      };
+      try {
+        const reply = await handle(text, { ...ctx, onDelta: (d) => send({ type: "delta", text: d }) });
+        send({ type: "done", reply });
+      } catch (e) {
+        send({ type: "error", message: (e as Error).message });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    },
+  });
 }
 
 export function createMessageHandler(deps: HandlerDeps) {
@@ -101,6 +132,7 @@ export function createMessageHandler(deps: HandlerDeps) {
       guard: deps.guard,
       approve,
       audit: (kind, detail) => deps.audit.append(kind, ctx.actor, detail, botName),
+      onTextDelta: ctx.onDelta,
     });
     deps.log(
       `${ctx.source}: handled for ${botName} (${formatUSD(result.costUSD)})`,
