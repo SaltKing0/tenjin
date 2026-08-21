@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getSettings, applySettings, detectModels, testProvider, DetectTimeoutError } from "../src/gateway/settings";
+import { getSettings, applySettings, detectModels, testProvider, verifySettingsApply, DetectTimeoutError } from "../src/gateway/settings";
 import { loadConfig, providersFile } from "../src/config/loader";
 import { ProviderRegistry } from "../src/provider/registry";
 import type { HarnessConfig } from "../src/config/types";
@@ -145,6 +145,34 @@ describe("detectModels", () => {
     }
   });
 
+  test("filters embedding/audio/image/deprecated models from chat selection", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        Response.json({
+          data: [
+            { id: "gpt-4o" },
+            { id: "claude-sonnet" },
+            { id: "text-embedding-3-large" },
+            { id: "whisper-1" },
+            { id: "dall-e-3" },
+            { id: "moderation-latest" },
+            { id: "text-ada-001" },
+          ],
+        }),
+    });
+    try {
+      const models = await detectModels({
+        provider: "openai",
+        baseUrl: `http://localhost:${server.port}/v1`,
+        apiKey: "sk-detect",
+      });
+      expect(models).toEqual(["claude-sonnet", "gpt-4o"]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("anthropic uses x-api-key header", async () => {
     let seenKey = "";
     const server = Bun.serve({
@@ -274,6 +302,53 @@ describe("live-apply through gateway objects", () => {
     }
   });
 
+  test("failed settings POST (dead key) returns 400, keeps config, and audits", async () => {
+    const { startHttpServer } = await import("../src/gateway/http");
+    const { createConsoleApi } = await import("../src/gateway/console-api");
+    const { AuditLog } = await import("../src/audit/log");
+
+    // upstream that rejects the key
+    const upstream = Bun.serve({
+      port: 0,
+      fetch: () => new Response("unauthorized", { status: 401 }),
+    });
+    const { deps, config, registry } = setup();
+    const auditLog = new AuditLog(join(home, "audit.jsonl"));
+    let server: any = null;
+    try {
+      server = startHttpServer({
+        config: { port: 0, host: "127.0.0.1", token: "t" },
+        handleMessage: async () => null,
+        status: () => ({}),
+        api: createConsoleApi({
+          home,
+          cwd: home,
+          config,
+          registry,
+          audit: auditLog,
+        }),
+      });
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
+        method: "POST",
+        headers: { authorization: "Bearer t", "content-type": "application/json" },
+        body: JSON.stringify({
+          openai: { apiKey: "sk-dead", baseUrl: `http://127.0.0.1:${upstream.port}/v1` },
+          models: { default: "openai:gpt-4o" },
+        }),
+      });
+      expect(res.status).toBe(400);
+      // config unchanged
+      expect(config.models?.default).toBeUndefined();
+      expect(config.providers?.openai).toBeUndefined();
+      // audit event recorded
+      const events = auditLog.query({});
+      expect(events.some((e) => e.detail.includes("settings apply rejected"))).toBe(true);
+    } finally {
+      server?.stop();
+      upstream.stop(true);
+    }
+  });
+
   test("detect endpoint returns 504 with provider hint on timeout", async () => {
     const { startHttpServer } = await import("../src/gateway/http");
     const { createConsoleApi } = await import("../src/gateway/console-api");
@@ -320,6 +395,66 @@ describe("live-apply through gateway objects", () => {
       server?.stop();
       upstream.stop(true);
     }
+  });
+});
+
+describe("verifySettingsApply", () => {
+  test("rejects a dead provider key before applying — config unchanged", async () => {
+    // upstream that always 401s (dead key)
+    const upstream = Bun.serve({
+      port: 0,
+      fetch: () => new Response("unauthorized", { status: 401 }),
+    });
+    try {
+      const { deps, config } = setup();
+      await expect(
+        verifySettingsApply(deps, {
+          openai: {
+            apiKey: "sk-dead",
+            baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          },
+          models: { default: "openai:gpt-4o" },
+        }),
+      ).rejects.toThrow(/401|unauthorized|key/i);
+      // config must be untouched (nothing applied)
+      expect(config.models?.default).toBeUndefined();
+      expect(config.providers?.openai).toBeUndefined();
+    } finally {
+      upstream.stop(true);
+    }
+  });
+
+  test("accepts a reachable provider — returns without throwing", async () => {
+    const upstream = Bun.serve({
+      port: 0,
+      fetch: () =>
+        Response.json({
+          id: "chatcmpl-1",
+          choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
+          usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+        }),
+    });
+    try {
+      const { deps } = setup();
+      await verifySettingsApply(deps, {
+        openai: {
+          apiKey: "sk-ok",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+        },
+        models: { default: "openai:gpt-4o" },
+      });
+    } finally {
+      upstream.stop(true);
+    }
+  });
+
+  test("no baseUrl configured — no network probe, applies freely", async () => {
+    const { deps, config } = setup();
+    await verifySettingsApply(deps, {
+      openai: { apiKey: "sk-x" },
+      models: { default: "openai:gpt-4o" },
+    });
+    expect(config.models?.default).toBeUndefined(); // verify itself does not apply
   });
 });
 
