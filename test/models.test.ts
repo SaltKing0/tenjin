@@ -60,6 +60,23 @@ describe("resolveModelRef", () => {
     expect(() => resolveModelRef("openai:", "anthropic")).toThrow(/missing model/);
   });
 
+  test("model ids containing colons stay whole (OpenRouter :free, Ollama tags)", () => {
+    // Unprefixed ids whose colon is part of the model name must NOT be parsed
+    // as a provider prefix — they resolve under the fallback provider.
+    expect(resolveModelRef("deepseek/deepseek-chat-v3.1:free", "openai")).toEqual({
+      provider: "openai",
+      model: "deepseek/deepseek-chat-v3.1:free",
+    });
+    expect(resolveModelRef("llama3.1:latest", "openai")).toEqual({
+      provider: "openai",
+      model: "llama3.1:latest",
+    });
+    expect(resolveModelRef("meta-llama/llama-3.3-70b-instruct", "openai")).toEqual({
+      provider: "openai",
+      model: "meta-llama/llama-3.3-70b-instruct",
+    });
+  });
+
   test("empty ref rejected", () => {
     expect(() => resolveModelRef("", "anthropic")).toThrow(/empty/);
     expect(() => resolveModelRef("   ", "anthropic")).toThrow(/empty/);

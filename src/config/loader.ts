@@ -325,8 +325,11 @@ memory:
 #   cheap: openai:gpt-4o-mini
 # providers:
 #   openai:
-#     baseUrl: https://api.deepseek.com/v1   # any OpenAI-compatible endpoint (Ollama/LM Studio/OpenRouter
-#                                           #   need no apiKey — just a baseUrl)
+#     baseUrl: https://api.deepseek.com/v1   # any OpenAI-compatible endpoint.
+#                                           #   Local (Ollama/LM Studio): no apiKey needed.
+#                                           #   Hosted (OpenRouter/DeepSeek): set OPENAI_API_KEY,
+#                                           #   e.g. baseUrl: https://openrouter.ai/api/v1 with
+#                                           #   models named "vendor/model" ("meta-llama/llama-3.3-70b:free").
 #   anthropic:
 #     baseUrl: https://gateway.example/v1   # Anthropic endpoint override (default: api.anthropic.com)
 #     caching: false                         # prompt caching (default: on) — off to disable cache_control markers

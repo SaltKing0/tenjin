@@ -13,13 +13,20 @@ export function resolveModelRef(ref: string, fallbackProvider: ProviderName): Mo
   if (idx === -1) return { provider: fallbackProvider, model: trimmed };
   const provider = trimmed.slice(0, idx).trim() as ProviderName;
   const model = trimmed.slice(idx + 1).trim();
-  if (provider !== "anthropic" && provider !== "openai") {
-    throw new ConfigError(
-      `unknown provider "${provider}" in model ref "${trimmed}" (supported: anthropic:, openai:)`,
-    );
-  }
   if (!model) throw new ConfigError(`missing model after ":" in "${trimmed}"`);
-  return { provider, model };
+  // A provider prefix must be a known provider NAME (pure alpha). Anything
+  // else before the colon — "deepseek/deepseek-chat:free", "llama3.1:latest" —
+  // is part of the model id itself (OpenRouter/Ollama naming), so the whole
+  // string is the model under the fallback provider.
+  if (/^[a-z]+$/i.test(provider)) {
+    if (provider !== "anthropic" && provider !== "openai") {
+      throw new ConfigError(
+        `unknown provider "${provider}" in model ref "${trimmed}" (supported: anthropic:, openai:)`,
+      );
+    }
+    return { provider, model };
+  }
+  return { provider: fallbackProvider, model: trimmed };
 }
 
 export function defaultModelRef(cfg: HarnessConfig): ModelRef {
