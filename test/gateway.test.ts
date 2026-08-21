@@ -82,6 +82,7 @@ describe("parseGatewaySettings", () => {
     expect(parseGatewaySettings(undefined)).toEqual({
       jobs: [],
       telegram: null,
+      slack: null,
       channels: [],
       heartbeat: null,
       listen: null,
@@ -91,6 +92,7 @@ describe("parseGatewaySettings", () => {
     expect(parseGatewaySettings(null)).toEqual({
       jobs: [],
       telegram: null,
+      slack: null,
       channels: [],
       heartbeat: null,
       listen: null,
@@ -232,8 +234,31 @@ describe("parseGatewaySettings", () => {
     const explicit = parseGatewaySettings({ channels: ["telegram"] });
     expect(explicit.channels).toEqual(["telegram"]);
     expect(() => parseGatewaySettings({ channels: "notalist" })).toThrow(/must be a list/);
-    expect(() => parseGatewaySettings({ channels: ["slack"] })).toThrow(/unknown channel/);
+    expect(() => parseGatewaySettings({ channels: ["discord"] })).toThrow(/unknown channel/);
     expect(() => parseGatewaySettings({ channels: [3] })).toThrow(/strings/);
+    expect(parseGatewaySettings({ channels: ["telegram", "slack"] }).channels).toEqual([
+      "telegram",
+      "slack",
+    ]);
+  });
+
+  test("slack config parses, validates allowlist, and feeds default channels (#106)", () => {
+    expect(parseGatewaySettings({}).slack).toBeNull();
+    expect(
+      parseGatewaySettings({
+        slack: { enabled: true, botToken: "t", signingSecret: "s", allowedChannels: ["C1"], defaultBot: "researcher" },
+      }).channels,
+    ).toEqual(["slack"]);
+    expect(() => parseGatewaySettings({ slack: { enabled: true, allowedChannels: [], defaultBot: "r" } })).toThrow(/allowlist/);
+    expect(() => parseGatewaySettings({ slack: { enabled: true, allowedChannels: ["C1"] } })).toThrow(/defaultBot/);
+    expect(() => parseGatewaySettings({ slack: { enabled: true, allowedChannels: [42], defaultBot: "r" } })).toThrow(/strings/);
+    const parsed = parseGatewaySettings({
+      slack: { enabled: true, botToken: "t", signingSecret: "s", adminChannel: "A1", allowedChannels: ["C1"], defaultBot: "r", rateLimitMax: 5, maxMessageLength: 200 },
+    });
+    expect(parsed.slack?.adminChannel).toBe("A1");
+    expect(parsed.slack?.rateLimitMax).toBe(5);
+    expect(parsed.slack?.maxMessageLength).toBe(200);
+    expect(parsed.slack?.allowWrites).toBe(false);
   });
 });
 
