@@ -212,6 +212,71 @@ export function idFromPath(filePath: string): string {
   return basename(filePath.replace(/\\/g, "/")).replace(/\.jsonl$/, "");
 }
 
+/** One node in a session's ancestry chain (#131). */
+export interface SessionLineageNode {
+  id: string;
+  /** The session this one was forked from, or null for a root session. */
+  parentId: string | null;
+  /** How many events were inherited from the parent (null for a root). */
+  uptoEvent: number | null;
+  isFork: boolean;
+  /** Compression (context-elision) events recorded in THIS session only. */
+  compressionCount: number;
+  compressions: Array<{
+    beforeTokens: number;
+    afterTokens: number;
+    elidedTokens: number;
+    ts: string;
+  }>;
+}
+
+/**
+ * Walk a session's ancestry by following each `session_start.parent` id from
+ * the requested session up to the root. The returned array is newest-first
+ * (the requested session, then its parent, ...). Each node's compression
+ * events are those recorded in that session's own log — inherited events are
+ * not repeated — so it is possible to see where each context-elision happened.
+ * Cycle-safe: a malformed self-referential chain is truncated.
+ */
+export function sessionLineage(dir: string, idPrefix: string): SessionLineageNode[] {
+  const lineage: SessionLineageNode[] = [];
+  const seen = new Set<string>();
+  let current: SessionLog | null = SessionLog.resolve(dir, idPrefix);
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    const events = current.readEvents().events;
+    const start = events.find(
+      (e): e is Extract<SessionEvent, { t: "session_start" }> => e.t === "session_start",
+    );
+    const parentId = start?.parent?.id ?? null;
+    const compressions = events
+      .filter((e): e is Extract<SessionEvent, { t: "compression" }> => e.t === "compression")
+      .map((e) => ({
+        beforeTokens: e.beforeTokens,
+        afterTokens: e.afterTokens,
+        elidedTokens: e.elidedTokens,
+        ts: e.ts,
+      }));
+    lineage.push({
+      id: current.id,
+      parentId,
+      uptoEvent: start?.parent?.uptoEvent ?? null,
+      isFork: parentId !== null,
+      compressionCount: compressions.length,
+      compressions,
+    });
+    if (!parentId) break;
+    let parent: SessionLog;
+    try {
+      parent = SessionLog.resolve(dir, parentId);
+    } catch {
+      break; // parent missing → ancestry ends here rather than throwing
+    }
+    current = parent;
+  }
+  return lineage;
+}
+
 function resolveChain(log: SessionLog, seen: Set<string> = new Set()): SessionEvent[] {
   const local = log.readEvents().events;
   if (seen.has(log.id)) return local;

@@ -113,6 +113,9 @@ serves the static console (`src/gateway/console/`) and
 | `PUT /api/bots/:name` | Edit SOUL text and/or rename the bot |
 | `DELETE /api/bots/:name` | Delete a bot (removes its directory) |
 | `GET /api/sessions` | List sessions |
+| `GET /api/sessions/:id/events` | Session replay events (full trajectory incl. inherited from forks) |
+| `POST /api/sessions/:id/fork` | Fork a session under a new id (records `parentId`) |
+| `GET /api/sessions/:id/tree` | Ancestry chain: fork lineage + per-node compression/elision markers |
 | `GET /api/spend` | Aggregated spend (rows + `byBot` per-bot breakdown) |
 | `GET /api/audit` | Security/audit events |
 | `GET /api/approvals` | Pending approvals (scan expires stale ones) |
@@ -177,7 +180,11 @@ through `providers.openai.baseUrl`.
 [`src/session/log.ts`](../src/session/log.ts) (`SessionLog`) persists each
 conversation as an append-only event log; [`src/session/events.ts`](../src/session/events.ts)
 rebuilds the message list from those events and sums usage. Sessions support
-`resume` and `fork`. They live in the active profile's `sessions/` directory.
+`resume` and `fork` (a fork records its `parentId` and the inherited event
+count). They live in the active profile's `sessions/` directory. Forks form an
+ancestry tree: `sessionLineage()` walks a session's `parentId` chain to the
+root and reports where context-elision (`compression`) events happened, exposed
+via `GET /api/sessions/:id/tree` and a lineage breadcrumb in the console replay.
 
 ## Audit & spend
 

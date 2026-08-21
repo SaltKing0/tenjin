@@ -15,7 +15,7 @@ import {
 } from "../bots/profile";
 import { sanitizeSkillName } from "../skills/loader";
 import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
-import { SessionLog } from "../session/log";
+import { SessionLog, sessionLineage } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { aggregateSpend, perBotBreakdown } from "../audit/spend";
 import { AuditLog, formatAuditMarkdown, AUDIT_KINDS, type AuditKind, type AuditQuery } from "../audit/log";
@@ -345,7 +345,7 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
       }
     }
 
-    const replayMatch = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/(events|fork)$/.exec(path);
+    const replayMatch = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/(events|fork|tree)$/.exec(path);
     if (replayMatch && (req.method === "GET" || req.method === "POST")) {
       const id = replayMatch[1];
       const action = replayMatch[2];
@@ -358,6 +358,11 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
           if (req.method !== "GET") return json({ error: "method not allowed" }, 405);
           const log = SessionLog.resolve(dir, id);
           return json({ id: log.id, events: log.events() });
+        }
+        if (action === "tree") {
+          if (req.method !== "GET") return json({ error: "method not allowed" }, 405);
+          const lineage = sessionLineage(dir, id);
+          return json({ id: lineage[0]?.id ?? id, depth: lineage.length, lineage });
         }
         if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
         const forked = SessionLog.fork(dir, id);
