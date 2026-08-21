@@ -228,6 +228,19 @@ test("console serves the markdown renderer module", async () => {
   expect(body).toContain("export function renderMarkdown");
 });
 
+test("console serves the brand logo PNG (#282)", async () => {
+  const base = start({
+    consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
+  });
+  const res = await fetch(`${base}/console/tenjinlogo.png`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("image/png");
+  const buf = await res.arrayBuffer();
+  const bytes = new Uint8Array(buf.slice(0, 8));
+  // PNG magic: 89 50 4E 47 0D 0A 1A 0A
+  expect([...bytes]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+});
+
 test("console serves the empty-state module (#254)", async () => {
   const base = start({
     consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
