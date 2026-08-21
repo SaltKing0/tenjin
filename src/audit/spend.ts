@@ -12,6 +12,14 @@ export interface SpendRow {
   costUSD: number;
 }
 
+export interface BotBreakdown {
+  scope: string;
+  sessions: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUSD: number;
+}
+
 interface SessionSummary {
   model: string;
   startedTs: string;
@@ -104,6 +112,27 @@ export function aggregateSpend(
   }
 
   return [...byKey.values()].sort(
+    (a, b) => b.costUSD - a.costUSD || a.scope.localeCompare(b.scope),
+  );
+}
+
+export function perBotBreakdown(rows: SpendRow[]): BotBreakdown[] {
+  const byScope = new Map<string, BotBreakdown>();
+  for (const r of rows) {
+    const cur = byScope.get(r.scope) ?? {
+      scope: r.scope,
+      sessions: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      costUSD: 0,
+    };
+    cur.sessions += r.sessions;
+    cur.inputTokens += r.inputTokens;
+    cur.outputTokens += r.outputTokens;
+    cur.costUSD += r.costUSD;
+    byScope.set(r.scope, cur);
+  }
+  return [...byScope.values()].sort(
     (a, b) => b.costUSD - a.costUSD || a.scope.localeCompare(b.scope),
   );
 }

@@ -6,7 +6,7 @@ import { listBots, botModelRef, resolveBot } from "../bots/profile";
 import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
 import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
-import { aggregateSpend } from "../audit/spend";
+import { aggregateSpend, perBotBreakdown } from "../audit/spend";
 import { AuditLog, formatAuditMarkdown, type AuditKind, type AuditQuery } from "../audit/log";
 import { approvalsDir, getRequest, resolveRequest } from "./approvals";
 import { getSettings, applySettings, detectModels, testProvider, DetectTimeoutError } from "./settings";
@@ -206,7 +206,7 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
         days: Number.isFinite(days) ? days : undefined,
         bot: url.searchParams.get("bot") ?? undefined,
       });
-      return json({ rows });
+      return json({ rows, byBot: perBotBreakdown(rows) });
     }
 
     if (path === "/api/audit" && req.method === "GET") {
