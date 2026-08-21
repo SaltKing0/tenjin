@@ -1002,3 +1002,114 @@ describe("job hang release + per-job timeout (#19)", () => {
     expect(result.text).toBe("HELLO");
   });
 });
+
+describe("per-bot routines (#102)", () => {
+  function botWithConfig(name: string, yaml: string): void {
+    createBot(home, name);
+    writeFileSync(join(home, "bots", name, "config.yaml"), yaml);
+  }
+
+  test("bot routines and per-bot heartbeat register as jobs with bot context", () => {
+    botWithConfig(
+      "night",
+      "routines:\n  - name: digest\n    prompt: Summarize.\n    cron: \"0 2 * * *\"\nheartbeat:\n  every: 30m\n",
+    );
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({}),
+      registry: { get: () => mockProvider() } as never,
+    });
+
+    const digest = gw.jobs.find((j) => j.name === "digest");
+    expect(digest?.botName).toBe("night");
+    expect(digest?.kind).toBe("job");
+    expect(digest?.policy).toBe("read-only"); // allowWrites false → default
+    expect(new Date(digest?.nextDueMs ?? 0).getHours()).toBe(2);
+
+    const hb = gw.jobs.find((j) => j.name === "heartbeat-night");
+    expect(hb?.botName).toBe("night");
+    expect(hb?.kind).toBe("heartbeat");
+  });
+
+  test("bot routine fires in the bot context — session lands in that bot's sessions dir", async () => {
+    botWithConfig("night", "routines:\n  - name: digest\n    prompt: Summarize overnight.\n    every: 1m\n");
+    const capture: { req?: ChatRequest } = {};
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({}),
+      registry: {
+        get: () => ({
+          name: "mock",
+          async chat(req: ChatRequest): Promise<ChatResponse> {
+            capture.req = req;
+            return {
+              stopReason: "end_turn",
+              content: [{ type: "text", text: "NIGHT OUT" }],
+              usage: { inputTokens: 10, outputTokens: 5 },
+            };
+          },
+        }),
+      } as never,
+    });
+
+    await gw.fireDue(Date.now() + 120_000);
+    await Bun.sleep(50);
+
+    // The routine ran with the routine's prompt...
+    expect(String(capture.req?.messages[0]?.content)).toContain("Summarize overnight.");
+    // ...and the session log landed in the bot's own sessions dir.
+    const files = readdirSync(join(home, "bots", "night", "sessions")).filter((f) =>
+      f.endsWith(".jsonl"),
+    );
+    expect(files.length).toBeGreaterThan(0);
+  });
+
+  test("per-bot heartbeat fires with the heartbeat prompt and inbox tools", async () => {
+    botWithConfig("night", "heartbeat:\n  every: 30m\n");
+    const capture: { req?: ChatRequest } = {};
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({}),
+      registry: {
+        get: () => ({
+          name: "mock",
+          async chat(req: ChatRequest): Promise<ChatResponse> {
+            capture.req = req;
+            return {
+              stopReason: "end_turn",
+              content: [{ type: "text", text: "ok" }],
+              usage: { inputTokens: 5, outputTokens: 5 },
+            };
+          },
+        }),
+      } as never,
+    });
+
+    await gw.fireDue(Date.now() + 60 * 60_000);
+    await Bun.sleep(30);
+
+    // The heartbeat ran as the night bot (not the default).
+    expect(String(capture.req?.messages[0]?.content)).toContain("Heartbeat check");
+    expect(capture.req?.messages[0]?.content).toContain("Your inbox is empty.");
+    const toolNames = (capture.req?.tools ?? []).map((t: any) => t.name);
+    expect(toolNames).toContain("check_inbox");
+    expect(toolNames).toContain("send_message");
+  });
+
+  test("duplicate routine name across bots is rejected at boot", () => {
+    botWithConfig("light", "routines:\n  - name: digest\n    prompt: p\n    every: 1m\n");
+    botWithConfig("night", "routines:\n  - name: digest\n    prompt: p\n    every: 1m\n");
+    expect(
+      () =>
+        new Gateway({
+          home,
+          cwd: home,
+          config: config({}),
+          registry: { get: () => mockProvider() } as never,
+        }),
+    ).toThrow(/duplicate job name/);
+  });
+});
