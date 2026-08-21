@@ -15,6 +15,7 @@ const parseGatewaySettings = pgs;
 import type { ChatRequest, ChatResponse, Provider } from "../src/provider/types";
 import { createBot } from "../src/bots/profile";
 import { listMessages } from "../src/bots/inbox";
+import { createSendMessageTool } from "../src/bots/tools";
 
 let home: string;
 
@@ -650,11 +651,11 @@ describe("heartbeat", () => {
     const hb = gw.jobs.find((j) => j.kind === "heartbeat");
     expect(hb?.botName).toBe("worker");
 
-    // seed an unread message in worker's inbox
+    // seed an unread message in worker's inbox (user-originated)
     mkdirSync(join(home, "bots", "worker", "inbox"), { recursive: true });
     writeFileSync(
       join(home, "bots", "worker", "inbox", "m1.json"),
-      JSON.stringify({ id: "m1", from: "other", to: "worker", subject: "look here", body: "body text", ts: "t", read: false }),
+      JSON.stringify({ id: "m1", from: "user", to: "worker", subject: "look here", body: "body text", ts: "t", read: false }),
     );
 
     await gw.fireDue(Date.now() + 60 * 60_000);
@@ -671,7 +672,7 @@ describe("heartbeat", () => {
     expect(toolNames).toContain("use_skill");
   });
 
-  test("heartbeat surfaces user messages first and marks them read", async () => {
+  test("heartbeat surfaces only user messages and leaves bot mail unread (#181)", async () => {
     mkdirSync(join(home, "bots", "worker", "inbox"), { recursive: true });
     writeFileSync(
       join(home, "bots", "worker", "inbox", "m-bot.json"),
@@ -704,26 +705,27 @@ describe("heartbeat", () => {
     await Bun.sleep(30);
 
     const message = String(capture.req?.messages[0]?.content);
-    expect(message).toContain("2 unread message(s)");
-    const userAt = message.indexOf("from user:");
-    const botAt = message.indexOf("from alice:");
-    expect(userAt).toBeGreaterThan(-1);
-    expect(botAt).toBeGreaterThan(-1);
-    expect(userAt).toBeLessThan(botAt);
+    // Only the user message is surfacing for the heartbeat to act on.
+    expect(message).toContain("1 unread message(s)");
+    expect(message).toContain("from user:");
     expect(message).toContain("please sketch the auth refactor");
-
-    expect(listMessages(join(home, "bots", "worker", "inbox")).every((m) => m.read)).toBe(true);
+    expect(message).not.toContain("from alice:");
+    // The user message is marked read; the bot mail is left unread (a real run
+    // of the bot still handles it via check_inbox).
+    const msgs = listMessages(join(home, "bots", "worker", "inbox"));
+    expect(msgs.find((m) => m.id === "m-user")?.read).toBe(true);
+    expect(msgs.find((m) => m.id === "m-bot")?.read).toBe(false);
   });
 
   test("heartbeat replies to the sender via send_message, landing in the sender inbox", async () => {
     createBot(home, "alice");
-    // alice leaves a message in worker's inbox
+    // the user leaves a message in worker's inbox
     mkdirSync(join(home, "bots", "worker", "inbox"), { recursive: true });
     writeFileSync(
       join(home, "bots", "worker", "inbox", "m1.json"),
       JSON.stringify({
         id: "m1",
-        from: "alice",
+        from: "user",
         to: "worker",
         subject: "status",
         body: "whats up",
@@ -779,6 +781,65 @@ describe("heartbeat", () => {
     expect(reply).toBeDefined();
     expect(reply?.subject).toBe("re: status");
     expect(reply?.body).toBe("all good");
+  });
+
+  // #181: a bot-originated inbox message must not trigger the heartbeat, so two
+  // heartbeat bots cannot ping-pong each other forever.
+  test("a bot-originated message does not trigger the heartbeat (no bot-to-bot loop)", async () => {
+    mkdirSync(join(home, "bots", "worker", "inbox"), { recursive: true });
+    writeFileSync(
+      join(home, "bots", "worker", "inbox", "relay.json"),
+      JSON.stringify({
+        id: "relay",
+        from: "alice",
+        to: "worker",
+        subject: "re: your message",
+        body: "are you there",
+        ts: "t",
+        read: false,
+      }),
+    );
+    const capture: { req?: ChatRequest } = {};
+    const gw = makeGateway("ok", capture);
+    await gw.fireDue(Date.now() + 60 * 60_000);
+    await Bun.sleep(30);
+
+    const message = String(capture.req?.messages[0]?.content);
+    // Bot mail is not surfaced to the heartbeat, so it has nothing to reply to.
+    expect(message).toContain("Your inbox is empty");
+    expect(message).not.toContain("are you there");
+    // And it is left unread, so a real run of the bot can still handle it.
+    expect(
+      listMessages(join(home, "bots", "worker", "inbox")).find((m) => m.id === "relay")?.read,
+    ).toBe(false);
+  });
+
+  // #181: per-bot-pair reply cooldown as a safety net on the heartbeat's send tool.
+  test("heartbeat send_message respects the per-bot-pair reply cooldown", async () => {
+    // Unique pair to avoid the module-level cooldown map leaking across tests.
+    createBot(home, "cd-writer");
+    createBot(home, "cd-reader");
+    const tool = createSendMessageTool({ home, fromBot: "cd-writer", replyCooldownMs: 60_000 });
+    const handler = tool.handler as (
+      args: Record<string, unknown>,
+      ctx: unknown,
+    ) => Promise<unknown>;
+    const args = { to: "cd-reader", subject: "hi", body: "hello" };
+    const first = await handler(args, {});
+    expect(String(first)).toContain("Delivered");
+    // A second send to the same bot within the cooldown window is suppressed.
+    await expect(handler(args, {})).rejects.toThrow(/cooldown/i);
+  });
+
+  // #181: the reply-cooldown knob is parsed from gateway.heartbeat config.
+  test("gateway.heartbeat.replyCooldownMs parses and rejects bad values", () => {
+    const ok = parseGatewaySettings({
+      heartbeat: { enabled: true, bot: "worker", every: "30m", replyCooldownMs: 5000 },
+    });
+    expect(ok.heartbeat?.replyCooldownMs).toBe(5000);
+    expect(() =>
+      parseGatewaySettings({ heartbeat: { enabled: true, bot: "worker", replyCooldownMs: -1 } }),
+    ).toThrow(/replyCooldownMs/);
   });
 
   test("disabled heartbeat produces no job", () => {

@@ -11,10 +11,17 @@ import {
 } from "./inbox";
 import { ConfigError } from "../config/types";
 
+/** Per-(from,to) last-send timestamps for send_message coercion (#181). */
+const sendCooldowns = new Map<string, number>();
+
 export function createSendMessageTool(deps: {
   home: string;
   fromBot: string;
   policy?: InboxPolicy;
+  /** Per-recipient reply cooldown (ms): suppresses repeated sends to the same
+   * bot within the window — a safety net against bot-to-bot reply loops (#181).
+   * 0 / undefined disables. */
+  replyCooldownMs?: number;
 }): ToolDef {
   return {
     name: "send_message",
@@ -38,6 +45,20 @@ export function createSendMessageTool(deps: {
         const resolved = team ? resolveTeamTarget(team, to) : null;
         if (resolved) to = resolved;
         else throw new Error(`unknown bot or role "${to}"`);
+      }
+      if (deps.replyCooldownMs && deps.replyCooldownMs > 0) {
+        const now = Date.now();
+        const key = `${deps.fromBot}>${to}`;
+        const last = sendCooldowns.get(key);
+        if (last !== undefined && now - last < deps.replyCooldownMs) {
+          throw new Error(`send_message to ${to} suppressed (reply cooldown active)`);
+        }
+        sendCooldowns.set(key, now);
+        if (sendCooldowns.size > 1000) {
+          for (const [k, t] of sendCooldowns) {
+            if (now - t >= deps.replyCooldownMs) sendCooldowns.delete(k);
+          }
+        }
       }
       const msg = sendMessage(
         join(deps.home, "bots", to, "inbox"),

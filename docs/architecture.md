@@ -339,6 +339,7 @@ gateway:
     enabled: true
     bot: researcher
     every: 30m
+    replyCooldownMs: 60000   # #181 safety net: per-bot-pair send cooldown for the heartbeat (0 = off)
   jobs:
     - name: daily-digest
       bot: researcher
@@ -400,6 +401,11 @@ gateway:
   read-only bot can never be upgraded to write via a job — the upgrade is
   explicit and remains bounded by the bot's own security.
 - **`heartbeat`** — a global recurring prompt to a bot at a fixed interval.
+  The heartbeat only reacts to **user**-originated inbox mail (bot-to-bot
+  messages are inter-bot traffic a real run handles, and are never auto-replied,
+  so two heartbeat bots can't ping-pong each other — #181). Optional
+  `replyCooldownMs` enforces a per-bot-pair cooldown on the heartbeat's
+  `send_message` as a safety net (default 60s, `0` disables).
 - **`listen`** — enables the web console; `token` is mandatory.
 
 **Per-bot schedules.** Jobs and heartbeats don't have to live in `gateway:`.
