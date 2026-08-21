@@ -11,7 +11,8 @@ export type AuditKind =
   | "delegation"
   | "gateway_msg"
   | "data_delete"
-  | "settings_changed";
+  | "settings_changed"
+  | "guard_disabled";
 
 export interface AuditEvent {
   ts: string;

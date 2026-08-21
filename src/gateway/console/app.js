@@ -103,6 +103,30 @@ async function panelStatus(main) {
   );
   main.append(card);
 
+  const guard = status.guard || {};
+  const disabled = guard.state === "disabled";
+  const blocked = guard.blockedEvents ?? 0;
+  const guardCard = el(
+    "div",
+    { class: "card" },
+    el(
+      "div",
+      { class: disabled ? "err" : "ok" },
+      disabled ? "SECURITY GUARD DISABLED" : "security guard: active",
+    ),
+    el("div", { class: "dim" }, `${blocked} blocked event(s)`),
+  );
+  if (disabled) {
+    guardCard.append(
+      el(
+        "div",
+        { class: "warn" },
+        "Path and command policy is not enforced. Re-enable in config.yaml.",
+      ),
+    );
+  }
+  main.append(guardCard);
+
   main.append(el("h2", {}, "jobs"));
   const jobs = status.jobs || [];
   if (jobs.length === 0) {
