@@ -365,8 +365,7 @@ async function gatewayCommand(args: string[]): Promise<number> {
   const home = tenjinHome();
   const cwd = process.cwd();
   try {
-    const { config } = loadConfig(cwd, home, { skipModelCheck: dryRun });
-    if (!dryRun) validateConfig(config);
+    const { config } = loadConfig(cwd, home, { skipModelCheck: true });
     const registry = new ProviderRegistry(config.providers?.openai?.baseUrl, {
       anthropic: config.providers?.anthropic?.apiKey,
       openai: config.providers?.openai?.apiKey,

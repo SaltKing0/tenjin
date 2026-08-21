@@ -21,7 +21,12 @@ export class ProviderRegistry {
   }
 
   setKeys(keys: ProviderKeys): void {
-    this.keys = { ...this.keys, ...keys };
+    this.configure({ keys });
+  }
+
+  configure(opts: { keys?: ProviderKeys; openaiBaseUrl?: string }): void {
+    if (opts.keys) this.keys = { ...this.keys, ...opts.keys };
+    if (opts.openaiBaseUrl !== undefined) this.openaiBaseUrl = opts.openaiBaseUrl;
     this.cache.clear();
   }
 

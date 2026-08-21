@@ -98,7 +98,10 @@ export function applySettings(
     anthropic: config.providers?.anthropic?.apiKey,
     openai: config.providers?.openai?.apiKey,
   };
-  deps.registry.setKeys(keys);
+  deps.registry.configure({
+    keys,
+    openaiBaseUrl: config.providers?.openai?.baseUrl,
+  });
   deps.audit?.(
     `providers updated (anthropic:${maskKey(keys.anthropic) ?? "unset"}, openai:${maskKey(keys.openai) ?? "unset"}, default:${config.models?.default ?? config.model})`,
   );
