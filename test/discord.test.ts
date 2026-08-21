@@ -42,6 +42,7 @@ async function waitFor(fn: () => boolean, maxWaitMs = 3000): Promise<void> {
 /** A fake Discord gateway: HELLO on open, READY on IDENTIFY, then onIdentify. */
 function fakeGateway(
   onIdentify: (ws: { send: (s: string) => void }, connectionNumber: number) => void,
+  opts: { heartbeatIntervalMs?: number; ackHeartbeats?: boolean } = {},
 ): { port: number; stop: () => void } {
   let n = 0;
   const server = Bun.serve({
@@ -52,13 +53,17 @@ function fakeGateway(
     },
     websocket: {
       open(ws) {
-        ws.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 30_000 } }));
+        ws.send(JSON.stringify({ op: 10, d: { heartbeat_interval: opts.heartbeatIntervalMs ?? 30_000 } }));
       },
       message(ws, raw) {
         let p: { op?: number };
         try {
           p = JSON.parse(String(raw));
         } catch {
+          return;
+        }
+        if (p.op === 1 && opts.ackHeartbeats === true) {
+          ws.send(JSON.stringify({ op: 11, d: null }));
           return;
         }
         if (p.op === 2) {
@@ -295,5 +300,78 @@ describe("DiscordChannel e2e (fake gateway + REST)", () => {
     expect(rest.posts).toHaveLength(1);
     expect(rest.posts[0]!.path).toBe("/channels/admin-chan/messages");
     expect(rest.posts[0]!.body.content).toBe("status: all good");
+  });
+
+  test("a gateway that never heartbeat-acks is terminated and reconnects (#202)", async () => {
+    const rest = await startRest();
+    stops.push(rest.stop);
+    let connections = 0;
+    const gateway = fakeGateway(
+      (_ws, n) => {
+        connections = Math.max(connections, n);
+      },
+      { heartbeatIntervalMs: 30 }, // heartbeats sent every ~30ms, never acked
+    );
+    stops.push(gateway.stop);
+
+    const channel = new DiscordChannel(makeOptions(rest.port, gateway.port));
+    channel.onMessage(async () => "ok");
+    const ac = new AbortController();
+    await channel.start(ac.signal);
+    // The dead connection should be torn down (missing ack) and re-established.
+    await waitFor(() => connections >= 2, 5000);
+    expect(connections).toBeGreaterThanOrEqual(2);
+    channel.stop();
+    ac.abort();
+  });
+
+  test("a gateway that acks heartbeats keeps the connection alive (no false kill) (#202)", async () => {
+    const rest = await startRest();
+    stops.push(rest.stop);
+    let connections = 0;
+    const gateway = fakeGateway(
+      (_ws, n) => {
+        connections = Math.max(connections, n);
+      },
+      { heartbeatIntervalMs: 30, ackHeartbeats: true },
+    );
+    stops.push(gateway.stop);
+
+    const channel = new DiscordChannel(makeOptions(rest.port, gateway.port));
+    channel.onMessage(async () => "ok");
+    const ac = new AbortController();
+    await channel.start(ac.signal);
+    // Several heartbeat cycles pass; with acks the connection must NOT be killed.
+    await new Promise((r) => setTimeout(r, 500));
+    expect(connections).toBe(1);
+    channel.stop();
+    ac.abort();
+  });
+
+  test("reconnect backoff resets after each live session so reconnects stay fast (#202)", async () => {
+    const rest = await startRest();
+    stops.push(rest.stop);
+    let connections = 0;
+    const gateway = fakeGateway(
+      (ws, n) => {
+        connections = Math.max(connections, n);
+        // Drop each connection right after it establishes.
+        setTimeout(() => (ws as unknown as { close: () => void }).close(), 5);
+      },
+      { heartbeatIntervalMs: 1000 }, // long interval — ack watchdog not in play
+    );
+    stops.push(gateway.stop);
+
+    const channel = new DiscordChannel(makeOptions(rest.port, gateway.port));
+    channel.onMessage(async () => "ok");
+    const ac = new AbortController();
+    await channel.start(ac.signal);
+    // With the backoff reset on HELLO each reconnect uses the base 40ms delay,
+    // so several reconnects happen here. If the backoff stuck at a growing
+    // delay the count would be far lower.
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(connections).toBeGreaterThanOrEqual(6);
+    channel.stop();
+    ac.abort();
   });
 });

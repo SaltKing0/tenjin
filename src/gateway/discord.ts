@@ -60,7 +60,7 @@ const DEFAULT_RECONNECT_BASE_MS = 1000;
 const DEFAULT_RECONNECT_MAX_MS = 60_000;
 
 // Discord gateway opcodes.
-const OP = { DISPATCH: 0, HEARTBEAT: 1, IDENTIFY: 2, RECONNECT: 7, HELLO: 10 } as const;
+const OP = { DISPATCH: 0, HEARTBEAT: 1, IDENTIFY: 2, RECONNECT: 7, HELLO: 10, HEARTBEAT_ACK: 11 } as const;
 
 // Guild messages (1<<9) + message content (1<<15).
 const DEFAULT_INTENTS = (1 << 9) | (1 << 15);
@@ -73,6 +73,9 @@ export class DiscordChannel implements Channel {
   private handler?: (msg: ChannelInbound) => Promise<string | null>;
   private ws?: WebSocket;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
+  private heartbeatIntervalMs = 0;
+  private awaitingAck = false;
+  private ackTimer?: ReturnType<typeof setTimeout>;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private seq: number | null = null;
   private reconnectAttempt = 0;
@@ -203,7 +206,35 @@ export class DiscordChannel implements Channel {
   private sendHeartbeat(): void {
     if (this.ws && this.ws.readyState === WS_OPEN) {
       this.ws.send(JSON.stringify({ op: OP.HEARTBEAT, d: this.seq }));
+      this.armAckWatchdog();
     }
+  }
+
+  /**
+   * #202: after sending a heartbeat, expect a HEARTBEAT_ACK (op 11) within the
+   * heartbeat interval. A half-open connection buffers writes silently but
+   * never acks, so without a watchdog a dead socket would look alive forever.
+   * Missing the ack terminates the connection (triggering a reconnect).
+   */
+  private armAckWatchdog(): void {
+    if (this.heartbeatIntervalMs <= 0) return;
+    this.clearAckTimer();
+    this.awaitingAck = true;
+    this.ackTimer = setTimeout(() => {
+      this.ackTimer = undefined;
+      if (this.awaitingAck && !this.stopped) {
+        this.log("discord: no heartbeat ack — terminating connection");
+        this.ws?.close();
+      }
+    }, this.heartbeatIntervalMs);
+  }
+
+  private clearAckTimer(): void {
+    if (this.ackTimer) {
+      clearTimeout(this.ackTimer);
+      this.ackTimer = undefined;
+    }
+    this.awaitingAck = false;
   }
 
   private checkAndDispatch(payload: Record<string, unknown>): void {
@@ -211,13 +242,23 @@ export class DiscordChannel implements Channel {
     switch (op) {
       case OP.HELLO: {
         const interval = Number((payload.d as { heartbeat_interval?: unknown } | null)?.heartbeat_interval ?? 0);
+        this.heartbeatIntervalMs = interval;
         this.identify();
         this.clearHeartbeat();
+        this.clearAckTimer();
         if (interval > 0) {
           this.heartbeatTimer = setInterval(() => this.sendHeartbeat(), interval);
         }
+        // A fresh HELLO means a live gateway session — reset the reconnect
+        // backoff so an established connection doesn't keep paying the last
+        // (growing) delay (#202).
+        this.reconnectAttempt = 0;
         break;
       }
+      case OP.HEARTBEAT_ACK:
+        // #202: an ack clears the watchdog armed on the last heartbeat.
+        this.clearAckTimer();
+        break;
       case OP.DISPATCH: {
         const seq = payload.s;
         if (typeof seq === "number") this.seq = seq;
@@ -328,6 +369,7 @@ export class DiscordChannel implements Channel {
 
     ws.addEventListener("close", () => {
       this.clearHeartbeat();
+      this.clearAckTimer();
       if (this.stopped) return;
       this.log("discord: gateway closed — reconnecting");
       this.scheduleReconnect();
@@ -365,6 +407,7 @@ export class DiscordChannel implements Channel {
       this.reconnectTimer = undefined;
     }
     this.clearHeartbeat();
+    this.clearAckTimer();
     if (this.ws) {
       try {
         this.ws.close();
