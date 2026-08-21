@@ -1,8 +1,23 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-export type ApprovalStatus = "pending" | "approved" | "denied";
+export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
+
+/**
+ * How long a pending approval may sit before the next scan marks it `expired`.
+ * Longer than any gateway approval wait so legitimate requests are not dropped,
+ * short enough that abandoned requests stop accumulating forever.
+ */
+export const DEFAULT_APPROVAL_TTL_MS = 60 * 60 * 1000; // 1h
 
 export interface ApprovalRequest {
   id: string;
@@ -58,16 +73,70 @@ export function getRequest(home: string, id: string): ApprovalRequest | null {
   }
 }
 
+/**
+ * Scan the approvals dir and mark pending requests older than `ttlMs` as
+ * `expired`. Returns the number of requests expired. Already-resolved requests,
+ * corrupt files and temp/lock files are skipped. Mirrors the inbox purge scan.
+ */
+export function expirePendingRequests(home: string, ttlMs: number): number {
+  const dir = approvalsDir(home);
+  if (!existsSync(dir)) return 0;
+  const cutoff = Date.now() - ttlMs;
+  let expired = 0;
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith(".json")) continue; // skip tmp/lock files
+    const req = getRequest(home, file.slice(0, -".json".length));
+    if (!req || req.status !== "pending") continue;
+    if (new Date(req.ts).getTime() < cutoff) {
+      req.status = "expired";
+      writeFileSync(requestPath(home, req.id), JSON.stringify(req, null, 2));
+      expired++;
+    }
+  }
+  return expired;
+}
+
+/**
+ * Atomically resolve a pending request. The single-winner guarantee comes from
+ * renaming the pending file to a private lock path: `renameSync` is atomic, so
+ * exactly one concurrent resolver can claim the file; every other resolver gets
+ * an error and reports "already resolved" (false). The winning resolver writes
+ * the final status and renames the record back to its canonical path.
+ */
 export function resolveRequest(
   home: string,
   id: string,
   status: Exclude<ApprovalStatus, "pending">,
 ): boolean {
-  const req = getRequest(home, id);
-  if (!req || req.status !== "pending") return false;
-  req.status = status;
-  writeFileSync(requestPath(home, id), JSON.stringify(req, null, 2));
-  return true;
+  const path = requestPath(home, id);
+  if (!existsSync(path)) return false;
+  // Fast-path: already resolved (e.g. a second resolve after the first commit).
+  const current = getRequest(home, id);
+  if (current && current.status !== "pending") return false;
+
+  const lock = `${path}.${randomUUID().slice(0, 8)}.lock`;
+  try {
+    // Atomic claim — only the resolver that wins this rename proceeds.
+    renameSync(path, lock);
+  } catch {
+    return false; // someone else claimed it (or the request vanished)
+  }
+
+  try {
+    const req = JSON.parse(readFileSync(lock, "utf8")) as ApprovalRequest;
+    if (req.status !== "pending") {
+      // Resolved under the lock by another path — put the record back untouched.
+      renameSync(lock, path);
+      return false;
+    }
+    req.status = status;
+    writeFileSync(lock, JSON.stringify(req, null, 2));
+    renameSync(lock, path);
+    return true;
+  } catch {
+    rmSync(lock, { force: true });
+    return false;
+  }
 }
 
 export async function waitApproval(
@@ -79,7 +148,10 @@ export async function waitApproval(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline && !signal?.aborted) {
     const req = getRequest(home, id);
-    if (req && req.status !== "pending") return req.status;
+    if (req && req.status !== "pending") {
+      // An expired request will never be resolved by a human — treat as timeout.
+      return req.status === "expired" ? "timeout" : req.status;
+    }
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, 250);
       signal?.addEventListener("abort", () => {

@@ -114,6 +114,10 @@ approval:
   request is announced (e.g. pushed to a Telegram admin chat) and resolved with
   `/approve <id>` / `/deny <id>` in Telegram or via the web console's
   `/api/approvals/:id`. When `allowWrites` is off, the gateway is read-only.
+  Pending requests older than one hour are marked `expired` on the next approval
+  scan (`GET /api/approvals`) so abandoned requests stop accumulating; resolving
+  is atomic (rename-claimed), so a request is resolved exactly once even when
+  Console and Telegram race to answer it.
   A bot's own `security.policy` can still tighten this further.
 
 ### Telegram channel bindings
