@@ -22,6 +22,7 @@ export type SessionEvent =
       t: "usage";
       inputTokens: number;
       outputTokens: number;
+      cacheReadInputTokens?: number;
       costUSD: number;
       spentUSD: number;
       ts: string;
@@ -43,16 +44,19 @@ export function rebuildMessages(events: SessionEvent[]): ChatMessage[] {
 export function sumUsage(events: SessionEvent[]): {
   inputTokens: number;
   outputTokens: number;
+  cacheReadInputTokens: number;
   spentUSD: number;
 } {
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadInputTokens = 0;
   let spentUSD = 0;
   for (const e of events) {
     if (e.t !== "usage") continue;
     inputTokens += e.inputTokens;
     outputTokens += e.outputTokens;
+    cacheReadInputTokens += e.cacheReadInputTokens ?? 0;
     spentUSD = Math.max(spentUSD, e.spentUSD);
   }
-  return { inputTokens, outputTokens, spentUSD };
+  return { inputTokens, outputTokens, cacheReadInputTokens, spentUSD };
 }

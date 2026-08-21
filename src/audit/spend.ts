@@ -9,6 +9,7 @@ export interface SpendRow {
   sessions: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadInputTokens: number;
   costUSD: number;
 }
 
@@ -25,6 +26,7 @@ interface SessionSummary {
   startedTs: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadInputTokens: number;
   costUSD: number;
 }
 
@@ -34,6 +36,7 @@ function readSessionFile(path: string): SessionSummary | null {
   let startedTs = "";
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadInputTokens = 0;
   let costUSD = 0;
   try {
     for (const line of readFileSync(path, "utf8").split("\n")) {
@@ -46,6 +49,7 @@ function readSessionFile(path: string): SessionSummary | null {
         } else if (e.t === "usage") {
           inputTokens += e.inputTokens ?? 0;
           outputTokens += e.outputTokens ?? 0;
+          cacheReadInputTokens += e.cacheReadInputTokens ?? 0;
           costUSD += e.costUSD ?? 0;
         }
       } catch {
@@ -56,7 +60,7 @@ function readSessionFile(path: string): SessionSummary | null {
     return null;
   }
   if (!startedTs) return null;
-  return { model, startedTs, inputTokens, outputTokens, costUSD };
+  return { model, startedTs, inputTokens, outputTokens, cacheReadInputTokens, costUSD };
 }
 
 export function collectSessionScopes(home: string): Array<{ scope: string; dir: string }> {
@@ -101,11 +105,13 @@ export function aggregateSpend(
           sessions: 0,
           inputTokens: 0,
           outputTokens: 0,
+          cacheReadInputTokens: 0,
           costUSD: 0,
         } satisfies SpendRow);
       row.sessions += 1;
       row.inputTokens += summary.inputTokens;
       row.outputTokens += summary.outputTokens;
+      row.cacheReadInputTokens += summary.cacheReadInputTokens;
       row.costUSD += summary.costUSD;
       byKey.set(key, row);
     }
@@ -158,6 +164,7 @@ export function renderSpend(rows: SpendRow[]): string {
     "sess".padStart(5) +
     "in".padStart(10) +
     "out".padStart(10) +
+    "cached".padStart(10) +
     "cost".padStart(10);
   const lines = [header, "─".repeat(header.length)];
   for (const r of rows) {
@@ -168,6 +175,7 @@ export function renderSpend(rows: SpendRow[]): string {
         String(r.sessions).padStart(5) +
         fmtTokens(r.inputTokens).padStart(10) +
         fmtTokens(r.outputTokens).padStart(10) +
+        fmtTokens(r.cacheReadInputTokens).padStart(10) +
         fmtUsd(r.costUSD).padStart(10),
     );
   }
