@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getSettings, applySettings, detectModels, testProvider, verifySettingsApply, DetectTimeoutError } from "../src/gateway/settings";
+import { getSettings, applySettings, detectModels, testProvider, verifySettingsApply, classifyIntoGroups, classifyModel, DetectTimeoutError } from "../src/gateway/settings";
 import { loadConfig, providersFile } from "../src/config/loader";
 import { ProviderRegistry } from "../src/provider/registry";
 import type { HarnessConfig } from "../src/config/types";
@@ -496,6 +496,114 @@ describe("live-apply through gateway objects", () => {
       server?.stop();
       upstream.stop(true);
     }
+  });
+
+  test("detect endpoint returns grouped models with :free flags (#257)", async () => {
+    const { startHttpServer } = await import("../src/gateway/http");
+    const { createConsoleApi } = await import("../src/gateway/console-api");
+    const { AuditLog } = await import("../src/audit/log");
+
+    const { deps, registry } = setup();
+    const upstream = Bun.serve({
+      port: 0,
+      fetch: () =>
+        Response.json({
+          data: [
+            { id: "openai/gpt-5.1:free" },
+            { id: "anthropic/claude-sonnet-4-5" },
+            { id: "openai/text-embedding-3-small" },
+            { id: "whisper-1" },
+          ],
+        }),
+    });
+    let server: any = null;
+    try {
+      server = startHttpServer({
+        config: { port: 0, host: "127.0.0.1", token: "t" },
+        handleMessage: async () => null,
+        status: () => ({}),
+        api: createConsoleApi({
+          home,
+          cwd: home,
+          config: deps.config,
+          registry,
+          audit: new AuditLog(join(home, "audit.jsonl")),
+        }),
+      });
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/settings/detect`, {
+        method: "POST",
+        headers: { authorization: "Bearer t", "content-type": "application/json" },
+        body: JSON.stringify({
+          provider: "openai",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          apiKey: "sk-x",
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        models: string[];
+        groups: Record<string, Array<{ id: string; group: string; free: boolean }>>;
+      };
+      expect(body.models).toEqual(["anthropic/claude-sonnet-4-5", "openai/gpt-5.1:free"]);
+      // chat group sorts free first and flags the :free model
+      expect(body.groups.chat!.map((m) => m.id)).toEqual(["openai/gpt-5.1:free", "anthropic/claude-sonnet-4-5"]);
+      expect(body.groups.chat![0]).toMatchObject({ free: true, group: "chat" });
+      expect(body.groups.embedding!.map((m) => m.id)).toEqual(["openai/text-embedding-3-small"]);
+      expect(body.groups.other!.map((m) => m.id)).toEqual(["whisper-1"]);
+    } finally {
+      server?.stop();
+      upstream.stop(true);
+    }
+  });
+});
+
+describe("model list classification (#257)", () => {
+  test("classifyModel sorts mixed ids into chat/embedding/other", () => {
+    expect(classifyModel("gpt-4o")).toEqual({ id: "gpt-4o", group: "chat", free: false });
+    expect(classifyModel("text-embedding-3-large")).toEqual({
+      id: "text-embedding-3-large",
+      group: "embedding",
+      free: false,
+    });
+    expect(classifyModel("whisper-1")).toEqual({ id: "whisper-1", group: "other", free: false });
+    expect(classifyModel("mistral-large:free")).toEqual({
+      id: "mistral-large:free",
+      group: "chat",
+      free: true,
+    });
+  });
+
+  test("classifyIntoGroups buckets a mixed detect list and flags :free", () => {
+    const ids = [
+      "anthropic/claude-sonnet-4-5",
+      "openai/gpt-5.1:free",
+      "openai/text-embedding-3-small",
+      "anthropic/claude-3-haiku:free",
+      "whisper-1",
+      "openai/dall-e-3",
+      "openai/text-embedding-ada-002",
+      "google/gemini-flash:free",
+    ];
+    const g = classifyIntoGroups(ids);
+    expect(g.chat.map((m) => m.id)).toEqual([
+      "anthropic/claude-3-haiku:free",
+      "google/gemini-flash:free",
+      "openai/gpt-5.1:free",
+      "anthropic/claude-sonnet-4-5",
+    ]);
+    expect(g.embedding.map((m) => m.id)).toEqual([
+      "openai/text-embedding-3-small",
+      "openai/text-embedding-ada-002",
+    ]);
+    expect(g.other.map((m) => m.id)).toEqual(["openai/dall-e-3", "whisper-1"]);
+    // every :free id carries the flag
+    expect(g.chat.filter((m) => m.free)).toHaveLength(3);
+    expect(g.embedding.every((m) => !m.free)).toBe(true);
+  });
+
+  test("free-tier sorts first within its group, then alphabetically", () => {
+    const c = classifyIntoGroups(["b-model", "a-model:free", "c-model"]);
+    expect(c.chat.map((m) => m.id)).toEqual(["a-model:free", "b-model", "c-model"]);
   });
 });
 
