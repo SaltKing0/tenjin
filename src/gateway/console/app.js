@@ -3,7 +3,7 @@
 
 import { renderMarkdown } from "./markdown.js";
 import { emptyStateFor } from "./empty-state.js";
-import { resolveMemoryScope } from "./memory-scope.js";
+import { resolvePanelScope, scopeHint, panelScopeKey } from "./scope-defaults.js";
 import { setupChecklist } from "./setup-checklist.js";
 import { headerLabels, stackLabels, isHeaderRow } from "./tables.js";
 import { firstRunView, shouldShowFirstRun } from "./first-run.js";
@@ -72,6 +72,32 @@ function emptyStateCard(panel) {
   if (def.caption) parts.push(el("div", { class: "dim" }, def.caption));
   if (def.cta && def.hash) parts.push(el("a", { class: "primary", href: def.hash }, def.cta));
   return el("div", { class: "card empty-state" }, ...parts);
+}
+
+// #277: when the currently selected scope is empty but another bot has data,
+// show a subtle one-tap hint to switch scopes instead of leaving the user stuck
+// on an empty panel.
+function scopeHintCard(panel, current) {
+  const hint = scopeHint({ current, bots: scopeBots(panel) });
+  if (!hint) return null;
+  return el(
+    "div",
+    { class: "card scope-hint" },
+    `${hint.name} has ${hint.count} item${hint.count === 1 ? "" : "s"} — `,
+    el(
+      "a",
+      {
+        href: "#",
+        onclick: (e) => {
+          e.preventDefault();
+          setPanelScope(panel, hint.name);
+          if (panel === "memory") currentBot = hint.name;
+          render();
+        },
+      },
+      "switch",
+    ),
+  );
 }
 
 // #252: render the setup checklist (from /api/setup/state) with deep-links on
@@ -245,14 +271,34 @@ async function loadBots() {
   return bots;
 }
 
-function botSelector(onChange) {
+function botSelector(onChange, value = currentBot) {
   const select = el("select", { onchange: (e) => onChange(e.target.value) });
   select.append(el("option", { value: "solo" }, "solo"));
   for (const bot of bots) {
     select.append(el("option", { value: bot.name }, bot.name));
   }
-  select.value = currentBot;
+  select.value = value;
   return select;
+}
+
+// #277: per-panel scope helpers. A scoped panel (Sessions/Memory) picks which
+// bot scope to render from data counts in the loaded `bots` list (each bot has
+// `.sessions` and `.memory`), falling back to "solo". The choice persists per
+// panel in localStorage (like tenjin_spend_days), independent of the global
+// currentBot used by the chat/topbar.
+function scopeBots(panel) {
+  const list = [{ name: "solo", count: 0 }];
+  for (const b of bots) {
+    list.push({ name: b.name, count: panel === "memory" ? b.memory ?? 0 : b.sessions ?? 0 });
+  }
+  return list;
+}
+function panelScope(panel) {
+  const stored = localStorage.getItem(panelScopeKey(panel)) || "";
+  return resolvePanelScope({ stored, bots: scopeBots(panel) });
+}
+function setPanelScope(panel, value) {
+  localStorage.setItem(panelScopeKey(panel), value);
 }
 
 /* ---------- panels ---------- */
@@ -526,16 +572,22 @@ function botCreateForm(main) {
 }
 
 async function panelSessions(main) {
+  // #277: default to the first bot that has sessions (else solo) and persist
+  // the choice per panel; keep currentBot in sync for replay/fork downstream.
+  currentBot = panelScope("sessions");
   main.replaceChildren(
     el("h1", {}, "Sessions"),
     el(
       "div",
       { class: "toolbar" },
-      botSelector(async (value) => {
-        currentBot = value;
-        localStorage.setItem("tenjin_bot", value);
-        await panelSessions(main);
-      }),
+      botSelector(
+        async (value) => {
+          currentBot = value;
+          setPanelScope("sessions", value);
+          await panelSessions(main);
+        },
+        currentBot,
+      ),
       el("input", { id: "session-q", placeholder: "search preview…" }),
       el("span", { class: "dim" }, "click a session to open its timeline"),
     ),
@@ -566,6 +618,11 @@ async function panelSessions(main) {
           ? emptyStateCard("sessions")
           : el("div", { class: "dim" }, "no sessions in this scope yet"),
       );
+      // #277: if this scope is empty but another bot has sessions, offer a switch.
+      if (!q && offset === 0) {
+        const hintCard = scopeHintCard("sessions", currentBot);
+        if (hintCard) list.append(hintCard);
+      }
     }
     for (const session of data.sessions) {
       const when = new Date(session.mtimeMs).toLocaleString();
@@ -1121,10 +1178,11 @@ async function panelJobs(main) {
 }
 
 async function panelMemory(main) {
-  // #274: the console defaults currentBot to "solo" (chat fallback), which is
-  // not a real bot — resolve the effective memory scope before querying.
-  const scope = resolveMemoryScope(currentBot, bots);
-  if (scope === null) {
+  // #274/#277: if there are no bots at all, there is no memory scope — guide
+  // the user to create a bot. Otherwise resolve the effective memory scope from
+  // per-bot memory counts (default = first bot with memory data, else solo) and
+  // persist the choice per panel.
+  if (bots.length === 0) {
     main.replaceChildren(
       el("h1", {}, "Memory"),
       el("div", { class: "toolbar" }, el("span", { class: "dim" }, "read-only view of a bot's facts, summaries and vector store")),
@@ -1132,21 +1190,22 @@ async function panelMemory(main) {
     main.append(emptyStateCard("memory_nobots"));
     return;
   }
-  if (currentBot !== scope) {
-    currentBot = scope;
-    localStorage.setItem("tenjin_bot", scope);
-  }
+  const scope = panelScope("memory");
+  if (currentBot !== scope) currentBot = scope;
 
   main.replaceChildren(
     el("h1", {}, "Memory"),
     el(
       "div",
       { class: "toolbar" },
-      botSelector(async (value) => {
-        currentBot = value;
-        localStorage.setItem("tenjin_bot", value);
-        await panelMemory(main);
-      }),
+      botSelector(
+        async (value) => {
+          currentBot = value;
+          setPanelScope("memory", value);
+          await panelMemory(main);
+        },
+        scope,
+      ),
       el("span", { class: "dim" }, "read-only view of a bot's facts, summaries and vector store"),
     ),
   );
@@ -1171,6 +1230,9 @@ async function panelMemory(main) {
   // #254: guide a first-time user when nothing has been persisted in this scope
   if (data.summaries.length === 0 && !data.facts) {
     box.append(emptyStateCard("memory"));
+    // #277: if this scope is empty but another bot has memory data, offer a switch.
+    const hintCard = scopeHintCard("memory", scope);
+    if (hintCard) box.append(hintCard);
   }
 
   // facts
