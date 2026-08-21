@@ -32,7 +32,8 @@ import { indexPendingSessions } from "./memory/indexer";
 import { VectorStore, vectorsFilePath } from "./memory/vector-store";
 import { createEmbeddings } from "./provider/embeddings";
 import { vectorEnabled } from "./config/loader";
-import { createRecallTool, createRememberTool, readFacts } from "./tools/memory";
+import { createRecallTool, createRememberTool, createRecordLearningTool, readFacts } from "./tools/memory";
+import { readLearnings } from "./memory/learnings";
 import { createUseSkillTool } from "./skills/activate";
 import { createSaveSkillTool } from "./tools/skill-writer";
 import { createListSkillsTool } from "./tools/skill-lister";
@@ -253,7 +254,10 @@ async function main(): Promise<number> {
       facts: readFacts(memDir),
       memorySection:
         memoryEnabled(config)
-          ? buildMemorySection(listSummaries(memDir), { currentProject: cwd })
+          ? buildMemorySection(listSummaries(memDir), {
+              currentProject: cwd,
+              learnings: readLearnings(memDir, cwd),
+            })
           : null,
     });
     let tools: ToolDef[] = [
@@ -266,6 +270,7 @@ async function main(): Promise<number> {
     ];
     if (memoryEnabled(config)) {
       tools.push(createRememberTool({ memoryDirPath: memDir }));
+      tools.push(createRecordLearningTool({ memoryDirPath: memDir, projectPath: cwd }));
       tools.push(createRecallTool({ memoryDirPath: memDir, projectPath: cwd, embeddings, store: vectorStore ?? undefined }));
     }
     tools.push(createUseSkillTool({ home, projectDir: cwd }));

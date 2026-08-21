@@ -8,6 +8,7 @@ import {
   type SearchOptions,
   type VectorStore,
 } from "../memory/vector-store";
+import { recordLearning } from "../memory/learnings";
 
 export function factsPath(memoryDirPath: string): string {
   return join(memoryDirPath, "facts.md");
@@ -43,6 +44,41 @@ export function createRememberTool(deps: {
       const line = `- [${new Date().toISOString().slice(0, 10)}] ${fact.replace(/\n+/g, " ")}`;
       appendFileSync(path, `${line}\n`);
       return `Remembered: ${line}`;
+    },
+  };
+}
+
+export function createRecordLearningTool(deps: {
+  memoryDirPath: string;
+  projectPath: string;
+  /** Source session to attribute the learning to. When absent, "manual". */
+  sessionId?: string;
+}): ToolDef {
+  return {
+    name: "record_learning",
+    group: "write",
+    description:
+      "Distill a durable, deduplicated learning (fact plus source session) into long-term memory for this bot and project. Use near the end of a session to capture the 1-3 most important takeaways; recording the same fact again replaces the earlier entry.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        learning: {
+          type: "string",
+          description: "One concise, self-contained learning",
+        },
+      },
+      required: ["learning"],
+    },
+    async handler(args) {
+      const learning = String(args.learning).trim();
+      if (!learning) throw new Error("learning must not be empty");
+      const { deduped } = recordLearning(
+        deps.memoryDirPath,
+        deps.projectPath,
+        learning,
+        deps.sessionId ?? "manual",
+      );
+      return `Recorded learning${deduped ? " (replaced a duplicate)" : ""}: ${learning}`;
     },
   };
 }
