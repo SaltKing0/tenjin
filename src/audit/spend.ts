@@ -23,14 +23,20 @@ export interface BotBreakdown {
   costUSD: number;
 }
 
-interface SessionSummary {
-  model: string;
-  startedTs: string;
+interface DayBucket {
+  sessions: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadInputTokens: number;
   costUSD: number;
+}
+
+interface SessionSummary {
+  model: string;
+  startedTs: string;
   effort?: string;
+  /** Cost/tokens bucketed by the UTC day each usage event fell on (#194). */
+  days: Map<string, DayBucket>;
 }
 
 function readSessionFile(path: string): SessionSummary | null {
@@ -38,10 +44,7 @@ function readSessionFile(path: string): SessionSummary | null {
   let model = "?";
   let startedTs = "";
   let effort: string | undefined;
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let cacheReadInputTokens = 0;
-  let costUSD = 0;
+  const days = new Map<string, DayBucket>();
   try {
     for (const line of readFileSync(path, "utf8").split("\n")) {
       if (!line.trim()) continue;
@@ -52,10 +55,24 @@ function readSessionFile(path: string): SessionSummary | null {
           startedTs = e.ts;
           if (typeof e.effort === "string") effort = e.effort;
         } else if (e.t === "usage") {
-          inputTokens += e.inputTokens ?? 0;
-          outputTokens += e.outputTokens ?? 0;
-          cacheReadInputTokens += e.cacheReadInputTokens ?? 0;
-          costUSD += e.costUSD ?? 0;
+          // #194: book spend to the day the usage event actually happened on,
+          // not the session's start day, so a session spanning midnight is
+          // attributed to the correct days. Fall back to the start ts when a
+          // usage event has no ts of its own.
+          const day = (typeof e.ts === "string" && e.ts.slice(0, 10)) || startedTs.slice(0, 10);
+          if (!day) continue;
+          const b = days.get(day) ?? {
+            sessions: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            costUSD: 0,
+          };
+          b.inputTokens += e.inputTokens ?? 0;
+          b.outputTokens += e.outputTokens ?? 0;
+          b.cacheReadInputTokens += e.cacheReadInputTokens ?? 0;
+          b.costUSD += e.costUSD ?? 0;
+          days.set(day, b);
         }
       } catch {
         continue;
@@ -64,8 +81,8 @@ function readSessionFile(path: string): SessionSummary | null {
   } catch {
     return null;
   }
-  if (!startedTs) return null;
-  return { model, startedTs, inputTokens, outputTokens, cacheReadInputTokens, costUSD, effort };
+  if (!startedTs || days.size === 0) return null;
+  return { model, startedTs, effort, days };
 }
 
 export function collectSessionScopes(home: string): Array<{ scope: string; dir: string }> {
@@ -99,27 +116,28 @@ export function aggregateSpend(
       const summary = readSessionFile(join(dir, file));
       if (!summary) continue;
       if (cutoff && new Date(summary.startedTs).getTime() < cutoff) continue;
-      const day = summary.startedTs.slice(0, 10);
-      const key = `${scope}|${summary.model}|${day}`;
-      const row =
-        byKey.get(key) ??
-        ({
-          scope,
-          model: summary.model,
-          day,
-          sessions: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheReadInputTokens: 0,
-          costUSD: 0,
-        } satisfies SpendRow);
-      row.sessions += 1;
-      row.inputTokens += summary.inputTokens;
-      row.outputTokens += summary.outputTokens;
-      row.cacheReadInputTokens += summary.cacheReadInputTokens;
-      row.costUSD += summary.costUSD;
-      if (summary.effort !== undefined && row.effort === undefined) row.effort = summary.effort;
-      byKey.set(key, row);
+      for (const [day, b] of summary.days) {
+        const key = `${scope}|${summary.model}|${day}`;
+        const row =
+          byKey.get(key) ??
+          ({
+            scope,
+            model: summary.model,
+            day,
+            sessions: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            costUSD: 0,
+          } satisfies SpendRow);
+        row.sessions += b.sessions === 0 ? 1 : b.sessions;
+        row.inputTokens += b.inputTokens;
+        row.outputTokens += b.outputTokens;
+        row.cacheReadInputTokens += b.cacheReadInputTokens;
+        row.costUSD += b.costUSD;
+        if (summary.effort !== undefined && row.effort === undefined) row.effort = summary.effort;
+        byKey.set(key, row);
+      }
     }
   }
 

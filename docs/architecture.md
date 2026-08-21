@@ -158,7 +158,11 @@ registry updates on every chat call — so provider reachability is answered fro
 cached data instead of a per-request probe. The on-disk spend aggregation is
 cached for a short window (~20s, `OBSERVABILITY_CACHE_TTL_MS`), so a scrape or
 health check does not re-parse every session log on the shared event loop
-(#186). Both endpoints require the same `gateway.listen.token` bearer token as
+(#186). Cached reachability expires: a provider whose most recent outcome is
+older than `PROVIDER_STALE_MS` (10 min) reports `up: null` rather than a stale
+success. Spend is aggregated to each usage event's UTC day, so a session
+spanning midnight is attributed to the correct days instead of its start day
+(#194). Both endpoints require the same `gateway.listen.token` bearer token as
 the rest of the API.
 
 ## Tools

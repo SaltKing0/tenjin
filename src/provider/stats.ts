@@ -1,6 +1,13 @@
 import type { Provider } from "./types";
 
 /**
+ * A provider whose most recent outcome is older than this is no longer reported
+ * `up: true` — cached reachability must expire rather than claim a provider is
+ * healthy on a 6-hour-old success (#194).
+ */
+export const PROVIDER_STALE_MS = 10 * 60 * 1000;
+
+/**
  * Per-provider failure/success accounting for observability (#135).
  *
  * The gateway's `ProviderRegistry` wraps every obtained provider with
@@ -56,10 +63,17 @@ export class ProviderStats {
   }
 
   /** Per-provider error counts + cached reachability. */
-  reachability(): Record<string, ProviderReachability> {
+  reachability(now: number = Date.now()): Record<string, ProviderReachability> {
     const out: Record<string, ProviderReachability> = {};
     for (const [name, e] of this.perProvider) {
-      const up = e.lastOutcome === undefined ? null : e.lastOutcome === "success";
+      // #194: cached reachability must expire. If the most recent outcome is
+      // older than PROVIDER_STALE_MS, report `up: null` (unknown) instead of
+      // claiming a success we can no longer trust.
+      let up: boolean | null = e.lastOutcome === undefined ? null : e.lastOutcome === "success";
+      if (up !== null) {
+        const atMs = e.lastOutcome === "success" ? e.lastSuccessAtMs : e.lastErrorAtMs;
+        if (atMs !== undefined && now - atMs > PROVIDER_STALE_MS) up = null;
+      }
       out[name] = {
         errors: e.errors,
         ...(e.lastSuccessAtMs !== undefined

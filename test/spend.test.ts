@@ -177,3 +177,25 @@ test("perBotBreakdown aggregates spend by bot scope", () => {
   expect(writer!.costUSD).toBeCloseTo(0.04);
   expect(writer!.sessions).toBe(1);
 });
+
+test("a session spanning midnight books spend to each event's actual day (#194)", () => {
+  const dir = join(home, "sessions");
+  mkdirSync(dir, { recursive: true });
+  const events = [
+    { t: "session_start", id: "mid", ts: "2026-08-20T23:00:00Z", provider: "a", model: "m" },
+    { t: "usage", inputTokens: 1, outputTokens: 1, costUSD: 0.5, spentUSD: 0.5, ts: "2026-08-20T23:30:00Z" },
+    { t: "usage", inputTokens: 1, outputTokens: 1, costUSD: 0.25, spentUSD: 0.25, ts: "2026-08-21T00:30:00Z" },
+  ];
+  writeFileSync(
+    join(dir, "mid.jsonl"),
+    events.map((e) => JSON.stringify(e)).join("\n") + "\n",
+  );
+
+  const rows = aggregateSpend(home);
+  // The two days are attributed separately, not both to the session start day.
+  expect(rows).toHaveLength(2);
+  const r20 = rows.find((r) => r.day === "2026-08-20");
+  const r21 = rows.find((r) => r.day === "2026-08-21");
+  expect(r20?.costUSD).toBeCloseTo(0.5);
+  expect(r21?.costUSD).toBeCloseTo(0.25);
+});
