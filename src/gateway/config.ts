@@ -61,6 +61,24 @@ export interface WebhookChannelConfig {
   maxMessageLength?: number;
 }
 
+export interface DiscordChannelConfig {
+  enabled: boolean;
+  defaultBot?: string;
+  /** Discord bot token (also accepted via DISCORD_BOT_TOKEN env). */
+  botToken?: string;
+  /** When non-empty, only these guild ids are handled. */
+  allowedGuilds: string[];
+  /** Mandatory allowlist of channel ids that are handled (#139, security). */
+  allowedChannels: string[];
+  /** Channel used for `send()` (e.g. job postTo). */
+  adminChannel?: string;
+  allowWrites?: boolean;
+  approvalTimeoutMs?: number;
+  rateLimitMax?: number;
+  rateLimitWindowMs?: number;
+  maxMessageLength?: number;
+}
+
 export interface HeartbeatConfig {
   bot: string;
   intervalMs: number;
@@ -87,6 +105,7 @@ export interface GatewaySettings {
   telegram: TelegramChannelConfig | null;
   slack: SlackChannelConfig | null;
   webhook: WebhookChannelConfig | null;
+  discord: DiscordChannelConfig | null;
   channels: string[];
   heartbeat: HeartbeatConfig | null;
   listen: ListenConfig | null;
@@ -130,6 +149,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
       telegram: null,
       slack: null,
       webhook: null,
+      discord: null,
       channels: [],
       heartbeat: null,
       listen: null,
@@ -146,6 +166,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     telegram: null,
     slack: null,
     webhook: null,
+    discord: null,
     channels: [],
     heartbeat: null,
     listen: null,
@@ -348,6 +369,53 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     };
   }
 
+  const rawDiscord = gw.discord;
+  if (rawDiscord !== undefined && rawDiscord !== null) {
+    if (typeof rawDiscord !== "object") throw new ConfigError("gateway.discord must be a mapping");
+    const dc = rawDiscord as Record<string, unknown>;
+    const enabled = dc.enabled === true;
+    const allowedChannels = Array.isArray(dc.allowedChannels)
+      ? (dc.allowedChannels as unknown[]).map((c) => {
+          if (typeof c !== "string" || !c.trim()) {
+            throw new ConfigError("gateway.discord.allowedChannels must be channel id strings");
+          }
+          return c.trim();
+        })
+      : [];
+    const allowedGuilds = Array.isArray(dc.allowedGuilds)
+      ? (dc.allowedGuilds as unknown[]).map((g) => {
+          if (typeof g !== "string" || !g.trim()) {
+            throw new ConfigError("gateway.discord.allowedGuilds must be guild id strings");
+          }
+          return g.trim();
+        })
+      : [];
+    if (enabled && allowedChannels.length === 0) {
+      throw new ConfigError(
+        "gateway.discord.enabled requires a non-empty allowedChannels allowlist (security)",
+      );
+    }
+    if (enabled && (typeof dc.defaultBot !== "string" || !dc.defaultBot.trim())) {
+      throw new ConfigError("gateway.discord.enabled requires a defaultBot");
+    }
+    settings.discord = {
+      enabled,
+      defaultBot: typeof dc.defaultBot === "string" ? dc.defaultBot : undefined,
+      botToken: typeof dc.botToken === "string" ? dc.botToken : undefined,
+      allowedGuilds,
+      allowedChannels,
+      adminChannel: typeof dc.adminChannel === "string" ? dc.adminChannel : undefined,
+      allowWrites: dc.allowWrites === true,
+      approvalTimeoutMs:
+        typeof dc.approvalTimeoutMs === "number" ? dc.approvalTimeoutMs : undefined,
+      rateLimitMax: typeof dc.rateLimitMax === "number" ? dc.rateLimitMax : undefined,
+      rateLimitWindowMs:
+        typeof dc.rateLimitWindowMs === "number" ? dc.rateLimitWindowMs : undefined,
+      maxMessageLength:
+        typeof dc.maxMessageLength === "number" ? dc.maxMessageLength : undefined,
+    };
+  }
+
   const rawChannels = gw.channels;
   if (rawChannels !== undefined && rawChannels !== null) {
     if (!Array.isArray(rawChannels)) {
@@ -370,6 +438,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     if (settings.telegram?.enabled) defaults.push("telegram");
     if (settings.slack?.enabled) defaults.push("slack");
     if (settings.webhook?.enabled) defaults.push("webhook");
+    if (settings.discord?.enabled) defaults.push("discord");
     settings.channels = defaults;
   }
 

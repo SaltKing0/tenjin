@@ -44,3 +44,7 @@ registerChannel("slack", () => {
 registerChannel("webhook", () => {
   throw new ConfigError("webhook channel factory not wired");
 });
+
+registerChannel("discord", () => {
+  throw new ConfigError("discord channel factory not wired");
+});

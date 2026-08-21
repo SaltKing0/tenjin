@@ -118,7 +118,8 @@ bot), and the **message handler** ([`src/gateway/handler.ts`](../src/gateway/han
 that fronts all incoming messages from channels. [`src/gateway/telegram.ts`](../src/gateway/telegram.ts)
 is the Telegram channel integration; [`src/gateway/approvals.ts`](../src/gateway/approvals.ts)
 implements out-of-band approval requests. [`src/gateway/schedule.ts`](../src/gateway/schedule.ts)
-is the cron/every scheduler.
+is the cron/every scheduler. Channel-specific adapters live alongside them
+(`src/gateway/slack.ts`, `src/gateway/webhook.ts`, `src/gateway/discord.ts`).
 
 **Web console.** When `gateway.listen` is set, [`src/gateway/http.ts`](../src/gateway/http.ts)
 serves the static console (`src/gateway/console/`) and
@@ -315,6 +316,12 @@ gateway:
     botToken: xoxb-your-token       # required
     signingSecret: your-secret      # required
     adminChannel: C1234567890
+  discord:
+    enabled: true
+    defaultBot: researcher
+    allowedChannels: [123456789012345678]  # REQUIRED allowlist (security)
+    botToken: «redacted:bot-token»        # or set DISCORD_BOT_TOKEN env
+    adminChannel: 123456789012345678
   heartbeat:
     enabled: true
     bot: researcher
@@ -358,6 +365,15 @@ gateway:
   `rateLimitWindowMs`, `maxMessageLength` mirror Telegram's #69 limits. By
   default the webhook listens on an ephemeral port on `127.0.0.1`; set the
   `SLACK_WEBHOOK_PORT` env var to pin a port.
+- **`discord`** — requires a non-empty `allowedChannels` allowlist and a
+  `botToken` (config or `DISCORD_BOT_TOKEN`). Connects to the Discord Gateway
+  WebSocket (raw JSON protocol, no discord.js), keeps a heartbeat, and sends
+  replies via REST `POST /channels/:id/messages`. `adminChannel` is the
+  destination for channel-level `send(text)` (e.g. `postTo: discord`). Optional
+  `allowedGuilds` restricts handling to those guilds; `rateLimitMax` /
+  `rateLimitWindowMs` / `maxMessageLength` mirror the other channels. Dropped
+  gateway connections are retried with exponential backoff; REST 429s respect
+  `retry_after`.
 - **`jobs`** — scheduled prompts to a bot on a cron or `every` schedule
   (`postTo` routes the result to a channel). Optional `tz` (IANA name) interprets
   cron fields in that zone, including across DST; omitted `tz` keeps server local time.

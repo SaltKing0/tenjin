@@ -41,7 +41,7 @@ export interface HandlerDeps {
 
 export interface HandleContext {
   actor: string;
-  source: "telegram" | "http" | "slack" | "webhook";
+  source: "telegram" | "http" | "slack" | "webhook" | "discord";
   chatId?: number;
   userId?: number;
   onDelta?: (delta: string) => void;
