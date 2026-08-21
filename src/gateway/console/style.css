@@ -73,6 +73,43 @@ body {
 }
 .topbar-sse.ok { border-color: var(--ok); color: var(--ok); }
 .topbar-sse.err { border-color: var(--err); color: var(--err); }
+/* #296: live pending-approval badge + dropdown. */
+.topbar-approvals {
+  position: relative;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text);
+}
+.topbar-approvals.idle { color: var(--dim); }
+.approval-dd {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 50;
+  min-width: 260px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  padding: 4px;
+}
+.approval-dd-item {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.approval-dd-item:last-child { border-bottom: none; }
+.approval-dd-all {
+  display: block;
+  padding: 8px;
+  color: var(--accent);
+  text-decoration: none;
+}
 .topbar-budget { color: var(--dim); }
 .topbar-docs { color: var(--accent); text-decoration: none; margin-left: auto; }
 .offline-banner {
