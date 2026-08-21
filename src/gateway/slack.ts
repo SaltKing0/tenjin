@@ -62,6 +62,8 @@ export class SlackChannel implements Channel {
   private channelId = new Map<string, number>();
   private channelById = new Map<number, string>();
   private nextId = 100_000;
+  private seenEvents = new Map<string, number>(); // event_id -> expiry (idempotency, #200)
+  private lastDedupSweep = 0;
   private port = 0;
 
   constructor(
@@ -156,6 +158,36 @@ export class SlackChannel implements Channel {
     return false;
   }
 
+  /** Idempotency (#200): true when `eventId` was already handled within the
+   * freshness window — a Slack redelivery must not re-run the agent. */
+  private isDuplicate(eventId: string, now = Date.now()): boolean {
+    const expiry = this.seenEvents.get(eventId);
+    if (expiry !== undefined && now < expiry) return true;
+    this.seenEvents.set(eventId, now + MAX_SIGNATURE_AGE_MS);
+    if (now - this.lastDedupSweep > 60_000 || this.seenEvents.size > 1000) {
+      this.lastDedupSweep = now;
+      for (const [k, e] of this.seenEvents) if (now >= e) this.seenEvents.delete(k);
+    }
+    return false;
+  }
+
+  /** Run the agent handler fire-and-forget and post the reply/error. Never
+   * awaited by the HTTP handler, so the 2xx ack is sent immediately (#200). */
+  private async runMessage(channel: string, user: string, text: string, username?: string): Promise<void> {
+    try {
+      const reply = await this.handler?.({
+        text,
+        chatId: this.numericChannel(channel),
+        userId: this.numericUser(user),
+        username,
+      });
+      if (reply) await this.postMessage(channel, reply);
+    } catch (e) {
+      this.log(`slack: handler error: ${(e as Error).message}`);
+      await this.postMessage(channel, `error: something went wrong handling that.`).catch(() => {});
+    }
+  }
+
   private eventHandler = async (req: Request): Promise<Response> => {
     const rawBody = await req.text();
     const signature = req.headers.get("x-slack-signature");
@@ -177,6 +209,7 @@ export class SlackChannel implements Channel {
       return new Response(String(payload.challenge ?? ""), { status: 200 });
     }
     const event = payload.event as Record<string, unknown> | undefined;
+    const eventId = typeof payload.event_id === "string" ? payload.event_id : "";
     if (event?.type === "message" && typeof event.text === "string") {
       const channel = typeof event.channel === "string" ? event.channel : "";
       const user = typeof event.user === "string" ? event.user : "";
@@ -198,18 +231,17 @@ export class SlackChannel implements Channel {
         return new Response("ok", { status: 200 });
       }
       if (this.handler && user) {
-        try {
-          const reply = await this.handler({
-            text: event.text,
-            chatId: this.numericChannel(channel),
-            userId: this.numericUser(user),
-            username: typeof event.username === "string" ? event.username : undefined,
-          });
-          if (reply) await this.postMessage(channel, reply);
-        } catch (e) {
-          this.log(`slack: handler error: ${(e as Error).message}`);
-          await this.postMessage(channel, `error: something went wrong handling that.`).catch(() => {});
+        // Idempotency (#200): a redelivered event_id must not re-run the agent.
+        if (eventId && this.isDuplicate(eventId)) {
+          return new Response("ok", { status: 200 });
         }
+        // Fire-and-forget (#200): ack immediately; the long run happens async.
+        void this.runMessage(
+          channel,
+          user,
+          event.text,
+          typeof event.username === "string" ? event.username : undefined,
+        );
       }
     }
     return new Response("ok", { status: 200 });
