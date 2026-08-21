@@ -77,12 +77,16 @@ function fakeChannel(): {
 }
 
 describe("channel registry (#97)", () => {
-  test("telegram and slack are known channels; unknown kinds are not", () => {
+  test("telegram, slack, webhook and discord are known channels; unknown kinds are not", () => {
     expect(knownChannel("telegram")).toBe(true);
     expect(knownChannel("slack")).toBe(true);
-    expect(knownChannel("discord")).toBe(false);
+    expect(knownChannel("webhook")).toBe(true);
+    expect(knownChannel("discord")).toBe(true);
+    expect(knownChannel("matrix")).toBe(false);
     expect(channelFactory("telegram")).toBeDefined();
     expect(channelFactory("slack")).toBeDefined();
+    expect(channelFactory("webhook")).toBeDefined();
+    expect(channelFactory("discord")).toBeDefined();
   });
 });
 

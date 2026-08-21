@@ -75,6 +75,7 @@ import { TelegramChannel } from "./gateway/telegram";
 import { transcribeAudio, type TranscriptionConfig } from "./gateway/stt";
 import { SlackChannel } from "./gateway/slack";
 import { WebhookChannel } from "./gateway/webhook";
+import { DiscordChannel } from "./gateway/discord";
 import { createMessageHandler, chatStreamResponse, type HandleContext } from "./gateway/handler";
 import { startHttpServer } from "./gateway/http";
 import { createConsoleApi } from "./gateway/console-api";
@@ -937,6 +938,7 @@ async function gatewayCommand(args: string[]): Promise<number> {
     const tg = gateway.settings.telegram;
     const sl = gateway.settings.slack;
     const wh = gateway.settings.webhook;
+    const dc = gateway.settings.discord;
     let telegramHandle:
       | ((
           text: string,
@@ -1160,6 +1162,69 @@ async function gatewayCommand(args: string[]): Promise<number> {
         handleForWebhook(msg.text, {
           actor: String(msg.userId),
           source: "webhook",
+          chatId: msg.chatId,
+          userId: msg.userId,
+        }),
+      );
+      return channel;
+    });
+
+    registerChannel("discord", () => {
+      if (!dc?.enabled) throw new ConfigError("gateway.discord is not enabled");
+      const botToken = process.env.DISCORD_BOT_TOKEN || dc.botToken;
+      if (!botToken) {
+        throw new ConfigError(
+          "gateway.discord.enabled requires botToken (config or DISCORD_BOT_TOKEN)",
+        );
+      }
+      const defaultBot = dc.defaultBot as string;
+      const available = listBots(home);
+      const allowWrites = dc.allowWrites === true;
+      const approvalTimeoutMs = dc.approvalTimeoutMs ?? 120_000;
+      let channel: DiscordChannel;
+      const notifyApproval =
+        dc.adminChannel !== undefined
+          ? async (chatId: number, text: string) => channel.sendTo(chatId, text)
+          : undefined;
+      const handleForDiscord = createMessageHandler({
+        home,
+        cwd,
+        config,
+        registry,
+        availableBots: available,
+        defaultBot,
+        allowWrites,
+        approvalTimeoutMs,
+        guard,
+        audit,
+        log,
+        notifyApproval,
+      });
+      channel = new DiscordChannel(
+        {
+          botToken,
+          defaultBot,
+          allowedGuilds: dc.allowedGuilds,
+          allowedChannels: dc.allowedChannels,
+          adminChannel: dc.adminChannel,
+          gatewayUrl: process.env.DISCORD_GATEWAY_URL || undefined,
+          apiBase: process.env.DISCORD_API_BASE || undefined,
+          rateLimitMax: dc.rateLimitMax,
+          rateLimitWindowMs: dc.rateLimitWindowMs,
+          maxMessageLength: dc.maxMessageLength,
+          onRejected: (info) =>
+            audit.append(
+              "channel_reject",
+              info.userId,
+              `discord message rejected (${info.reason})`,
+            ),
+        },
+        log,
+      );
+      channel.onMessage((msg) =>
+        handleForDiscord(msg.text, {
+          actor: String(msg.userId),
+          source: "discord",
           chatId: msg.chatId,
           userId: msg.userId,
         }),

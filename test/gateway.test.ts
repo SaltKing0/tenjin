@@ -84,6 +84,7 @@ describe("parseGatewaySettings", () => {
       telegram: null,
       slack: null,
       webhook: null,
+      discord: null,
       channels: [],
       heartbeat: null,
       listen: null,
@@ -95,6 +96,7 @@ describe("parseGatewaySettings", () => {
       telegram: null,
       slack: null,
       webhook: null,
+      discord: null,
       channels: [],
       heartbeat: null,
       listen: null,
@@ -236,7 +238,7 @@ describe("parseGatewaySettings", () => {
     const explicit = parseGatewaySettings({ channels: ["telegram"] });
     expect(explicit.channels).toEqual(["telegram"]);
     expect(() => parseGatewaySettings({ channels: "notalist" })).toThrow(/must be a list/);
-    expect(() => parseGatewaySettings({ channels: ["discord"] })).toThrow(/unknown channel/);
+    expect(() => parseGatewaySettings({ channels: ["matrix"] })).toThrow(/unknown channel/);
     expect(() => parseGatewaySettings({ channels: [3] })).toThrow(/strings/);
     expect(parseGatewaySettings({ channels: ["telegram", "slack"] }).channels).toEqual([
       "telegram",
