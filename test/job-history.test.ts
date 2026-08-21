@@ -182,6 +182,31 @@ describe("Gateway hydration", () => {
     expect(job.history[0]!.status).toBe("error");
     expect(job.lastRun?.error).toBe("boom");
   });
+
+  test("reload keeps hydrated history (SIGHUP path does not swallow it)", () => {
+    const history: JobRunRecord[] = [rec(100), rec(50)];
+    saveGatewayState(home, { version: 2, jobs: { j1: { history } } });
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({ gateway: { jobs: [{ name: "j1", bot: "worker", prompt: "p", every: "10m" }] } }),
+      registry: mockRegistry(),
+      log: () => {},
+    });
+    // Sanity: hydrated at boot.
+    expect(gw.listJobs().find((j) => j.name === "j1")!.history.length).toBe(2);
+
+    // Reload (as fired by SIGHUP after `tenjin job add/rm`). The job set is
+    // rebuilt from the config, but persisted history must survive.
+    gw.reload(
+      config({ gateway: { jobs: [{ name: "j1", bot: "worker", prompt: "p", every: "10m" }] } }),
+    );
+    const job = gw.listJobs().find((j) => j.name === "j1")!;
+    expect(job.history.length).toBe(2);
+    expect(job.history[0]!.status).toBe("ok");
+    // lastRun stays projected from the newest history entry (both `rec()`s are ok).
+    expect(job.lastRun?.stopReason).toBe("end_turn");
+  });
 });
 
 describe("Gateway runNow records history", () => {

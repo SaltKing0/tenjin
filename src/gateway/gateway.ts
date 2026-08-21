@@ -447,6 +447,19 @@ export class Gateway {
     // #19/#151: hydrate each job's persisted run history so a restart keeps the
     // last N runs (and knows which scheduled runs have already happened).
     this.state = loadGatewayState(deps.home, this.historyLen, (m) => this.log(m));
+    this.hydrateJobHistories();
+    this.pruneStaleState();
+  }
+
+  /**
+   * Hydrate each job's persisted run history from `this.state` so boot and
+   * reload keep the last N runs (and know which scheduled runs have already
+   * happened). #185: without this on the reload path, a SIGHUP-triggered
+   * reload rebuilt every job with `history: []` — empty console, blind
+   * catch-up, and the next run persisted the truncated history over the
+   * saved runs.
+   */
+  private hydrateJobHistories(): void {
     for (const job of this.jobs) {
       const saved = this.state.jobs[job.name];
       if (saved?.history && saved.history.length > 0) {
@@ -454,7 +467,6 @@ export class Gateway {
         job.lastRun = toLastRun(job.history[0]!);
       }
     }
-    this.pruneStaleState();
   }
 
   /**
@@ -467,6 +479,9 @@ export class Gateway {
     this.deps.config = config;
     this.settings = parseGatewaySettings(config.gateway);
     this.jobs = this.buildAllJobs(Date.now());
+    // #185: rebuild the job set but keep hydrated history — a SIGHUP reload must
+    // not wipe the persisted run history (and the `lastRun`-based catch-up).
+    this.hydrateJobHistories();
     this.pruneStaleState();
   }
 
