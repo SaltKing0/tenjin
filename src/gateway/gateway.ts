@@ -27,6 +27,27 @@ export interface JobLastRun {
   error?: string;
 }
 
+/** Outcome of one completed job run (ok / error / timeout). */
+export type JobRunStatus = "ok" | "error" | "timeout";
+
+/** One entry in a job's persisted run history (#151). */
+export interface JobRunRecord {
+  /** Run end (for a completed run) epoch ms. */
+  atMs: number;
+  status: JobRunStatus;
+  stopReason: string;
+  costUSD: number;
+  /** Wall-clock duration of the run in ms. */
+  durationMs: number;
+  /** Session log id, when session logging recorded one. */
+  sessionId?: string;
+  /** Error/timeout detail, when the run did not finish cleanly. */
+  error?: string;
+}
+
+/** Default number of completed runs kept per job. */
+export const DEFAULT_JOB_HISTORY_LEN = 20;
+
 export interface JobView {
   name: string;
   bot: string;
@@ -40,6 +61,16 @@ export interface JobView {
     costUSD: number;
     error?: string;
   } | null;
+  /** Completed runs, newest first (persisted; survives restarts). */
+  history: Array<{
+    at: string;
+    status: "ok" | "error" | "timeout";
+    stopReason: string;
+    costUSD: number;
+    durationMs: number;
+    sessionId?: string;
+    error?: string;
+  }>;
   nextDue: string;
   nextDueMs: number;
   running: boolean;
@@ -63,6 +94,8 @@ export interface ScheduledJob {
   running: boolean;
   kind: "job" | "heartbeat";
   lastRun: JobLastRun | null;
+  /** Completed runs, newest first; capped and persisted across restarts. */
+  history: JobRunRecord[];
   /** Optional hard cap on a single run (ms). A hung run is released after this. */
   timeoutMs?: number;
 }
@@ -94,6 +127,7 @@ export function buildJobs(settings: GatewaySettings, fromMs: number): ScheduledJ
     running: false,
     kind: "job" as const,
     lastRun: null,
+    history: [],
     ...(j.timeoutMs !== undefined ? { timeoutMs: j.timeoutMs } : {}),
   }));
   if (settings.heartbeat) {
@@ -109,6 +143,7 @@ export function buildJobs(settings: GatewaySettings, fromMs: number): ScheduledJ
       running: false,
       kind: "heartbeat",
       lastRun: null,
+      history: [],
     });
   }
   return jobs;
@@ -149,6 +184,7 @@ export function buildBotJobs(
         running: false,
         kind: "job" as const,
         lastRun: null,
+        history: [],
         ...(r.timeoutMs !== undefined ? { timeoutMs: r.timeoutMs } : {}),
       });
     }
@@ -165,6 +201,7 @@ export function buildBotJobs(
         running: false,
         kind: "heartbeat" as const,
         lastRun: null,
+        history: [],
       });
     }
   }
@@ -188,6 +225,16 @@ export function jobView(job: ScheduledJob): JobView {
           ...(job.lastRun.error ? { error: job.lastRun.error } : {}),
         }
       : null,
+    // Newest first; job.history is already kept newest-first.
+    history: job.history.map((r) => ({
+      at: new Date(r.atMs).toISOString(),
+      status: r.status,
+      stopReason: r.stopReason,
+      costUSD: r.costUSD,
+      durationMs: r.durationMs,
+      ...(r.sessionId ? { sessionId: r.sessionId } : {}),
+      ...(r.error ? { error: r.error } : {}),
+    })),
     nextDue: new Date(job.nextDueMs).toISOString(),
     nextDueMs: job.nextDueMs,
     running: job.running,
@@ -214,33 +261,108 @@ export function msUntilNextJob(jobs: ScheduledJob[], nowMs: number): number {
 }
 
 /**
- * Persisted gateway state so a restart can tell which scheduled runs have
- * already happened. Kept deliberately tiny: just the last run per job.
+ * Persisted gateway state (v2): per-job run history so a restart keeps the last
+ * N completed runs per job. v1 files (a single `lastRun` per job) are migrated
+ * to a one-entry history on load.
  */
+interface GatewayStateJob {
+  history: JobRunRecord[];
+}
+
 interface GatewayStateFile {
-  version: 1;
-  jobs: Record<string, { lastRun: JobLastRun | null }>;
+  version: 2;
+  jobs: Record<string, GatewayStateJob>;
+}
+
+/** Prepend a completed run to a job's history, capped to the newest `cap` runs. */
+export function pushRun(
+  history: JobRunRecord[],
+  run: JobRunRecord,
+  cap: number,
+): JobRunRecord[] {
+  const next = [run, ...history];
+  return cap > 0 && next.length > cap ? next.slice(0, cap) : next;
+}
+
+/** Project the newest history entry back onto the legacy `lastRun` shape. */
+function toLastRun(r: JobRunRecord): JobLastRun {
+  return {
+    atMs: r.atMs,
+    stopReason: r.stopReason,
+    costUSD: r.costUSD,
+    ...(r.error ? { error: r.error } : {}),
+  };
+}
+
+/**
+ * Sanitize a loaded history array: drop malformed entries, coerce bad statuses
+ * to "ok", and cap the length. Never throws — a corrupt entry is skipped.
+ */
+export function normalizeHistory(raw: unknown, cap: number): JobRunRecord[] {
+  if (!Array.isArray(raw)) return [];
+  const out: JobRunRecord[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== "object") continue;
+    const rec = r as Partial<JobRunRecord>;
+    if (typeof rec.atMs !== "number" || !Number.isFinite(rec.atMs)) continue;
+    out.push({
+      atMs: rec.atMs,
+      status: rec.status === "error" || rec.status === "timeout" ? rec.status : "ok",
+      stopReason: typeof rec.stopReason === "string" ? rec.stopReason : "",
+      costUSD: typeof rec.costUSD === "number" ? rec.costUSD : 0,
+      durationMs: typeof rec.durationMs === "number" ? rec.durationMs : 0,
+      ...(typeof rec.sessionId === "string" ? { sessionId: rec.sessionId } : {}),
+      ...(typeof rec.error === "string" ? { error: rec.error } : {}),
+    });
+  }
+  return cap > 0 && out.length > cap ? out.slice(0, cap) : out;
 }
 
 function statePath(home: string): string {
   return join(home, "gateway-state.json");
 }
 
-export function loadGatewayState(home: string): GatewayStateFile {
-  const empty: GatewayStateFile = { version: 1, jobs: {} };
+export function loadGatewayState(
+  home: string,
+  historyCap = DEFAULT_JOB_HISTORY_LEN,
+): GatewayStateFile {
+  const empty: GatewayStateFile = { version: 2, jobs: {} };
   const path = statePath(home);
   if (!existsSync(path)) return empty;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as GatewayStateFile;
-    if (
-      parsed &&
-      parsed.version === 1 &&
-      parsed.jobs &&
-      typeof parsed.jobs === "object"
-    ) {
-      return parsed;
+    const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    if (!raw || typeof raw !== "object") return empty;
+    const jobsRaw = raw.jobs;
+    if (!jobsRaw || typeof jobsRaw !== "object") return empty;
+    const jobs: Record<string, GatewayStateJob> = {};
+    for (const [name, entry] of Object.entries(jobsRaw as Record<string, unknown>)) {
+      if (!entry || typeof entry !== "object") continue;
+      const e = entry as Record<string, unknown>;
+      if (raw.version === 1) {
+        // Migrate the old single `lastRun` into a one-entry history.
+        const lr = e.lastRun as Partial<JobLastRun> | null | undefined;
+        jobs[name] = {
+          history: lr && typeof lr.atMs === "number"
+            ? normalizeHistory(
+                [
+                  {
+                    atMs: lr.atMs,
+                    status: lr.error ? "error" : "ok",
+                    stopReason: lr.stopReason ?? "",
+                    costUSD: lr.costUSD ?? 0,
+                    durationMs: 0,
+                    ...(lr.error ? { error: lr.error } : {}),
+                  },
+                ],
+                historyCap,
+              )
+            : [],
+        };
+      } else {
+        jobs[name] = { history: normalizeHistory(e.history, historyCap) };
+      }
     }
-    return empty;
+    return { version: 2, jobs };
   } catch {
     return empty;
   }
@@ -271,16 +393,21 @@ export class Gateway {
   settings: GatewaySettings;
   jobs: ScheduledJob[];
   private state: GatewayStateFile;
+  private historyLen: number;
 
   constructor(private deps: GatewayDeps) {
     this.settings = parseGatewaySettings(deps.config.gateway);
     this.jobs = this.buildAllJobs(Date.now());
-    // #19: hydrate the last run of each job from persisted state so a restart
-    // knows which scheduled runs have already happened (enables catch-up).
-    this.state = loadGatewayState(deps.home);
+    this.historyLen = this.settings.jobHistoryLen ?? DEFAULT_JOB_HISTORY_LEN;
+    // #19/#151: hydrate each job's persisted run history so a restart keeps the
+    // last N runs (and knows which scheduled runs have already happened).
+    this.state = loadGatewayState(deps.home, this.historyLen);
     for (const job of this.jobs) {
-      const saved = this.state.jobs[job.name]?.lastRun;
-      if (saved) job.lastRun = saved;
+      const saved = this.state.jobs[job.name];
+      if (saved?.history && saved.history.length > 0) {
+        job.history = saved.history;
+        job.lastRun = toLastRun(job.history[0]!);
+      }
     }
   }
 
@@ -366,9 +493,9 @@ export class Gateway {
     return this.jobs.map(jobView);
   }
 
-  /** Persist a job's last run so catch-up works across restarts. */
+  /** Persist a job's run history so catch-up + history survive restarts (#151). */
   private persistJob(job: ScheduledJob): void {
-    this.state.jobs[job.name] = { lastRun: job.lastRun };
+    this.state.jobs[job.name] = { history: job.history };
     try {
       saveGatewayState(this.deps.home, this.state);
     } catch {
@@ -453,6 +580,7 @@ export class Gateway {
 
   private async execute(job: ScheduledJob): Promise<HeadlessResult> {
     this.log(`job ${job.name} start (bot=${job.botName})`);
+    const runStartedMs = Date.now();
     emit("job.status", { name: job.name, bot: job.botName, running: true });
     try {
       const profile = resolveBot(this.deps.home, job.botName);
@@ -534,11 +662,25 @@ export class Gateway {
             `job ${job.name} timed out after ${job.timeoutMs}ms`,
           )
         : await headless;
+      const finishedAtMs = Date.now();
+      const sessionId = result.sessionId;
       job.lastRun = {
-        atMs: Date.now(),
+        atMs: finishedAtMs,
         stopReason: result.stopReason,
         costUSD: result.costUSD,
       };
+      job.history = pushRun(
+        job.history,
+        {
+          atMs: finishedAtMs,
+          status: "ok",
+          stopReason: result.stopReason,
+          costUSD: result.costUSD,
+          durationMs: finishedAtMs - runStartedMs,
+          ...(sessionId ? { sessionId } : {}),
+        },
+        this.historyLen,
+      );
       this.persistJob(job);
       this.log(
         `job ${job.name} done (${result.stopReason}, ${formatUSD(result.costUSD)})`,
@@ -564,15 +706,29 @@ export class Gateway {
       }
       return result;
     } catch (e) {
-      if (!job.lastRun) {
-        job.lastRun = {
-          atMs: Date.now(),
-          stopReason: "error",
+      const err = e instanceof Error ? e : new Error(String(e));
+      const isTimeout = /timed out/.test(err.message);
+      const status: JobRunStatus = isTimeout ? "timeout" : "error";
+      const failedAtMs = Date.now();
+      job.lastRun = {
+        atMs: failedAtMs,
+        stopReason: isTimeout ? "timeout" : "error",
+        costUSD: 0,
+        error: err.message,
+      };
+      job.history = pushRun(
+        job.history,
+        {
+          atMs: failedAtMs,
+          status,
+          stopReason: job.lastRun.stopReason,
           costUSD: 0,
-          error: (e as Error).message,
-        };
-        this.persistJob(job);
-      }
+          durationMs: failedAtMs - runStartedMs,
+          error: err.message,
+        },
+        this.historyLen,
+      );
+      this.persistJob(job);
       throw e;
     } finally {
       const lr = job.lastRun;

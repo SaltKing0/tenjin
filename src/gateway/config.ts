@@ -72,6 +72,8 @@ export interface GatewaySettings {
   listen: ListenConfig | null;
   allowWrites: boolean;
   catchUp: CatchUpConfig;
+  /** Number of completed runs kept per job (default 20, #151). */
+  jobHistoryLen?: number;
 }
 
 interface RawJob {
@@ -294,6 +296,15 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     if (settings.telegram?.enabled) defaults.push("telegram");
     if (settings.slack?.enabled) defaults.push("slack");
     settings.channels = defaults;
+  }
+
+  // #151: number of completed runs kept per job (default 20).
+  if (gw.jobHistoryLen !== undefined && gw.jobHistoryLen !== null) {
+    const n = gw.jobHistoryLen;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1) {
+      throw new ConfigError("gateway.jobHistoryLen must be a positive integer");
+    }
+    settings.jobHistoryLen = n;
   }
 
   const rawHb = gw.heartbeat;
