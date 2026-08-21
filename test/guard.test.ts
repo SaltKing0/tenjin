@@ -86,6 +86,52 @@ describe("SecurityGuard command scanning", () => {
   });
 });
 
+describe("SecurityGuard obfuscation hardening", () => {
+  const guard = new SecurityGuard([...DEFAULT_BLOCKED_PATTERNS]);
+
+  const blockedEncoded: Array<[string, string]> = [
+    ["echo LmVudg== | base64 -d", "base64-encoded .env via pipe"],
+    ["base64 -d <<< 'LmVudg=='", "base64-encoded .env via herestring"],
+    ["base64 -d <<< LmVudg== > x", "base64-encoded .env via herestring redirect"],
+    ["echo 2e656e76 | xxd -r -p", "hex-encoded .env"],
+    ["printf '\\x2e\\x65\\x6e\\x76' > f", "printf hex escapes"],
+    ["printf '\\x2e\\x65\\x6e\\x76.local' > f", "printf hex escapes .env.local"],
+    ["printf '\\056\\145\\156\\166' > f", "printf octal escapes"],
+  ];
+  for (const [cmd, name] of blockedEncoded) {
+    test(`blocks ${name}: ${cmd}`, () => {
+      expect(guard.checkCommand(cmd).blocked).toBe(true);
+    });
+  }
+
+  const blockedScripts: Array<[string, string]> = [
+    ["python -c \"print(open('.env').read())\"", "python -c inline .env read"],
+    ["node -e \"require('fs').readFileSync('.env')\"", "node -e inline .env read"],
+    ["python3 -c \"print(open('config/server.pem').read())\"", "python -c inline .pem read"],
+    ["sh -c \"cat /app/.env.production\"", "sh -c inline .env.production read"],
+  ];
+  for (const [cmd, name] of blockedScripts) {
+    test(`blocks ${name}: ${cmd}`, () => {
+      expect(guard.checkCommand(cmd).blocked).toBe(true);
+    });
+  }
+
+  test("blocks encoded payload inside an interpreter inline script", () => {
+    expect(
+      guard.checkCommand(
+        "python -c \"print(__import__('base64').b64decode('LmVudg==').decode())\"",
+      ).blocked,
+    ).toBe(true);
+  });
+
+  test("allows legitimate commands with harmless encoded-looking args", () => {
+    expect(guard.checkCommand("git commit -m \"add feature\" && bun test").blocked).toBe(false);
+    expect(guard.checkCommand("echo dGVzdA== | base64 -d").blocked).toBe(false); // 'test'
+    expect(guard.checkCommand("xxd -r -p <<< 68656c6c6f").blocked).toBe(false); // 'hello'
+    expect(guard.checkCommand("printf '\\x68\\x65\\x6c\\x6c\\x6f'").blocked).toBe(false); // 'hello'
+  });
+});
+
 describe("checkTool mapping", () => {
   const guard = new SecurityGuard([".env"]);
   test("path tools checked", () => {
