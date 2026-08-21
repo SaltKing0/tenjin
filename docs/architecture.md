@@ -89,6 +89,14 @@ provides the `ask_bot` tool so one bot can delegate to another;
 [`src/bots/tools.ts`](../src/bots/tools.ts) exposes `send_message` /
 `check_inbox` to bots.
 
+**Orphaned-task reconciliation (#180, #240).** A task whose owning process
+died (gateway restart, REPL/one-shot/CLI exit) would otherwise linger as
+`running`/`pending` and make a later dependent burn its full timeout.
+`reconcileOrphanedTasks` fails such tasks as `orphaned by restart`; it runs at
+gateway and REPL boot and, since #240, lazily on the first dependency lookup
+in any process (throttled per home) — so a dependent in a fresh CLI/one-shot
+process fails fast instead of waiting out its timeout.
+
 **Delegation-tree budget (#154).** A chain of delegations (a bot that itself
 delegates) can multiply work without any single per-run cap catching it. A
 `TreeBudget` fixes this by giving the whole tree one shared counter: the root

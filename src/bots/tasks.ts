@@ -173,8 +173,29 @@ export function reconcileOrphanedTasks(
   return swept;
 }
 
+/** #240: how long between lazy orphan sweeps per home (keeps hot lookups cheap). */
+const ORPHAN_SWEEP_THROTTLE_MS = 1000;
+const lastOrphanSweepAt = new Map<string, number>();
+
+/**
+ * #240: lazily sweep orphaned tasks on the dependency-lookup hot path.
+ * `reconcileOrphanedTasks` was only invoked at gateway/REPL boot, so a task
+ * orphaned by a dead one-shot/CLI process lingered until a gateway started —
+ * a later dependent in a fresh CLI process waited out its full timeout. Firing
+ * it from `findTaskById` (throttled per home) makes any first dependency
+ * lookup in any process clear orphans, so dependents fail fast everywhere.
+ */
+function sweepOrphansLazily(home: string): void {
+  const now = Date.now();
+  const last = lastOrphanSweepAt.get(home) ?? 0;
+  if (now - last < ORPHAN_SWEEP_THROTTLE_MS) return;
+  lastOrphanSweepAt.set(home, now);
+  reconcileOrphanedTasks(home);
+}
+
 /** Task ids are globally unique (UUIDs); locate a task across every bot. */
 export function findTaskById(home: string, taskId: string): BotTask | null {
+  sweepOrphansLazily(home);
   for (const bot of listBots(home)) {
     const t = readTask(home, bot, taskId);
     if (t) return t;
