@@ -332,3 +332,58 @@ function waitForStatus(
     tick();
   });
 }
+
+describe("task delegation tree budget (#154)", () => {
+  function toolCallingProvider(calls: { n: number }): Provider {
+    return {
+      name: "tc",
+      async chat(): Promise<ChatResponse> {
+        calls.n += 1;
+        return {
+          stopReason: "tool_use",
+          content: [
+            { type: "tool_use", id: "tc", name: "read_file", input: { path: "." } },
+          ],
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      },
+    } as unknown as Provider;
+  }
+
+  test("a per-task maxTreeIterations seeds its own tree, stops the run, and reports usage", async () => {
+    const calls = { n: 0 };
+    const started = startAsyncTask(deps(toolCallingProvider(calls)), {
+      targetBot: "researcher",
+      message: "m",
+      maxTreeIterations: 1,
+    });
+    const task = await started.settled;
+    expect(task.status).toBe("error");
+    expect(task.error).toContain("delegation tree budget exhausted");
+    // the task snapshot records the shared tree it created (+ the tripping iteration)
+    expect(task.treeMaxIterations).toBe(1);
+    expect(task.treeUsedIterations ?? 0).toBeGreaterThan(0);
+    expect(calls.n).toBeGreaterThan(0);
+  });
+
+  test("independent tasks seed independent trees and do not share a limit", async () => {
+    const ca = { n: 0 };
+    const cb = { n: 0 };
+    const a = startAsyncTask(deps(toolCallingProvider(ca)), {
+      targetBot: "researcher",
+      message: "a",
+      maxTreeIterations: 1,
+    });
+    const b = startAsyncTask(deps(toolCallingProvider(cb)), {
+      targetBot: "researcher",
+      message: "b",
+      maxTreeIterations: 1,
+    });
+    const [ta, tb] = await Promise.all([a.settled, b.settled]);
+    expect(ta.status).toBe("error");
+    expect(tb.status).toBe("error");
+    // each is capped by its OWN tree counter, independently
+    expect(ta.treeMaxIterations).toBe(1);
+    expect(tb.treeMaxIterations).toBe(1);
+  });
+});
