@@ -15,7 +15,9 @@ const $app = document.getElementById("app");
 const urlToken = new URLSearchParams(location.search).get("token");
 if (urlToken && urlToken.trim()) {
   localStorage.setItem("tenjin_token", urlToken.trim());
-  history.replaceState(null, "", location.pathname);
+  // keep the hash (#route) so a deep link like /?token=X#jobs still opens the
+  // target panel after the auto-accept instead of being thrown back to chat.
+  history.replaceState(null, "", location.pathname + location.hash);
 }
 
 let token = localStorage.getItem("tenjin_token") || "";
