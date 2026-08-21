@@ -22,6 +22,20 @@ import { createSaveSkillTool } from "../tools/skill-writer";
 
 export type ToolPolicy = "read-only" | "none" | "full";
 
+const POLICY_RANK: Record<ToolPolicy, number> = { none: 0, "read-only": 1, full: 2 };
+
+/** A bot policy can only tighten the caller's policy, never upgrade it. */
+export function capPolicy(base: ToolPolicy, botCap?: ToolPolicy): ToolPolicy {
+  if (!botCap) return base;
+  return POLICY_RANK[botCap] < POLICY_RANK[base] ? botCap : base;
+}
+
+export function applyDenyTools(defs: ToolDef[], deny?: string[]): ToolDef[] {
+  if (!deny?.length) return defs;
+  const blocked = new Set(deny);
+  return defs.filter((d) => !blocked.has(d.name));
+}
+
 export interface HeadlessOptions {
   provider: Provider;
   model: string;
@@ -32,6 +46,7 @@ export interface HeadlessOptions {
   capUSD: number;
   pricing?: PricingConfig;
   policy?: ToolPolicy;
+  denyTools?: string[];
   agentsMd?: string | null;
   extraTools?: ToolDef[];
   home?: string;
@@ -113,7 +128,10 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     provider: opts.provider,
     model: opts.model,
     system,
-    tools: [...toolsForPolicy(policy, skillDirs), ...(opts.extraTools ?? [])],
+    tools: applyDenyTools(
+      [...toolsForPolicy(policy, skillDirs), ...(opts.extraTools ?? [])],
+      opts.denyTools,
+    ),
     messages: [{ role: "user", content: opts.message }],
     budget,
     maxTokens: opts.maxTokens,

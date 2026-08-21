@@ -123,3 +123,34 @@ test("directories without SOUL.md are not bots", () => {
   mkdirSync(join(botsDir(home), "notabot"), { recursive: true });
   expect(listBots(home)).toEqual([]);
 });
+
+test("bot config.yaml parses per-bot security + telegram allowlist", () => {
+  createBot(home, "locked");
+  writeFileSync(
+    join(botsDir(home), "locked", "config.yaml"),
+    [
+      "security:",
+      "  policy: read-only",
+      "  blockedPatterns:",
+      "    - secrets/*",
+      "  denyTools:",
+      "    - bash",
+      "telegram:",
+      "  allowedUsers: [42, 99]",
+      "",
+    ].join("\n"),
+  );
+  const profile = resolveBot(home, "locked");
+  expect(profile.config.security).toEqual({
+    policy: "read-only",
+    blockedPatterns: ["secrets/*"],
+    denyTools: ["bash"],
+  });
+  expect(profile.config.telegram).toEqual({ allowedUsers: [42, 99] });
+});
+
+test("invalid bot security.policy is rejected", () => {
+  createBot(home, "badpol");
+  writeFileSync(join(botsDir(home), "badpol", "config.yaml"), "security:\n  policy: write-all\n");
+  expect(() => resolveBot(home, "badpol")).toThrow(/policy/);
+});

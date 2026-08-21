@@ -2,7 +2,8 @@ import type { HarnessConfig } from "../config/types";
 import { ConfigError } from "../config/types";
 import { ProviderRegistry } from "../provider/registry";
 import { resolveBot, botModelRef, botBudgetUSD, type BotProfile } from "../bots/profile";
-import { runHeadless, type HeadlessOptions } from "../agent/headless";
+import { runHeadless, capPolicy, type HeadlessOptions } from "../agent/headless";
+import { guardForBot } from "../security/guard";
 import { formatUSD } from "../agent/budget";
 import { parseSchedule, nextRun, type Schedule } from "./schedule";
 import { Redactor } from "../security/redact";
@@ -169,14 +170,19 @@ export class Gateway {
       maxTokens: this.deps.config.maxTokens,
       capUSD: botBudgetUSD(profile, this.deps.config.budgetUSD),
       pricing: this.deps.config.pricing,
-      policy: "read-only",
+      policy: capPolicy("read-only", profile.config.security?.policy),
+      denyTools: profile.config.security?.denyTools,
       extraTools,
       approve,
       home: this.deps.home,
       memoryDir: profile.memoryDir,
       sessionLogDir: profile.sessionsDir,
       sessionBot: profile.name,
-      guard: this.deps.guard,
+      guard: guardForBot(
+        this.deps.config.security,
+        profile.config.security,
+        this.deps.guard?.onBlock,
+      ),
       redactor: Redactor.fromConfig(this.deps.config.security),
     });
     this.log(

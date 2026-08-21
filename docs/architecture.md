@@ -213,6 +213,8 @@ gateway:
     enabled: true
     defaultBot: researcher
     allowedUsers: [123456789] # REQUIRED allowlist (security)
+    bindings:                 # optional per-bot sender allowlists
+      researcher: [123456789]
     adminChatId: 123456789
     allowWrites: true
     approvalTimeoutMs: 120000
@@ -259,7 +261,7 @@ gateway:
 ├── audit.jsonl                 # audit event trail
 └── bots/<name>/
     ├── SOUL.md                 # bot personality
-    ├── config.yaml             # per-bot model / budget (optional)
+    ├── config.yaml             # per-bot model / budget / security / telegram allowlist (optional)
     ├── sessions/ · memory/ · inbox/
 ```
 

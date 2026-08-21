@@ -116,6 +116,31 @@ describe("parseGatewaySettings", () => {
     ).toThrow(/defaultBot/);
   });
 
+  test("telegram bindings map bot → allowed senders", () => {
+    const s = parseGatewaySettings({
+      telegram: {
+        enabled: true,
+        allowedUsers: [42, 99],
+        defaultBot: "researcher",
+        bindings: { researcher: [42], writer: [99] },
+      },
+    });
+    expect(s.telegram?.bindings).toEqual({ researcher: [42], writer: [99] });
+  });
+
+  test("telegram bindings reject non-numeric user ids", () => {
+    expect(() =>
+      parseGatewaySettings({
+        telegram: {
+          enabled: true,
+          allowedUsers: [42],
+          defaultBot: "researcher",
+          bindings: { researcher: ["alice"] },
+        },
+      }),
+    ).toThrow(/bindings/);
+  });
+
   test("telegram rate-limit and length config parsed (#69)", () => {
     const s = parseGatewaySettings({
       telegram: {

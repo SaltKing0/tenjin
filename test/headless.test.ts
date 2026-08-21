@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runHeadless, toolsForPolicy } from "../src/agent/headless";
+import { runHeadless, toolsForPolicy, capPolicy, applyDenyTools } from "../src/agent/headless";
 import type {
   ChatRequest,
   ChatResponse,
@@ -62,6 +62,21 @@ test("toolsForPolicy returns expected sets", () => {
     "edit_file",
     "bash",
   ]);
+});
+
+test("capPolicy never upgrades and can only tighten", () => {
+  expect(capPolicy("full", "read-only")).toBe("read-only");
+  expect(capPolicy("read-only", "full")).toBe("read-only");
+  expect(capPolicy("full", "none")).toBe("none");
+  expect(capPolicy("full", undefined)).toBe("full");
+  expect(capPolicy("read-only", "none")).toBe("none");
+});
+
+test("applyDenyTools strips named tools so a bot is stricter than global full policy", () => {
+  const full = toolsForPolicy("full");
+  const denied = applyDenyTools(full, ["bash", "write_file"]);
+  expect(denied.map((t) => t.name)).toEqual(["read_file", "glob", "grep", "edit_file"]);
+  expect(applyDenyTools(full, undefined).map((t) => t.name)).toEqual(full.map((t) => t.name));
 });
 
 test("toolsForPolicy adds use_skill/save_skill by policy when skill dirs are given", () => {

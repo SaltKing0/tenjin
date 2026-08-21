@@ -252,6 +252,163 @@ test("bot-pinned model is named when its provider key is missing", async () => {
   });
 });
 
+test("bot policy and denyTools are stricter than gateway allowWrites", async () => {
+  writeFileSync(
+    join(home, "bots", "tester", "config.yaml"),
+    "security:\n  policy: read-only\n  denyTools:\n    - glob\n",
+  );
+  const provider = streamingProvider();
+  const handle = createMessageHandler({
+    home,
+    cwd: home,
+    config: config(),
+    registry: { get: () => provider } as never,
+    availableBots: ["tester"],
+    defaultBot: "tester",
+    allowWrites: true,
+    approvalTimeoutMs: 1000,
+    guard: null,
+    audit: { append: () => {} } as unknown as AuditLog,
+    log: () => {},
+  });
+  await handle("hi", { actor: "console", source: "http" });
+  const names = provider.requests[0]?.tools.map((t) => t.name) ?? [];
+  expect(names).toContain("read_file");
+  expect(names).not.toContain("glob");
+  expect(names).not.toContain("write_file");
+  expect(names).not.toContain("bash");
+  expect(names).not.toContain("edit_file");
+});
+
+test("telegram sender only reaches a bound bot (#59)", async () => {
+  createBot(home, "researcher");
+  createBot(home, "writer");
+  writeFileSync(
+    join(home, "bots", "researcher", "config.yaml"),
+    "model: anthropic:claude-sonnet-4-5\ntelegram:\n  allowedUsers: [42]\n",
+  );
+  writeFileSync(
+    join(home, "bots", "writer", "config.yaml"),
+    "model: openai:gpt-4o\ntelegram:\n  allowedUsers: [99]\n",
+  );
+
+  const seen: string[] = [];
+  const researcher: Provider = {
+    name: "mock",
+    async chat() {
+      seen.push("researcher");
+      return {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "from researcher" }],
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    },
+  };
+  const writer: Provider = {
+    name: "mock",
+    async chat() {
+      seen.push("writer");
+      return {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "from writer" }],
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    },
+  };
+
+  const handle = createMessageHandler({
+    home,
+    cwd: home,
+    config: config(),
+    registry: {
+      get: (name: string) => (name === "openai" ? writer : researcher),
+    } as never,
+    availableBots: ["researcher", "writer"],
+    defaultBot: "writer",
+    allowWrites: false,
+    approvalTimeoutMs: 1000,
+    guard: null,
+    audit: { append: () => {} } as unknown as AuditLog,
+    log: () => {},
+  });
+
+  const reply = await handle("hello", {
+    actor: "42",
+    source: "telegram",
+    userId: 42,
+  });
+  expect(reply).toBe("from researcher");
+  expect(seen).toEqual(["researcher"]);
+
+  const denied = await handle("@writer draft this", {
+    actor: "42",
+    source: "telegram",
+    userId: 42,
+  });
+  expect(denied).toMatch(/writer/);
+  expect(seen).toEqual(["researcher"]);
+
+  const asWriter = await handle("hello", {
+    actor: "99",
+    source: "telegram",
+    userId: 99,
+  });
+  expect(asWriter).toBe("from writer");
+  expect(seen).toEqual(["researcher", "writer"]);
+
+  // HTTP/console has no telegram user: defaultBot still works.
+  const fromHttp = await handle("hello", { actor: "console", source: "http" });
+  expect(fromHttp).toBe("from writer");
+});
+
+test("gateway telegram.bindings restrict routing without bot-config allowlists", async () => {
+  createBot(home, "researcher");
+  createBot(home, "writer");
+  writeFileSync(join(home, "bots", "researcher", "config.yaml"), "model: anthropic:claude-sonnet-4-5\n");
+  writeFileSync(join(home, "bots", "writer", "config.yaml"), "model: openai:gpt-4o\n");
+  const seen: string[] = [];
+  const researcher: Provider = {
+    name: "mock",
+    async chat() {
+      seen.push("researcher");
+      return {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "from researcher" }],
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    },
+  };
+  const writer: Provider = {
+    name: "mock",
+    async chat() {
+      seen.push("writer");
+      return {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "from writer" }],
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    },
+  };
+  const handle = createMessageHandler({
+    home,
+    cwd: home,
+    config: config(),
+    registry: {
+      get: (name: string) => (name === "openai" ? writer : researcher),
+    } as never,
+    availableBots: ["researcher", "writer"],
+    defaultBot: "writer",
+    allowWrites: false,
+    approvalTimeoutMs: 1000,
+    guard: null,
+    audit: { append: () => {} } as unknown as AuditLog,
+    log: () => {},
+    telegramBindings: { researcher: [42], writer: [99] },
+  });
+  expect(await handle("hi", { actor: "42", source: "telegram", userId: 42 })).toBe("from researcher");
+  expect(seen).toEqual(["researcher"]);
+});
+
 test("provider chat failures also name the active model", async () => {
   const provider: Provider = {
     name: "mock",

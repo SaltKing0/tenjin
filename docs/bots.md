@@ -57,10 +57,24 @@ Per-bot `~/.tenjin/bots/<name>/config.yaml`:
 ```yaml
 model: openai:gpt-4o-mini   # override the default model for this bot
 budgetUSD: 2                # cap this bot's spend; falls back to global budgetUSD
+security:
+  policy: read-only         # cap tools: none | read-only | full (never upgrades the caller)
+  blockedPatterns:          # extra globs, unioned with the global guard
+    - secrets/*
+  denyTools:                # drop these tools even under a full policy
+    - bash
+telegram:
+  allowedUsers: [123456789] # if set, only these Telegram senders may reach this bot
 ```
 
 If `model` is unset, the bot uses the global default. `budgetUSD` overrides the
 global per-session cap for this bot.
+
+`security.policy` and `security.denyTools` can only **restrict** the bot relative
+to the caller (REPL, gateway `allowWrites`, or a read-only job) — a bot cannot
+grant itself write tools the gateway has turned off. `blockedPatterns` are
+**unioned** with the global `security.blockedPatterns` (or the built-in
+defaults). See [docs/security.md](security.md#per-bot-policies).
 
 ## 4. Run it as a bot
 
@@ -84,7 +98,10 @@ gateway:
   telegram:
     enabled: true
     defaultBot: researcher    # inbound Telegram goes to researcher
-    allowedUsers: [123456789] # allowlist
+    allowedUsers: [123456789] # channel door (still required when enabled)
+    bindings:                 # optional per-bot sender allowlists
+      researcher: [123456789]
+      writer: [987654321]
   heartbeat:
     enabled: true
     bot: researcher
