@@ -828,6 +828,11 @@ async function arenaRun(args: string[]): Promise<number> {
     policy: "read-only",
     winnerIndex,
     judge,
+    // #178: adhere to the same security guard + redaction every other path uses.
+    guard: guardForBot(config.security, undefined, (detail) =>
+      stdout.write(`[security] ${detail}\n`),
+    ),
+    redactor: Redactor.fromConfig(config.security),
   });
   stdout.write(renderArena(result, prompt) + "\n");
   return 0;
