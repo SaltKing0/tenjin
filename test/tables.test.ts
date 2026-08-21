@@ -143,20 +143,21 @@ describe("style.css braces are balanced (#283)", () => {
   });
 });
 
-// #302: the dark :root must define --hover/--primary/--on-primary with concrete
-// values. A self-referential value (--hover: var(--hover)) is a cyclic CSS
-// dependency that computes to unset, breaking button.primary and hover
-// backgrounds in the default dark theme. Light theme values live separately
-// in [data-theme="light"], so the dark defaults must stand on their own.
+// #302: the dark :root must define --bg-raised/--accent-strong/--on-accent with
+// concrete values. A self-referential value (--hover: var(--hover)) is a cyclic
+// CSS dependency that computes to unset, breaking button.primary and hover
+// backgrounds in the default dark theme. #330 renamed --hover/--primary to the
+// token scale (--bg-raised/--accent-strong); this pins the concrete values and
+// forbids any self-referential custom property in the stylesheet.
 describe("style.css dark theme variable values (#302)", () => {
   const css = readFileSync(
     join(import.meta.dir, "../src/gateway/console/style.css"),
     "utf8",
   );
 
-  test(":root defines concrete --hover / --primary (not self-referential)", () => {
-    expect(css).toMatch(/:root\s*\{[\s\S]*?--hover:\s*#[0-9a-fA-F]{3,6};/);
-    expect(css).toMatch(/:root\s*\{[\s\S]*?--primary:\s*#[0-9a-fA-F]{3,6};/);
+  test(":root defines concrete --bg-raised / --accent-strong (not self-referential)", () => {
+    expect(css).toMatch(/:root\s*\{[\s\S]*?--bg-raised:\s*#[0-9a-fA-F]{3,6};/);
+    expect(css).toMatch(/:root\s*\{[\s\S]*?--accent-strong:\s*#[0-9a-fA-F]{3,6};/);
   });
 
   test("no cyclic var self-references remain anywhere in the stylesheet", () => {
