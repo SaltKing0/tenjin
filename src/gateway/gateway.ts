@@ -7,7 +7,7 @@ import { resolveBot, listBots, botModelRef, botBudgetUSD, type BotProfile, type 
 import { scanInstalledBots } from "../bots/catalog";
 import { runHeadless, capPolicy, type HeadlessOptions, type HeadlessResult } from "../agent/headless";
 import { guardForBot } from "../security/guard";
-import { resolveParanoid } from "../security/injection";
+import { resolveParanoid, hardenUntrustedInput } from "../security/injection";
 import { createBudget, formatUSD, type Budget } from "../agent/budget";
 import { parseSchedule, nextRun, parseEvery, type Schedule } from "./schedule";
 import { Redactor } from "../security/redact";
@@ -670,7 +670,13 @@ export class Gateway {
         const unread = unreadMessages(profile.inboxDir, inboxPolicy);
         const inboxPart =
           unread.length > 0
-            ? `You have ${unread.length} unread message(s):\n${formatInbox(unread)}\n`
+            ? // #189: bot-to-bot inbox content is untrusted — scan, audit and
+              // frame it before it reaches the heartbeat prompt, matching the
+              // tool-output hardening (a hostile bot could otherwise steer it).
+              `You have ${unread.length} unread message(s):\n${hardenUntrustedInput(formatInbox(unread), {
+                paranoid: resolveParanoid(this.deps.config.security, profile.config.security),
+                audit: (kind, detail) => this.deps.log?.(`[${kind}] ${detail}`),
+              })}\n`
             : "Your inbox is empty.\n";
         message =
           `Heartbeat check. ${inboxPart}` +

@@ -7,7 +7,7 @@ import { ConfigError } from "../config/types";
 import { resolveBot, botModelRef, botBudgetUSD, botDir, listBots } from "./profile";
 import { runHeadless, capPolicy } from "../agent/headless";
 import { guardForBot } from "../security/guard";
-import { resolveParanoid } from "../security/injection";
+import { resolveParanoid, hardenUntrustedInput } from "../security/injection";
 import { formatUSD } from "../agent/budget";
 import { sendMessage, atomicWriteJson } from "./inbox";
 import { emit } from "../gateway/events";
@@ -316,9 +316,19 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
         // bot_task_status for the full text.
         const depResult = dep.result ?? "(no result)";
         const truncated = depResult.length > DEP_RESULT_MAX_CHARS;
-        const depText = truncated
-          ? `${depResult.slice(0, DEP_RESULT_MAX_CHARS)}\n\n(Result truncated; full text via bot_task_status)`
-          : depResult;
+        // #189: dependency results are untrusted data — scan, audit and frame
+        // them before they reach the successor's prompt (a hostile bot could
+        // otherwise steer the run via a planted instruction).
+        const depText = hardenUntrustedInput(
+          truncated
+            ? `${depResult.slice(0, DEP_RESULT_MAX_CHARS)}\n\n(Result truncated; full text via bot_task_status)`
+            : depResult,
+          {
+            paranoid: resolveParanoid(deps.globalConfig.security, profile.config.security),
+            audit: deps.audit,
+            correlationId,
+          },
+        );
 
         // #182: dependency resolved within budget — reset the timer so the run
         // phase gets its own full budget instead of whatever the wait left over.
