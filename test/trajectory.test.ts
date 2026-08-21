@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { renderTrajectory } from "../src/session/trajectory";
+import { renderTrajectory, renderFullTrajectory } from "../src/session/trajectory";
 import type { SessionEvent } from "../src/session/events";
 
 const start: SessionEvent = {
@@ -147,4 +147,29 @@ test("compression boundary event renders a context line", () => {
     },
   ]);
   expect(lines).toContain("~ context: 12.0k -> 3.0k (elided 9.0k)");
+});
+
+describe("renderFullTrajectory (#136)", () => {
+  test("keeps user/assistant text untruncated (no 160-char cap, no ellipsis)", () => {
+    const longText = "start " + "y".repeat(220) + " ENDMARKER";
+    const events: SessionEvent[] = [
+      start,
+      { t: "message", role: "user", content: longText, ts: "t" },
+      {
+        t: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "conclusion " + "z".repeat(200) }],
+        ts: "t",
+      },
+    ];
+    const full = renderFullTrajectory(events);
+    expect(full.join("\n")).toContain(longText);
+    expect(full.join("\n")).toContain("ENDMARKER");
+    expect(full.join("\n")).not.toContain("…");
+
+    // The default console rendering still caps long lines.
+    const capped = renderTrajectory(events).join("\n");
+    expect(capped).not.toContain("ENDMARKER");
+    expect(capped).toContain("…");
+  });
 });
