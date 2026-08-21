@@ -1030,6 +1030,67 @@ describe("job hang release + per-job timeout (#19)", () => {
     if (!result.ok) throw new Error("unreachable");
     expect(result.text).toBe("HELLO");
   });
+
+  // A provider that completes one spending iteration (forcing the loop to a
+  // second call), then hangs on a call that honors the abort signal — models a
+  // real upstream that stops when told to.
+  function abortingHangingProvider() {
+    let calls = 0;
+    const aborted = { fired: false };
+    return {
+      name: "mock",
+      aborted,
+      async chat(_req: unknown, _callbacks?: unknown, signal?: AbortSignal) {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            stopReason: "tool_use",
+            content: [{ type: "tool_use", id: "t1", name: "read_file", input: { path: "." } }],
+            usage: { inputTokens: 100, outputTokens: 50 },
+          };
+        }
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            aborted.fired = true;
+            reject(new Error("aborted"));
+          });
+        });
+      },
+    };
+  }
+
+  test("a job timeout really aborts the run and books spend up to the abort (#190)", async () => {
+    const prov = abortingHangingProvider();
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: { jobs: [{ name: "digest", bot: "worker", prompt: "p", every: "1h", timeoutMs: 40 }] },
+      }),
+      registry: { get: () => prov } as never,
+    });
+
+    const started = Date.now();
+    const result = await gw.runNow("digest");
+    const took = Date.now() - started;
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(String(result.error)).toMatch(/timed out/);
+    expect(took).toBeLessThan(2_000);
+    // the abort reached the hanging provider — the run's work actually ended
+    expect(prov.aborted.fired).toBe(true);
+
+    const job = gw.jobs[0];
+    if (!job) throw new Error("missing job");
+    expect(job.running).toBe(false);
+    // spend from the completed first iteration is booked on the timeout run
+    expect(job.lastRun?.stopReason).toBe("timeout");
+    expect(job.lastRun?.costUSD).toBeGreaterThan(0);
+    // and the persisted history entry carries it too
+    expect(job.history[0]?.status).toBe("timeout");
+    expect(job.history[0]?.costUSD).toBeGreaterThan(0);
+  });
 });
 
 describe("per-bot routines (#102)", () => {
