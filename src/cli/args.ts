@@ -12,7 +12,7 @@ Usage:
   tenjin --resume <id>       continue a previous session
   tenjin --fork <id> [n]     branch a copy at event n (default: end)
   tenjin --bot <name>        run as a specific bot
-  tenjin bot new|list|init-examples   manage bots
+  tenjin bot new|list|export|import|init-examples   manage & package bots
   tenjin tell <bot> <text>   leave a user message in a bot's inbox
   tenjin gateway [--dry-run] always-on gateway (channels, jobs, heartbeats)
                              serves the web console at gateway.listen — no TUI:

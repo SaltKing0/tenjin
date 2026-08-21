@@ -48,6 +48,7 @@ import {
 } from "./bots/profile";
 import { createSendMessageTool, createCheckInboxTool } from "./bots/tools";
 import { createAskBotTool } from "./bots/delegate";
+import { exportBot, importBot } from "./bots/package";
 import { Gateway } from "./gateway/gateway";
 import {
   SecurityGuard,
@@ -379,6 +380,29 @@ function botCommand(args: string[]): number {
         for (const b of bots) stdout.write(`${b}\n`);
         return 0;
       }
+      case "export": {
+        if (!name) {
+          stdout.write("usage: tenjin bot export <name>\n");
+          return 2;
+        }
+        const res = exportBot(home, name, { cwd: process.cwd() });
+        stdout.write(`exported ${res.name} → ${res.file}\n`);
+        stdout.write(`  included (${res.manifest.length}): ${res.manifest.join(", ") || "(nothing)"}\n`);
+        stdout.write(
+          "  note: sessions, memory and inbox are never packaged; providers.yaml keys stay on this machine\n",
+        );
+        return 0;
+      }
+      case "import": {
+        if (!name) {
+          stdout.write("usage: tenjin bot import <file.tar.gz>\n");
+          return 2;
+        }
+        const res = importBot(home, name);
+        stdout.write(`imported bot as "${res.name}" → ${res.dir}\n`);
+        stdout.write(`  will create (${res.files.length}): ${res.files.join(", ") || "(nothing)"}\n`);
+        return 0;
+      }
       case "init-examples": {
         let created = 0;
         for (const ex of EXAMPLE_BOTS) {
@@ -397,7 +421,11 @@ function botCommand(args: string[]): number {
         return 0;
       }
       default:
-        stdout.write("usage: tenjin bot new|list|init-examples\n");
+        stdout.write(
+          "usage: tenjin bot new|list|export|import|init-examples\n" +
+            "       tenjin bot export <name>               create a portable <name>.tar.gz\n" +
+            "       tenjin bot import <file.tar.gz>        restore a bot from a package\n",
+        );
         return 2;
     }
   } catch (e) {
