@@ -1,6 +1,7 @@
 import type { Provider } from "../provider/types";
 import type { HarnessConfig, ProviderName } from "../config/types";
-import { resolveBot, botModelRef, botBudgetUSD } from "./profile";
+import { resolveBot, listBots, botModelRef, botBudgetUSD } from "./profile";
+import { loadTeam, resolveTeamTarget } from "./team";
 import { runHeadless, capPolicy } from "../agent/headless";
 import { guardForBot } from "../security/guard";
 import { resolveParanoid } from "../security/injection";
@@ -30,18 +31,26 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
     name: "ask_bot",
     group: "write",
     description:
-      "Ask another bot a question and wait for its answer. The target bot runs headless with its own model and soul, read-only, under a small spend cap.",
+      "Ask another bot a question and wait for its answer. The target bot runs headless with its own model and soul, read-only, under a small spend cap. `bot` may be a bot name or a team role (team.yaml).",
     inputSchema: {
       type: "object",
       properties: {
-        bot: { type: "string", description: "Target bot name" },
+        bot: { type: "string", description: "Target bot name or team role" },
         message: { type: "string", description: "What you want to know or done" },
       },
       required: ["bot", "message"],
     },
     async handler(args, ctx) {
-      const targetName = String(args.bot ?? "").trim();
-      if (targetName === deps.fromBot) throw new Error("cannot delegate to yourself");
+      const rawTarget = String(args.bot ?? "").trim();
+      if (rawTarget === deps.fromBot) throw new Error("cannot delegate to yourself");
+      // Resolve a team role (e.g. "the writer") to a concrete bot, unless the
+      // target is already a valid bot name.
+      let targetName = rawTarget;
+      if (!listBots(deps.home).includes(rawTarget)) {
+        const team = loadTeam(deps.home);
+        const resolved = team ? resolveTeamTarget(team, rawTarget) : null;
+        if (resolved) targetName = resolved;
+      }
       const profile = resolveBot(deps.home, targetName);
       const message = String(args.message ?? "").trim();
       if (!message) throw new Error("message must not be empty");

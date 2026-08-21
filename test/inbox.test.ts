@@ -94,7 +94,7 @@ describe("bot messaging tools", () => {
     const tool = createSendMessageTool({ home, fromBot: "writer" });
     const bad = await dispatch([tool], "send_message", { to: "ghost", subject: "s", body: "b" }, { cwd: home });
     expect(bad.ok).toBe(false);
-    expect(bad.output).toContain('unknown bot "ghost"');
+    expect(bad.output).toContain('unknown bot or role "ghost"');
 
     const self = await dispatch([tool], "send_message", { to: "writer", subject: "s", body: "b" }, { cwd: home });
     expect(self.ok).toBe(false);

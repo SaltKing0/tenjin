@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { YAML } from "bun";
 import { stringifyBlockStyle } from "./block-style";
 import { resolveModelRef } from "./models";
+import { openKeyring, encryptProviders, isEncrypted, decrypt as decryptKey } from "../security/keyring";
 import {
   ConfigError,
   type ApprovalMode,
@@ -384,7 +385,13 @@ export function writeProvidersYaml(
   data: { providers?: unknown; models?: unknown; extra?: Record<string, unknown> },
 ): void {
   const doc: Record<string, unknown> = { ...(data.extra ?? {}) };
-  if (data.providers) doc.providers = data.providers;
+  if (data.providers) {
+    // #132: with a keyring initialized, encrypt apiKey values at rest.
+    const ring = openKeyring(home);
+    doc.providers = ring
+      ? encryptProviders(ring, data.providers as Record<string, unknown>)
+      : data.providers;
+  }
   if (data.models) doc.models = data.models;
   const path = providersFile(home);
   writeFileSync(
@@ -394,6 +401,34 @@ export function writeProvidersYaml(
     `# Managed by the Tenjin web console — safe to delete\n${stringifyBlockStyle(doc)}`,
     { mode: 0o600 },
   );
+}
+
+/**
+ * Decrypt any encrypted `apiKey` values in a parsed providers.yaml (the
+ * console-managed secrets file). With no keyring, decrypting is impossible —
+ * a clear ConfigError points the user to `tenjin keyring init` or to re-saving
+ * the key, instead of silently booting with a garbage key (#132).
+ */
+function decryptManagedKeys(
+  home: string,
+  cfg: Partial<HarnessConfig>,
+): Partial<HarnessConfig> {
+  const providers = cfg.providers;
+  if (!providers || typeof providers !== "object") return cfg;
+  const ring = openKeyring(home);
+  for (const pcfg of Object.values(providers) as Array<Record<string, unknown>>) {
+    if (typeof pcfg !== "object" || pcfg === null) continue;
+    const apiKey = pcfg?.apiKey;
+    if (typeof apiKey !== "string" || !isEncrypted(apiKey)) continue;
+    if (!ring) {
+      throw new ConfigError(
+        `${providersFile(home)} contains an encrypted API key but this machine has no keyring — ` +
+          `run \`tenjin keyring init\` here or re-save the key via the console`,
+      );
+    }
+    pcfg.apiKey = decryptKey(ring, apiKey);
+  }
+  return cfg;
 }
 
 export function ensureGlobalDir(home = tenjinHome()): { created: boolean } {
@@ -487,7 +522,9 @@ export function loadConfig(
   const projectPath = join(projectDir, ".tenjin", "config.yaml");
 
   const globalCfg = parseYamlFile(globalPath);
-  const managedCfg = parseYamlFile(managedPath);
+  const rawManaged = parseYamlFile(managedPath);
+  // #132: transparently decrypt any encrypted apiKey values on load.
+  const managedCfg = decryptManagedKeys(home, rawManaged);
   const projectCfg = parseYamlFile(projectPath);
 
   for (const [src, file] of [
