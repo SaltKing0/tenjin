@@ -52,6 +52,7 @@ import { aggregateSpend, renderSpend } from "./audit/spend";
 import { TelegramChannel } from "./gateway/telegram";
 import { createMessageHandler } from "./gateway/handler";
 import { startHttpServer } from "./gateway/http";
+import { createConsoleApi } from "./gateway/console-api";
 import {
   createRequest,
   resolveRequest,
@@ -479,9 +480,12 @@ async function gatewayCommand(args: string[]): Promise<number> {
           })),
           channels: Object.keys(channels),
         }),
+        api: createConsoleApi({ home, cwd, config, registry, audit }),
+        consoleDir: join(import.meta.dir, "gateway", "console"),
         log,
       });
       stdout.write(`http api listening on ${listen.host}:${http.port}\n`);
+      stdout.write(`web console: http://${listen.host === "0.0.0.0" ? "localhost" : listen.host}:${http.port}/?token=<gateway.listen.token>\n`);
       controller.signal.addEventListener("abort", () => http.stop(), { once: true });
     }
 
