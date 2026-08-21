@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { ConfigError } from "../config/types";
 import type { Channel, ChannelInbound } from "./channel";
+import { chunkMessage, ChannelSendError } from "./chunk";
 
 export type SlackRejectReason = "unauthorized" | "rate_limited" | "too_long";
 
@@ -23,6 +24,8 @@ export interface SlackOptions {
   rateLimitMax?: number;
   rateLimitWindowMs?: number;
   maxMessageLength?: number;
+  /** Max outbound chars per message before chunking. Default 40000 (Slack limit). */
+  maxOutboundLength?: number;
   onRejected?: (info: SlackRejection) => void;
 }
 
@@ -30,6 +33,7 @@ const DEFAULT_SLACK_API = "https://slack.com/api";
 const DEFAULT_RATE_LIMIT_MAX = 20;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_MESSAGE_LENGTH = 4096;
+const DEFAULT_MAX_OUTBOUND_LENGTH = 40_000;
 const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
 
 function hmacPayload(signingSecret: string, timestamp: string, rawBody: string): string {
@@ -129,17 +133,22 @@ export class SlackChannel implements Channel {
   }
 
   async postMessage(channel: string, text: string): Promise<void> {
-    const res = await fetch(`${this.apiBase()}/chat.postMessage`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${this.opts.botToken}`,
-      },
-      body: JSON.stringify({ channel, text }),
-    });
-    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-    if (!res.ok || data.ok !== true) {
-      throw new Error(`slack chat.postMessage ${res.status}: ${data.error ?? "failed"}`);
+    const max = this.opts.maxOutboundLength ?? DEFAULT_MAX_OUTBOUND_LENGTH;
+    for (const part of chunkMessage(text, max)) {
+      const res = await fetch(`${this.apiBase()}/chat.postMessage`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.opts.botToken}`,
+        },
+        body: JSON.stringify({ channel, text: part }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok || data.ok !== true) {
+        throw new ChannelSendError(
+          `slack chat.postMessage ${res.status}: ${data.error ?? "failed"}`,
+        );
+      }
     }
   }
 
@@ -183,6 +192,10 @@ export class SlackChannel implements Channel {
       });
       if (reply) await this.postMessage(channel, reply);
     } catch (e) {
+      if (e instanceof ChannelSendError) {
+        this.log(`slack: answer generated but delivery failed: ${(e as Error).message}`);
+        return;
+      }
       this.log(`slack: handler error: ${(e as Error).message}`);
       await this.postMessage(channel, `error: something went wrong handling that.`).catch(() => {});
     }

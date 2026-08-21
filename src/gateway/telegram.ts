@@ -1,5 +1,6 @@
 import { ConfigError } from "../config/types";
 import type { Channel, ChannelInbound } from "./channel";
+import { chunkMessage, ChannelSendError } from "./chunk";
 
 export interface TelegramOptions {
   token: string;
@@ -14,6 +15,8 @@ export interface TelegramOptions {
   rateLimitWindowMs?: number;
   /** Max accepted inbound text length; longer messages are rejected politely. 0 disables. Default 4096. */
   maxMessageLength?: number;
+  /** Max outbound chars per message before chunking. Default 4096. */
+  maxOutboundLength?: number;
   /** Accept voice notes and transcribe them (#137). Off by default. */
   voiceEnabled?: boolean;
   /** Injected audio->text transcriber. When undefined, enabled voice messages get a hint. */
@@ -66,6 +69,7 @@ const DEFAULT_API_BASE = "https://api.telegram.org";
 const DEFAULT_RATE_LIMIT_MAX = 20;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_MESSAGE_LENGTH = 4096;
+const DEFAULT_MAX_OUTBOUND_LENGTH = 4096;
 
 function mentionedBot(text: string): { name: string; rest: string } | null {
   const mention = /^@([a-z0-9-]+)\s+([\s\S]+)$/i.exec(text.trim());
@@ -173,13 +177,18 @@ export class TelegramChannel implements Channel {
   }
 
   private async postMessage(chatId: number, text: string): Promise<void> {
-    const res = await fetch(this.url("sendMessage"), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text }),
-    });
-    if (!res.ok) {
-      throw new Error(`telegram sendMessage ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const max = this.opts.maxOutboundLength ?? DEFAULT_MAX_OUTBOUND_LENGTH;
+    for (const part of chunkMessage(text, max)) {
+      const res = await fetch(this.url("sendMessage"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: part }),
+      });
+      if (!res.ok) {
+        throw new ChannelSendError(
+          `telegram sendMessage ${res.status}: ${(await res.text()).slice(0, 200)}`,
+        );
+      }
     }
   }
 
@@ -261,7 +270,17 @@ export class TelegramChannel implements Channel {
           username: msg.from.username,
           text,
         });
-        if (reply) await this.send(chatId, reply);
+        if (reply) {
+          try {
+            await this.send(chatId, reply);
+          } catch (sendErr) {
+            if (sendErr instanceof ChannelSendError) {
+              this.log(`telegram: answer generated but delivery failed: ${(sendErr as Error).message}`);
+            } else {
+              throw sendErr;
+            }
+          }
+        }
       } catch (e) {
         this.log(`telegram: handler error: ${(e as Error).message}`);
         await this.send(chatId, `error: something went wrong handling that.`).catch(() => {});

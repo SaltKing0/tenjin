@@ -307,6 +307,22 @@ describe("TelegramChannel hardening (#69)", () => {
     expect(got).toHaveLength(2000);
   });
 
+  test("reply over the outbound limit arrives complete, chunked (#201)", async () => {
+    scriptedUpdates = [update(9, 42, "long answer")];
+    const longReply = Array.from({ length: 5 }, (_, i) => `part ${i} ` + "x".repeat(30)).join(
+      "\n",
+    );
+    const channel = makeChannel(
+      async () => longReply,
+      { maxOutboundLength: 20 },
+    );
+    await channel.pollOnce();
+    const parts = sentMessages.map((m) => m.text);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.join("")).toBe(longReply);
+    expect(parts.every((t) => t.length <= 20)).toBe(true);
+  });
+
   test("unauthorized users are audited via onRejected and stay silent", async () => {
     scriptedUpdates = [update(1, 999, "spend their tokens")];
     const rejected: TelegramRejection[] = [];

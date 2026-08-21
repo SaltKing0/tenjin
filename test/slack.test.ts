@@ -171,6 +171,50 @@ describe("SlackChannel (#106)", () => {
     ac.abort();
   });
 
+  test("reply over the outbound limit arrives complete, chunked (#201)", async () => {
+    startFakeApi();
+    const longReply = Array.from({ length: 5 }, (_, i) => `chunk ${i} ` + "x".repeat(20)).join(
+      "\n",
+    );
+    const ch = makeChannel({ maxOutboundLength: 15 });
+    active.push(ch);
+    ch.onMessage(async () => longReply);
+    const ac = new AbortController();
+    await ch.start(ac.signal);
+    await postEvent(ch, messageEvent("C123", "long answer"));
+    await Bun.sleep(20);
+    const parts = posted.filter((p) => p.channel === "C123").map((p) => p.text);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.join("")).toBe(longReply);
+    expect(parts.every((t) => t.length <= 15)).toBe(true);
+    ac.abort();
+  });
+
+  test("delivery failure is not reported as a generic handler error (#201)", async () => {
+    startFakeApi();
+    // After this body we swap the responder to return a hard failure.
+    const ch = makeChannel();
+    active.push(ch);
+    ch.onMessage(async () => "REPLY_OK");
+    const ac = new AbortController();
+    await ch.start(ac.signal);
+    // Override the server AFTER construction so the channel posts fail.
+    apiServer.stop(true);
+    apiServer = Bun.serve({
+      port: 0,
+      fetch: async () => Response.json({ ok: false, error: "channel_not_found" }, { status: 404 }),
+    });
+    // Point the channel at the new port.
+    (ch as unknown as { opts: { apiBase: string } }).opts.apiBase = `http://localhost:${(
+      apiServer as unknown as { port: number }
+    ).port}`;
+    await postEvent(ch, messageEvent("C123", "boom"));
+    await Bun.sleep(20);
+    // The reply was generated but delivery failed — no polite "error:" echo.
+    expect(posted.some((p) => p.text.includes("error"))).toBe(false);
+    ac.abort();
+  });
+
   test("disallowed channel is rejected and not routed to the handler", async () => {
     startFakeApi();
     const rejected: SlackRejection[] = [];

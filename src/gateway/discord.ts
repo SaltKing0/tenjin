@@ -1,5 +1,6 @@
 import { ConfigError } from "../config/types";
 import type { Channel, ChannelInbound } from "./channel";
+import { chunkMessage, ChannelSendError } from "./chunk";
 
 /**
  * Native Discord channel adapter (#139) — zero-dep.
@@ -45,6 +46,8 @@ export interface DiscordOptions {
   rateLimitMax?: number;
   rateLimitWindowMs?: number;
   maxMessageLength?: number;
+  /** Max outbound chars per message before chunking. Default 2000 (Discord limit). */
+  maxOutboundLength?: number;
   /** Reconnect backoff base/ceiling in ms (tiny values in tests). */
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
@@ -56,6 +59,7 @@ const DEFAULT_REST_BASE = "https://discord.com/api/v10";
 const DEFAULT_RATE_LIMIT_MAX = 20;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_MESSAGE_LENGTH = 4000;
+const DEFAULT_MAX_OUTBOUND_LENGTH = 2000;
 const DEFAULT_RECONNECT_BASE_MS = 1000;
 const DEFAULT_RECONNECT_MAX_MS = 60_000;
 
@@ -155,8 +159,16 @@ export class DiscordChannel implements Channel {
     await this.postMessage(ch, text);
   }
 
-  /** Discord REST `POST /channels/:id/messages`, retrying 429 after retry_after. */
+  /** Discord REST `POST /channels/:id/messages`, splitting text over the
+   * 2000-char limit into multiple messages and retrying each on 429. */
   async postMessage(channel: string, content: string): Promise<void> {
+    const max = this.opts.maxOutboundLength ?? DEFAULT_MAX_OUTBOUND_LENGTH;
+    for (const part of chunkMessage(content, max)) {
+      await this.postOne(channel, part);
+    }
+  }
+
+  private async postOne(channel: string, content: string): Promise<void> {
     const body = JSON.stringify({ content });
     const doPost = async (): Promise<Response> =>
       await fetch(`${this.apiBase()}/channels/${channel}/messages`, {
@@ -177,7 +189,9 @@ export class DiscordChannel implements Channel {
     }
     if (!res.ok) {
       const text = (await res.text().catch(() => "")).slice(0, 120);
-      throw new Error(`discord POST /channels/${channel}/messages ${res.status}: ${text}`);
+      throw new ChannelSendError(
+        `discord POST /channels/${channel}/messages ${res.status}: ${text}`,
+      );
     }
   }
 
@@ -326,6 +340,10 @@ export class DiscordChannel implements Channel {
         if (reply) return this.postMessage(channelId, reply);
       })
       .catch((e) => {
+        if (e instanceof ChannelSendError) {
+          this.log(`discord: answer generated but delivery failed: ${(e as Error).message}`);
+          return;
+        }
         this.log(`discord: handler error: ${(e as Error).message}`);
         this.postMessage(channelId, "error: something went wrong handling that.").catch(() => {});
       });
