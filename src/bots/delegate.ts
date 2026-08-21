@@ -60,6 +60,8 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
         capUSD: cap,
         policy: "read-only",
         guard: deps.guard,
+        sessionLogDir: profile.sessionsDir,
+        sessionBot: profile.name,
       });
 
       const text = result.text;
