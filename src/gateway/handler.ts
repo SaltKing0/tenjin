@@ -1,8 +1,9 @@
-import type { HarnessConfig } from "../config/types";
+import { ConfigError, type HarnessConfig } from "../config/types";
 import type { ProviderRegistry } from "../provider/registry";
 import type { SecurityGuard } from "../security/guard";
 import type { AuditLog } from "../audit/log";
 import { resolveBot, botModelRef, botBudgetUSD } from "../bots/profile";
+import { formatModelRef, type ModelRef } from "../config/models";
 import { runHeadless } from "../agent/headless";
 import { loadAgentsMd } from "../agent/prompt";
 import { formatUSD } from "../agent/budget";
@@ -117,26 +118,43 @@ export function createMessageHandler(deps: HandlerDeps) {
       };
     }
 
-    const result = await runHeadless({
-      provider: deps.registry.get(ref.provider),
-      model: ref.model,
-      soulText: profile.soulText,
-      cwd: deps.cwd,
-      message: rest,
-      maxTokens: deps.config.maxTokens,
-      capUSD: botBudgetUSD(profile, deps.config.budgetUSD),
-      policy: deps.allowWrites ? "full" : "read-only",
-      agentsMd: loadAgentsMd(deps.cwd),
-      sessionLogDir: profile.sessionsDir,
-      sessionBot: profile.name,
-      guard: deps.guard,
-      approve,
-      audit: (kind, detail) => deps.audit.append(kind, ctx.actor, detail, botName),
-      onTextDelta: ctx.onDelta,
-    });
+    let result;
+    try {
+      result = await runHeadless({
+        provider: deps.registry.get(ref.provider),
+        model: ref.model,
+        soulText: profile.soulText,
+        cwd: deps.cwd,
+        message: rest,
+        maxTokens: deps.config.maxTokens,
+        capUSD: botBudgetUSD(profile, deps.config.budgetUSD),
+        policy: deps.allowWrites ? "full" : "read-only",
+        agentsMd: loadAgentsMd(deps.cwd),
+        sessionLogDir: profile.sessionsDir,
+        sessionBot: profile.name,
+        guard: deps.guard,
+        approve,
+        audit: (kind, detail) => deps.audit.append(kind, ctx.actor, detail, botName),
+        onTextDelta: ctx.onDelta,
+      });
+    } catch (e) {
+      throw annotateChatError(e, ref);
+    }
     deps.log(
       `${ctx.source}: handled for ${botName} (${formatUSD(result.costUSD)})`,
     );
     return result.text || null;
   };
+}
+
+const SETTINGS_HINT = "change it in Settings → Models";
+
+function annotateChatError(err: unknown, ref: ModelRef): Error {
+  const original = err instanceof Error ? err : new Error(String(err));
+  const suffix = `active model: ${formatModelRef(ref)} — ${SETTINGS_HINT}`;
+  if (original.message.includes(suffix)) return original;
+  const message = `${original.message} (${suffix})`;
+  const wrapped = err instanceof ConfigError ? new ConfigError(message) : new Error(message);
+  wrapped.cause = original;
+  return wrapped;
 }
