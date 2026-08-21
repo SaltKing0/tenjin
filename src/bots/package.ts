@@ -9,8 +9,9 @@ import { botDir, listBots, resolveBot } from "./profile";
  *
  * A bot package is a .tar.gz (USTAR) containing the bot's *portable* content
  * only: SOUL.md, config.yaml, and any bundled folders such as `skills/`.
- * Runtime state is deliberately excluded: sessions/, memory/, inbox/, and the
- * global providers.yaml (which holds API keys) never enter the package.
+ * Runtime state is deliberately excluded: sessions/, memory/, inbox/, tasks/,
+ * and skill-refine proposals — and the global providers.yaml (which holds API
+ * keys) never enter the package.
  *
  * We hand-roll a small USTAR writer/reader (plus node:zlib for gzip) instead of
  * depending on an archive library — flattening to the project's zero-dep rule.
@@ -18,7 +19,10 @@ import { botDir, listBots, resolveBot } from "./profile";
 
 const META_FILE = ".tenjin-package.json";
 /** Top-level runtime dirs that never travel with a bot. */
-const EXCLUDED_DIRS = new Set(["sessions", "memory", "inbox"]);
+const TOP_LEVEL_RUNTIME_DIRS = new Set(["sessions", "memory", "inbox", "tasks"]);
+/** Runtime artifacts (refine proposals, #133) that live beside a bundled skill
+ * and must also never travel with the package. */
+const RUNTIME_SUB_DIR = "refine";
 
 export interface PackageMeta {
   format: "tenjin-bot";
@@ -99,7 +103,14 @@ export function collectBotFiles(root: string): PkgFile[] {
       const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         // skip top-level runtime dirs entirely
-        if (relDir === "" && EXCLUDED_DIRS.has(entry.name)) continue;
+        if (relDir === "" && TOP_LEVEL_RUNTIME_DIRS.has(entry.name)) continue;
+        // skip runtime refine proposals nested under a bundled skill (#206)
+        if (
+          entry.name === RUNTIME_SUB_DIR &&
+          (relDir === "skills" || relDir.startsWith("skills/"))
+        ) {
+          continue;
+        }
         walk(abs, rel);
       } else if (entry.isFile()) {
         out.push({ rel, content: readFileSync(abs) });
