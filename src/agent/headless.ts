@@ -68,6 +68,8 @@ export interface HeadlessOptions {
   onTextDelta?: (delta: string) => void;
   /** Live side-channel invoked when the agent invokes a tool (name only). */
   onToolActivity?: (name: string) => void;
+  /** Abort the run (e.g. a per-task timeout). Propagates to provider calls. */
+  signal?: AbortSignal;
 }
 
 export interface HeadlessResult {
@@ -163,6 +165,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     budget,
     maxTokens: opts.maxTokens,
     cwd: opts.cwd,
+    signal: opts.signal,
     globalBudgetGate,
     approve:
       opts.approve ??
