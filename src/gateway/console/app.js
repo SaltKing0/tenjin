@@ -240,7 +240,34 @@ async function panelSpend(main) {
     return;
   }
   const total = data.rows.reduce((sum, r) => sum + r.costUSD, 0);
-  const table = el(
+  const byBot = data.byBot ?? [];
+  const breakdownTable = el(
+    "table",
+    { class: "spend-breakdown" },
+    el(
+      "tr",
+      {},
+      el("th", {}, "bot"),
+      el("th", { class: "num" }, "sessions"),
+      el("th", { class: "num" }, "in"),
+      el("th", { class: "num" }, "out"),
+      el("th", { class: "num" }, "cost"),
+    ),
+  );
+  for (const b of byBot) {
+    breakdownTable.append(
+      el(
+        "tr",
+        {},
+        el("td", {}, b.scope),
+        el("td", { class: "num" }, String(b.sessions)),
+        el("td", { class: "num" }, fmtTokens(b.inputTokens)),
+        el("td", { class: "num" }, fmtTokens(b.outputTokens)),
+        el("td", { class: "num" }, fmtUsd(b.costUSD)),
+      ),
+    );
+  }
+  const detailTable = el(
     "table",
     {},
     el(
@@ -256,7 +283,7 @@ async function panelSpend(main) {
     ),
   );
   for (const r of data.rows) {
-    table.append(
+    detailTable.append(
       el(
         "tr",
         {},
@@ -270,7 +297,7 @@ async function panelSpend(main) {
       ),
     );
   }
-  main.append(table, el("p", { class: "dim" }, `total: ${fmtUsd(total)}`));
+  main.append(el("h2", { class: "dim" }, "by bot"), breakdownTable, el("h2", { class: "dim" }, "details"), detailTable, el("p", { class: "dim" }, `total: ${fmtUsd(total)}`));
 }
 
 async function panelAudit(main) {
