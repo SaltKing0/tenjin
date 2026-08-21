@@ -350,7 +350,9 @@ gateway:
 - **`catchUp`** — on boot the gateway re-runs scheduled jobs whose slot came due
   while it was down (default `enabled: true`, `max: 50` runs per boot). A job is
   caught up when the next scheduled run after its last run is already in the
-  past; the last run of each job is persisted in `~/.tenjin/gateway-state.json`.
+  past; each job's run history is persisted in `~/.tenjin/gateway-state.json`
+  (written atomically over a `.bak` copy, and stale entries from removed jobs
+  are pruned on boot/reload).
 - **`channels`** — the list of channel kinds the gateway starts. Each name must
   be a registered channel (an unknown name is a config error). Defaults to the
   set of channels with `enabled: true` (e.g. `[telegram]`, `[slack]`, or both);
@@ -407,7 +409,7 @@ every bot and `gateway.jobs` — a collision is a config error at boot.
 ├── memory/                     # summaries, facts, vector store
 ├── approvals/                  # out-of-band approval requests (*.json)
 ├── audit.jsonl                 # audit event trail
-├── gateway-state.json          # last run per scheduled job (catch-up bookkeeping)
+├── gateway-state.json          # per-job run history (atomic write; .bak kept)
 └── bots/<name>/
     ├── SOUL.md                 # bot personality
     ├── config.yaml             # per-bot model / budget / security / routines / heartbeat (optional)
