@@ -318,6 +318,28 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
       }
     }
 
+    const replayMatch = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/(events|fork)$/.exec(path);
+    if (replayMatch && (req.method === "GET" || req.method === "POST")) {
+      const id = replayMatch[1];
+      const action = replayMatch[2];
+      if (!id) return json({ error: "missing id" }, 400);
+      const bot = url.searchParams.get("bot");
+      const dir = scopeSessionsDir(deps.home, bot);
+      if (!dir) return json({ error: "unknown bot" }, 400);
+      try {
+        if (action === "events") {
+          if (req.method !== "GET") return json({ error: "method not allowed" }, 405);
+          const log = SessionLog.resolve(dir, id);
+          return json({ id: log.id, events: log.events() });
+        }
+        if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
+        const forked = SessionLog.fork(dir, id);
+        return json({ ok: true, id: forked.id, parentId: id });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 404);
+      }
+    }
+
     if (path === "/api/spend" && req.method === "GET") {
       const daysParam = url.searchParams.get("days");
       const days = daysParam ? Number(daysParam) : undefined;
