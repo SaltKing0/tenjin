@@ -7,7 +7,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SessionEvent } from "./events";
 
@@ -84,10 +84,7 @@ export class SessionLog {
       model: start?.model ?? "",
       parent: { id: source.id, uptoEvent: count },
     });
-    for (const event of events.slice(0, count)) {
-      if (event.t === "session_start") continue;
-      forked.append(event);
-    }
+    forked.seedPreviewFrom(events.slice(0, count));
     return forked;
   }
 
@@ -132,7 +129,7 @@ export class SessionLog {
   }
 
   events(): SessionEvent[] {
-    return this.readEvents().events;
+    return resolveChain(this);
   }
 
   readEvents(): { events: SessionEvent[]; corrupt: CorruptLine[] } {
@@ -174,6 +171,26 @@ export class SessionLog {
     } catch {
       // path unreadable; keep previous value
     }
+    this.writeMeta(meta);
+  }
+
+  private seedPreviewFrom(events: SessionEvent[]): void {
+    const meta = readMeta(this.metaPath) ?? {
+      id: this.id,
+      preview: DEFAULT_PREVIEW,
+      mtimeMs: 0,
+    };
+    if (meta.preview !== DEFAULT_PREVIEW) return;
+    for (const event of events) {
+      if (event.t !== "message" || event.role !== "user") continue;
+      const text = typeof event.content === "string" ? event.content : "[blocks]";
+      meta.preview = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+      break;
+    }
+    this.writeMeta(meta);
+  }
+
+  private writeMeta(meta: SessionMeta): void {
     try {
       writeFileSync(this.metaPath, `${JSON.stringify(meta)}\n`);
     } catch {
@@ -187,9 +204,32 @@ function newId(): string {
   return `${ts}-${randomUUID().slice(0, 4)}`;
 }
 
-function idFromPath(path: string): string {
-  const base = path.split("/").pop() ?? path;
-  return base.replace(/\.jsonl$/, "");
+export function idFromPath(filePath: string): string {
+  return basename(filePath.replace(/\\/g, "/")).replace(/\.jsonl$/, "");
+}
+
+function resolveChain(log: SessionLog, seen: Set<string> = new Set()): SessionEvent[] {
+  const local = log.readEvents().events;
+  if (seen.has(log.id)) return local;
+  seen.add(log.id);
+
+  const start = local.find((e) => e.t === "session_start");
+  const parent = start?.t === "session_start" ? start.parent : undefined;
+  if (!start || start.t !== "session_start" || !parent) return local;
+
+  let parentLog: SessionLog;
+  try {
+    parentLog = SessionLog.resolve(dirname(log.path), parent.id);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`session ${log.id} parent "${parent.id}" not found (${detail})`);
+  }
+  const inherited = resolveChain(parentLog, seen)
+    .slice(0, parent.uptoEvent)
+    .filter((e) => e.t !== "session_start");
+
+  const own = local.filter((e) => e !== start);
+  return [start, ...inherited, ...own];
 }
 
 function metaPathFor(path: string): string {
