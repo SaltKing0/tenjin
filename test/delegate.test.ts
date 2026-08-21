@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createAskBotTool } from "../src/bots/delegate";
 import { createBot } from "../src/bots/profile";
 import { dispatch } from "../src/tools/registry";
-import { Budget } from "../src/agent/budget";
+import { Budget, TreeBudget } from "../src/agent/budget";
 import { SessionLog } from "../src/session/log";
 import { aggregateSpend } from "../src/audit/spend";
 import { AuditLog, auditPath } from "../src/audit/log";
@@ -265,7 +265,7 @@ describe("ask_bot", () => {
     writeFileSync(join(home, "bots", "researcher", "config.yaml"), "budgetUSD: 0.005\n");
     const log = new AuditLog(auditPath(home));
     const audit = (
-      kind: "delegation" | "write_exec" | "budget_halt" | "prompt_injection",
+      kind: "delegation" | "write_exec" | "budget_halt" | "budget_exceeded" | "prompt_injection",
       detail: string,
       correlationId?: string,
     ) => log.append(kind, "user", detail, undefined, correlationId);
@@ -340,5 +340,47 @@ describe("ask_bot", () => {
     expect(kinds).toContain("approval");
     expect(kinds).toContain("write_exec");
     expect(chain.every((e) => e.correlationId === corr)).toBe(true);
+  });
+});
+
+describe("ask_bot shared tree budget (#154)", () => {
+  test("a delegated run inherits the caller's shared budget and reports exhaustion", async () => {
+    const tb = new TreeBudget(1, 0); // cap: 1 iteration across the tree
+    const tool = createAskBotTool({
+      home,
+      fromBot: "writer",
+      cwd: home,
+      getProvider: (_n) =>
+        ({
+          name: "tc",
+          async chat() {
+            // never finishes — burns iterations until the tree budget stops it
+            return {
+              stopReason: "tool_use",
+              content: [
+                { type: "tool_use", id: "tc", name: "read_file", input: { path: "." } },
+              ],
+              usage: { inputTokens: 10, outputTokens: 5 },
+            };
+          },
+        }) as unknown as Provider,
+      globalConfig: globalConfig(),
+    });
+    const r = await dispatch([tool], "ask_bot", { bot: "researcher", message: "m" }, {
+      cwd: home,
+      treeBudget: tb,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("shared tree budget exhausted");
+    // the cap was crossed inside the delegated subagent run
+    expect(tb.stopped).toBe(true);
+    expect(tb.usedIterations).toBeGreaterThan(0);
+  });
+
+  test("delegation without an inherited budget is not tree-limited", async () => {
+    const tool = makeTool(); // default ctx (no treeBudget) — uses mockProvider
+    const r = await ask(tool, { bot: "researcher", message: "hello" });
+    expect(r.ok).toBe(true);
+    expect(r.output).not.toContain("tree budget");
   });
 });

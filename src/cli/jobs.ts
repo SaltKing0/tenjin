@@ -168,7 +168,7 @@ export interface RunJobDeps {
   cwd: string;
   config: HarnessConfig;
   provider: Provider;
-  audit?: (kind: "write_exec" | "budget_halt" | "prompt_injection", detail: string, correlationId?: string) => void;
+  audit?: (kind: "write_exec" | "budget_halt" | "budget_exceeded" | "prompt_injection", detail: string, correlationId?: string) => void;
 }
 
 export type RunJobResult =
@@ -203,6 +203,7 @@ export async function runJob(
       cwd: deps.cwd,
       message: job.prompt,
       maxTokens: deps.config.maxTokens,
+      maxTreeIterations: deps.config.maxTreeIterations ?? 0,
       capUSD: botBudgetUSD(profile, deps.config.budgetUSD),
       pricing: deps.config.pricing,
       policy: capPolicy("read-only", profile.config.security?.policy),

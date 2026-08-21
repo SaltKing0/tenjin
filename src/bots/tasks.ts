@@ -12,7 +12,7 @@ import { formatUSD } from "../agent/budget";
 import { sendMessage } from "./inbox";
 import { emit } from "../gateway/events";
 import type { ToolDef } from "../tools/registry";
-import type { Budget } from "../agent/budget";
+import { TreeBudget, type Budget } from "../agent/budget";
 import type { EffortLevel } from "../agent/effort";
 
 /**
@@ -45,6 +45,11 @@ export interface BotTask {
   notifyBot?: string;
   /** #142: effort dial; overrides the target bot's configured effort. */
   effort?: EffortLevel;
+  /** #154: snapshot of the shared delegation-tree budget usage after the run. */
+  treeUsedIterations?: number;
+  treeMaxIterations?: number;
+  treeUsedUsd?: number;
+  treeMaxUsd?: number;
 }
 
 export const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
@@ -103,7 +108,7 @@ export interface AsyncTaskDeps {
   globalConfig: HarnessConfig;
   sessionBudget?: Budget;
   guard?: import("../security/guard").SecurityGuard | null;
-  audit?: (kind: "delegation" | "write_exec" | "budget_halt" | "prompt_injection", detail: string, correlationId?: string) => void;
+  audit?: (kind: "delegation" | "write_exec" | "budget_halt" | "budget_exceeded" | "prompt_injection", detail: string, correlationId?: string) => void;
   defaultTimeoutMs?: number;
 }
 
@@ -124,6 +129,13 @@ export interface StartTaskArgs {
   notifyBot?: string;
   /** #142: effort dial; overrides the target bot's configured effort. */
   effort?: EffortLevel;
+  /** #154: inherit the caller's shared tree budget (threaded from the tool ctx). */
+  treeBudget?: TreeBudget;
+  /** #154: per-task tree cap; when no `treeBudget` is inherited, starts a NEW
+   * tree for this task with at most this many iterations. */
+  maxTreeIterations?: number;
+  /** #154: optional per-task shared USD cap for a new tree. */
+  maxTreeUsd?: number;
 }
 
 /** True when `dependsOnId` (directly or transitively) forms a cycle with `newId`. */
@@ -280,6 +292,15 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
         cap = Math.min(cap, Math.max(0.01, remaining));
       }
 
+      // #154: inherit the caller's shared tree budget, or start a fresh tree
+      // for this task when a per-task cap is set (independent tasks that set
+      // their own cap do not share a counter).
+      const tb =
+        args.treeBudget ??
+        (args.maxTreeIterations || args.maxTreeUsd
+          ? new TreeBudget(args.maxTreeIterations ?? 0, args.maxTreeUsd ?? 0)
+          : undefined);
+
       const result = await runHeadless({
         provider,
         model: ref.model,
@@ -301,7 +322,26 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
         sessionBot: profile.name,
         signal: controller.signal,
         effort,
+        treeBudget: tb,
       });
+
+      // #154: report tree-budget usage on the task for status/console display.
+      if (tb) {
+        task.treeUsedIterations = tb.usedIterations;
+        task.treeMaxIterations = tb.maxIterations;
+        task.treeUsedUsd = tb.usedUSD;
+        task.treeMaxUsd = tb.maxUSD;
+      }
+      if (result.stopReason === "tree_budget_exceeded") {
+        deps.audit?.(
+          "budget_exceeded",
+          `delegation tree budget exhausted during task ${id}`,
+          correlationId,
+        );
+        throw new Error(
+          `delegation tree budget exhausted (${tb?.usedIterations ?? 0}/${tb?.maxIterations ?? "∞"} iterations)`,
+        );
+      }
 
       const meta = `[delegated to ${profile.name} (${ref.provider}:${ref.model}), ${formatUSD(result.costUSD)}]`;
       const text = result.text ? `${result.text}\n\n${meta}` : `The ${profile.name} bot returned no text (${result.stopReason}). ${meta}`;
@@ -343,10 +383,11 @@ export function createAskBotAsyncTool(deps: AsyncTaskDeps): ToolDef {
         dependsOn: { type: "string", description: "Optional task_id this task waits for before starting" },
         notifyBot: { type: "string", description: "Optional bot inbox to notify on completion" },
         effort: { type: "string", description: "Optional effort level: low/medium/high/max (overrides the bot's)" },
+        maxTreeIterations: { type: "number", description: "Optional per-task delegation-tree iteration cap (0 = unlimited). When set and no shared tree budget is inherited, this task starts its own tree." },
       },
       required: ["bot", "message"],
     },
-    async handler(args) {
+    async handler(args, ctx) {
       const started = startAsyncTask(deps, {
         targetBot: String(args.bot ?? "").trim(),
         message: String(args.message ?? "").trim(),
@@ -354,6 +395,11 @@ export function createAskBotAsyncTool(deps: AsyncTaskDeps): ToolDef {
         dependsOn: args.dependsOn == null ? undefined : String(args.dependsOn).trim(),
         notifyBot: args.notifyBot == null ? undefined : String(args.notifyBot).trim(),
         effort: args.effort == null ? undefined : (args.effort as EffortLevel),
+        // #154: a task inherits the caller's shared tree budget so a chain of
+        // delegations counts against one counter; else honors a per-task cap.
+        treeBudget: ctx.treeBudget,
+        maxTreeIterations:
+          args.maxTreeIterations == null ? undefined : Math.max(0, Number(args.maxTreeIterations)),
       });
       return JSON.stringify({ task_id: started.task_id, status: "pending" });
     },

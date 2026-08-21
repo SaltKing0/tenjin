@@ -7,6 +7,7 @@ export type AuditKind =
   | "approval"
   | "write_exec"
   | "budget_halt"
+  | "budget_exceeded"
   | "channel_reject"
   | "delegation"
   | "gateway_msg"
@@ -21,6 +22,7 @@ export const AUDIT_KINDS: readonly AuditKind[] = [
   "approval",
   "write_exec",
   "budget_halt",
+  "budget_exceeded",
   "channel_reject",
   "delegation",
   "gateway_msg",

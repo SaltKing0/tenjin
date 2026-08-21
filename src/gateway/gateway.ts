@@ -632,6 +632,7 @@ export class Gateway {
         cwd: this.deps.cwd,
         message,
         maxTokens: this.deps.config.maxTokens,
+        maxTreeIterations: this.deps.config.maxTreeIterations ?? 0,
         capUSD: botBudgetUSD(profile, this.deps.config.budgetUSD),
         pricing: this.deps.config.pricing,
         globalBudget: this.deps.config.globalBudget,

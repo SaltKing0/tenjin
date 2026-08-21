@@ -10,7 +10,7 @@ import { schemas } from "../tools/registry";
 import { dispatch, cap, type ToolDef, type ToolGroup } from "../tools/registry";
 import type { SecurityGuard } from "../security/guard";
 import { detectSuspiciousOutput, frameToolOutput, maskToolOutput } from "../security/injection";
-import type { Budget } from "./budget";
+import type { Budget, TreeBudget } from "./budget";
 import { compressMessages } from "../session/context";
 import { emit } from "../gateway/events";
 
@@ -29,7 +29,7 @@ export type TurnEvent =
     };
 
 export interface TurnResult {
-  stopReason: StopReason | "budget_exhausted" | "max_iterations";
+  stopReason: StopReason | "budget_exhausted" | "max_iterations" | "tree_budget_exceeded";
   usage: Usage;
   costUSD: number;
   model: string;
@@ -60,7 +60,7 @@ export interface AgentTurnOptions {
   approve: ApproveFn;
   cwd: string;
   guard?: SecurityGuard | null;
-  audit?: (kind: "write_exec" | "budget_halt" | "prompt_injection", detail: string, correlationId?: string) => void;
+  audit?: (kind: "write_exec" | "budget_halt" | "budget_exceeded" | "prompt_injection", detail: string, correlationId?: string) => void;
   /** Mask suspected prompt-injection tool output before it reaches the model. */
   paranoid?: boolean;
   /** Shared id threaded into this run's audit events (e.g. a delegation correlation id). */
@@ -74,6 +74,9 @@ export interface AgentTurnOptions {
   contextGuard?: import("../session/context").ContextGuardConfig | null;
   /** Override MAX_ITERATIONS (e.g. per effort level). */
   maxIterations?: number;
+  /** Shared delegation-tree budget (#154): counts this run's iterations/USD
+   * against the same counter as every run in the tree. */
+  treeBudget?: TreeBudget;
 }
 
 export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> {
@@ -87,6 +90,24 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
       opts.audit?.("budget_halt", `halted at ${opts.budget.spentUSD.toFixed(4)} USD`, opts.correlationId);
       emit("budget.exceeded", { reason: "session budget exhausted" });
       return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText };
+    }
+
+    // #154: a shared delegation-tree budget. Reserve this iteration — if the
+    // tree-wide cap was already hit (possibly by a deeper subagent), stop the
+    // whole chain with a clear error instead of starting fresh work.
+    if (opts.treeBudget && !opts.treeBudget.consumeIteration()) {
+      opts.audit?.(
+        "budget_exceeded",
+        `delegation tree exhausted: ${opts.treeBudget.usedIterations}/${opts.treeBudget.maxIterations || "∞"} iterations`,
+        opts.correlationId,
+      );
+      return {
+        stopReason: "tree_budget_exceeded",
+        usage: totals,
+        costUSD,
+        model: opts.model,
+        text: lastText,
+      };
     }
 
     const gate = opts.globalBudgetGate?.();
@@ -130,6 +151,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
         (totals.cacheCreationInputTokens ?? 0) + response.usage.cacheCreationInputTokens;
     const turnCost = opts.budget.add(response.usage, opts.model);
     costUSD += turnCost;
+    opts.treeBudget?.addUsd(turnCost);
     opts.onEvent?.({ t: "usage", usage: response.usage, costUSD: turnCost });
 
     if (response.stopReason !== "tool_use") {
@@ -148,7 +170,11 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
       if (!approved) {
         output = "User declined this tool call.";
       } else {
-        const dispatched = await dispatch(opts.tools, block.name, block.input, { cwd: opts.cwd, guard: opts.guard });
+        const dispatched = await dispatch(opts.tools, block.name, block.input, {
+          cwd: opts.cwd,
+          guard: opts.guard,
+          treeBudget: opts.treeBudget,
+        });
         ok = dispatched.ok;
         output = cap(dispatched.output);
         // #129: tool output is untrusted data. Flag suspicious content, audit

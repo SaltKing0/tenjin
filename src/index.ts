@@ -1318,6 +1318,7 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     cwd: ctx.cwd,
     message: prompt,
     maxTokens: ctx.config.maxTokens,
+    maxTreeIterations: ctx.config.maxTreeIterations ?? 0,
     capUSD: ctx.config.budgetUSD,
     pricing: ctx.config.pricing,
     globalBudget: ctx.config.globalBudget,
