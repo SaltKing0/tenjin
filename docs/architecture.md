@@ -120,8 +120,18 @@ serves the static console (`src/gateway/console/`) and
 | `GET /api/jobs` | Scheduled jobs (cron/every, policy, lastRun, nextDue) |
 | `POST /api/jobs/:id/run` | Run a job now (does not advance nextDue) |
 | `GET /api/chat/stream` | Streaming chat (SSE) |
+| `GET /api/health` | Observability snapshot: uptime, active/pending jobs, pending approvals, spend today, session count, cached provider reachability |
+| `GET /metrics` | Prometheus text metrics (`tenjin_spend_usd_total`, `tenjin_jobs_pending`, `tenjin_sessions_total`, `tenjin_provider_errors_total`) |
 
 The console is token-gated and per-IP rate-limited (see [`src/gateway/http.ts`](../src/gateway/http.ts)).
+
+**Observability.** `/api/health` and `/metrics` are powered by
+[`src/gateway/observability.ts`](../src/gateway/observability.ts). They read
+spend/session counts from disk and the gateway's live provider-outcome counter
+([`src/provider/stats.ts`](../src/provider/stats.ts)), which the provider
+registry updates on every chat call — so provider reachability is answered from
+cached data instead of a per-request probe. Both endpoints require the same
+`gateway.listen.token` bearer token as the rest of the API.
 
 ## Tools
 
