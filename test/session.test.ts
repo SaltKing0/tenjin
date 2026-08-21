@@ -1,5 +1,12 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionLog } from "../src/session/log";
@@ -96,6 +103,75 @@ test("corrupted lines are skipped on read", () => {
   appendFileSync(log.path, `${JSON.stringify(userMsg("good"))}\n{broken json\n`);
   const events = log.events();
   expect(events).toHaveLength(1);
+});
+
+test("readEvents reports each corrupt line with path+line and still loads the rest", () => {
+  const log = SessionLog.create(dir);
+  log.append(userMsg("good one"));
+  const { appendFileSync } = require("node:fs") as typeof import("node:fs");
+  appendFileSync(log.path, `{broken json\n`);
+  log.append(userMsg("good two"));
+
+  const { events, corrupt } = log.readEvents();
+  expect(events.map((e) => (e.t === "message" ? e.content : "?"))).toEqual([
+    "good one",
+    "good two",
+  ]);
+  expect(corrupt).toHaveLength(1);
+  expect(corrupt[0]?.path).toBe(log.path);
+  expect(corrupt[0]?.line).toBe(2);
+  expect(log.events()).toHaveLength(2);
+});
+
+test("sidecar index is written on append with preview, parentId and mtime", () => {
+  const log = SessionLog.create(dir);
+  log.append({
+    t: "session_start",
+    id: log.id,
+    ts: "t",
+    provider: "p",
+    model: "m",
+    parent: { id: "abc", uptoEvent: 1 },
+  });
+  log.append(userMsg("hello index"));
+
+  const metaPath = log.path.replace(/\.jsonl$/, ".meta.json");
+  expect(existsSync(metaPath)).toBe(true);
+  const meta = JSON.parse(readFileSync(metaPath, "utf8")) as {
+    preview: string;
+    parentId: string;
+    mtimeMs: number;
+  };
+  expect(meta.parentId).toBe("abc");
+  expect(meta.preview).toBe("hello index");
+  expect(meta.mtimeMs).toBeGreaterThan(0);
+});
+
+test("list uses sidecar index; fallback full-scan yields identical results", () => {
+  const a = SessionLog.create(dir);
+  a.append({
+    t: "session_start",
+    id: a.id,
+    ts: "t",
+    provider: "p",
+    model: "m",
+    parent: { id: "parent-one", uptoEvent: 0 },
+  });
+  a.append(userMsg("first session about testing something longer than sixty chars"));
+
+  const b = SessionLog.create(dir);
+  b.append({ t: "session_start", id: b.id, ts: "t", provider: "p", model: "m" });
+  b.append(userMsg("second session"));
+
+  const withIndex = SessionLog.list(dir);
+  for (const f of readdirSync(dir)) {
+    if (f.endsWith(".meta.json")) unlinkSync(join(dir, f));
+  }
+  const fallback = SessionLog.list(dir);
+
+  expect(withIndex).toHaveLength(2);
+  expect(fallback).toHaveLength(2);
+  expect(withIndex).toEqual(fallback);
 });
 
 describe("fork", () => {
