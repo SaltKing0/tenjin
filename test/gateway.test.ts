@@ -61,6 +61,31 @@ describe("parseGatewaySettings", () => {
     expect(s.jobs[0]?.scheduleSpec.every).toBe("10m");
   });
 
+  test("job tz is parsed and validated", () => {
+    const s = parseGatewaySettings({
+      jobs: [
+        {
+          name: "a",
+          bot: "worker",
+          prompt: "do it",
+          cron: "0 9 * * *",
+          tz: "Europe/Berlin",
+        },
+      ],
+    });
+    expect(s.jobs[0]?.scheduleSpec.tz).toBe("Europe/Berlin");
+    expect(() =>
+      parseGatewaySettings({
+        jobs: [{ name: "a", bot: "b", prompt: "p", cron: "0 9 * * *", tz: "Not/AZone" }],
+      }),
+    ).toThrow(/time zone/);
+    expect(() =>
+      parseGatewaySettings({
+        jobs: [{ name: "a", bot: "b", prompt: "p", cron: "0 9 * * *", tz: 1 }],
+      }),
+    ).toThrow(/IANA time zone/);
+  });
+
   test("invalid schedule rejected", () => {
     expect(() =>
       parseGatewaySettings({ jobs: [{ name: "a", bot: "b", prompt: "p", every: "nope" }] }),
@@ -125,6 +150,23 @@ describe("job scheduling helpers", () => {
     if (!fast || !slow) throw new Error("unreachable");
     expect(fast.nextDueMs).toBe(t0 + 60_000);
     expect(new Date(slow.nextDueMs).getHours()).toBe(9);
+  });
+
+  test("buildJobs honors per-job tz across DST", () => {
+    const zoned = parseGatewaySettings({
+      jobs: [
+        {
+          name: "morning",
+          bot: "worker",
+          prompt: "p",
+          cron: "0 9 * * *",
+          tz: "Europe/Berlin",
+        },
+      ],
+    });
+    const from = Date.UTC(2026, 2, 28, 9, 0, 0);
+    const jobs = buildJobs(zoned, from);
+    expect(jobs[0]?.nextDueMs).toBe(Date.UTC(2026, 2, 29, 7, 0, 0));
   });
 
   test("dueJobs respects running flag and time", () => {

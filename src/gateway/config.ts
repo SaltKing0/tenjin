@@ -6,7 +6,7 @@ export interface JobConfig {
   bot: string;
   prompt: string;
   postTo?: string;
-  scheduleSpec: { every?: string; cron?: string };
+  scheduleSpec: { every?: string; cron?: string; tz?: string };
 }
 
 export interface TelegramChannelConfig {
@@ -49,6 +49,7 @@ interface RawJob {
   postTo?: unknown;
   every?: unknown;
   cron?: unknown;
+  tz?: unknown;
 }
 
 export function parseGatewaySettings(raw: unknown): GatewaySettings {
@@ -80,9 +81,15 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
       if (!prompt) throw new ConfigError(`gateway job "${name}" missing \`prompt\``);
       if (seen.has(name)) throw new ConfigError(`duplicate job name "${name}"`);
       seen.add(name);
+      if (entry.tz !== undefined && entry.tz !== null && typeof entry.tz !== "string") {
+        throw new ConfigError(`gateway job "${name}" tz must be an IANA time zone name`);
+      }
+      const tz =
+        typeof entry.tz === "string" && entry.tz.trim() !== "" ? entry.tz.trim() : undefined;
       const scheduleSpec = {
         every: typeof entry.every === "string" ? entry.every : undefined,
         cron: typeof entry.cron === "string" ? entry.cron : undefined,
+        tz,
       };
       parseSchedule(scheduleSpec);
       settings.jobs.push({
