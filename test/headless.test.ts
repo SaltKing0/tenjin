@@ -79,7 +79,7 @@ test("applyDenyTools strips named tools so a bot is stricter than global full po
   expect(applyDenyTools(full, undefined).map((t) => t.name)).toEqual(full.map((t) => t.name));
 });
 
-test("toolsForPolicy adds use_skill/save_skill by policy when skill dirs are given", () => {
+test("toolsForPolicy adds use_skill/list_skills/save_skill by policy when skill dirs are given", () => {
   const skill = { home: dir, projectDir: dir };
   expect(toolsForPolicy("none", skill)).toEqual([]);
   expect(toolsForPolicy("read-only", skill).map((t) => t.name)).toEqual([
@@ -87,6 +87,7 @@ test("toolsForPolicy adds use_skill/save_skill by policy when skill dirs are giv
     "glob",
     "grep",
     "use_skill",
+    "list_skills",
   ]);
   expect(toolsForPolicy("full", skill).map((t) => t.name)).toEqual([
     "read_file",
@@ -96,6 +97,7 @@ test("toolsForPolicy adds use_skill/save_skill by policy when skill dirs are giv
     "edit_file",
     "bash",
     "use_skill",
+    "list_skills",
     "save_skill",
   ]);
 });
