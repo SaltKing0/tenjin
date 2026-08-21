@@ -31,6 +31,7 @@ import {
 import { getSettings, applySettings, detectModels, testProvider, verifySettingsApply, DetectTimeoutError } from "./settings";
 import { sessionsDir } from "../config/loader";
 import { listConfiguredJobs, type JobRunResult, type JobView } from "./gateway";
+import { parseGatewaySettings } from "./config";
 import { readFacts } from "../tools/memory";
 import { listSummaries, type SummaryEntry } from "../memory/summaries";
 import { loadChunks, vectorsFilePath } from "../memory/vector-store";
@@ -177,6 +178,17 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
 
     if (path === "/api/settings" && req.method === "GET") {
       return json(getSettings({ home: deps.home, config: deps.config, registry: deps.registry }));
+    }
+
+    // #251: first-run setup state — what is still missing to use the console.
+    if (path === "/api/setup/state" && req.method === "GET") {
+      const settings = parseGatewaySettings(deps.config.gateway);
+      return json({
+        hasModel: typeof deps.config.model === "string" && deps.config.model.trim().length > 0,
+        hasBot: listBots(deps.home).length > 0,
+        hasGatewayToken: !!settings.listen?.token,
+        channelsEnabled: settings.channels.length > 0,
+      });
     }
 
     if (path === "/api/settings" && req.method === "POST") {
