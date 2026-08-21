@@ -55,6 +55,30 @@ describe("use_skill usage tracking (#133)", () => {
     expect(usage[0]?.ok).toBe(false);
     expect(usage[0]?.error).toMatch(/unknown skill/);
   });
+
+  test("usagePathFor never lets a skill name traverse out of the usage dir", () => {
+    const p = usagePathFor(project, "../../etc/passwd");
+    expect(p.startsWith(join(project, ".tenjin", "skills", "usage"))).toBe(true);
+    expect(p).not.toContain("..");
+  });
+
+  test("a traversal-prone use_skill name records inside the usage dir (no escape)", async () => {
+    const tool = createUseSkillTool({ home, projectDir: project });
+    const r = await dispatch(
+      [tool],
+      "use_skill",
+      { name: "../../evil" },
+      { cwd: project },
+    );
+    expect(r.ok).toBe(false);
+    // sanitized name `evil` — nothing written outside the usage dir
+    const usage = readUsage(project, "evil");
+    expect(usage).toHaveLength(1);
+    expect(usage[0]?.skill).toBe("evil");
+    expect(
+      existsSync(join(project, ".tenjin", "skills", "usage", "evil.ndjson")),
+    ).toBe(true);
+  });
 });
 
 describe("usage analysis (#133)", () => {

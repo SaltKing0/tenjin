@@ -61,7 +61,14 @@ export interface CliArgs {
 
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = { help: false, version: false };
-  for (let i = 0; i < argv.length; i++) {
+  let i = 0;
+  /** Read the next argv token as a required value; throw when it is missing. */
+  const needValue = (flag: string): string => {
+    const v = argv[++i];
+    if (!v) throw new ConfigError(`${flag} requires a value`);
+    return v;
+  };
+  for (; i < argv.length; i++) {
     const a = argv[i];
     switch (a) {
       case "-h":
@@ -80,14 +87,20 @@ export function parseArgs(argv: string[]): CliArgs {
         return args;
       }
       case "--model":
-        args.model = argv[++i];
+        args.model = needValue("--model");
         break;
       case "--provider":
-        args.provider = argv[++i];
+        args.provider = needValue("--provider");
         break;
-      case "--budget":
-        args.budget = Number(argv[++i]);
+      case "--budget": {
+        const raw = needValue("--budget");
+        const n = Number(raw);
+        if (!Number.isFinite(n)) {
+          throw new ConfigError(`--budget must be a number, got "${raw}"`);
+        }
+        args.budget = n;
         break;
+      }
       case "--effort": {
         const v = argv[++i];
         if (!isEffortLevel(v)) {
@@ -97,10 +110,10 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       }
       case "--resume":
-        args.resume = argv[++i];
+        args.resume = needValue("--resume");
         break;
       case "--bot":
-        args.bot = argv[++i];
+        args.bot = needValue("--bot");
         break;
       case "--fork": {
         const id = argv[++i];

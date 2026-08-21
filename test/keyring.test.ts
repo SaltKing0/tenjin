@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -62,6 +62,15 @@ describe("keyring primitives (#132)", () => {
   test("initKeyring refuses to overwrite an existing keyring", () => {
     initKeyring(home);
     expect(() => initKeyring(home)).toThrow(/already exists/);
+  });
+
+  test("openKeyring refuses a keyring that is not 0600", () => {
+    initKeyring(home);
+    chmodSync(keyringPath(home), 0o644);
+    expect(() => openKeyring(home)).toThrow(/0600/);
+    // a correctly-restored keyring loads again
+    chmodSync(keyringPath(home), 0o600);
+    expect(openKeyring(home)).not.toBeNull();
   });
 });
 

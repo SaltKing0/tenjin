@@ -1,5 +1,5 @@
 import type { ToolDef } from "../tools/registry";
-import { getSkill, type Skill } from "./loader";
+import { getSkill, sanitizeSkillName, type Skill } from "./loader";
 import { recordUsage } from "./usage";
 import { proposeRefine } from "./refine";
 
@@ -36,7 +36,7 @@ export function createUseSkillTool(deps: {
       required: ["name"],
     },
     async handler(args, _ctx) {
-      const name = String(args.name ?? "").trim();
+      const name = sanitizeSkillName(String(args.name ?? ""));
       const start = performance.now();
       const ts = new Date().toISOString();
       try {
@@ -86,7 +86,7 @@ export function createRefineSkillTool(deps: { projectDir: string }): ToolDef {
       required: ["skill", "reason", "content"],
     },
     async handler(args, _ctx) {
-      const skill = String(args.skill ?? "").trim();
+      const skill = sanitizeSkillName(String(args.skill ?? ""));
       const reason = String(args.reason ?? "").trim();
       const content = String(args.content ?? "").trim();
       if (!skill || !reason || !content) {

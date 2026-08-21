@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { sanitizeSkillName } from "./loader";
 
 /**
  * Skill usage tracking (#133). Every `use_skill` invocation appends one line to
@@ -24,7 +25,9 @@ export function usageDir(projectDir: string): string {
 }
 
 export function usagePathFor(projectDir: string, skill: string): string {
-  return join(usageDir(projectDir), `${skill}.ndjson`);
+  // Sanitize so an untrusted skill name can never traverse out of the usage
+  // dir (e.g. `../x` → cleaned to a single safe component).
+  return join(usageDir(projectDir), `${sanitizeSkillName(skill)}.ndjson`);
 }
 
 /** Append one usage record (strictly append-only, never rewrites history). */

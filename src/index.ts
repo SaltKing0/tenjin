@@ -782,9 +782,17 @@ async function arenaRun(args: string[]): Promise<number> {
       }
       judgeRef = ref.trim();
     } else if (a === "--budget") {
-      budget = Number(args[++i]);
+      const raw = args[++i];
+      if (raw === undefined || !Number.isFinite(Number(raw))) {
+        throw new ConfigError("arena --budget requires a number (USD spend cap)");
+      }
+      budget = Number(raw);
     } else if (a === "--winner") {
-      winnerIndex = Number(args[++i]);
+      const raw = args[++i];
+      if (raw === undefined) {
+        throw new ConfigError("arena --winner requires a 1-based entry index");
+      }
+      winnerIndex = Number(raw);
     } else if (a.startsWith("-")) {
       throw new ConfigError(`unknown arena option: ${a}`);
     } else {
@@ -797,8 +805,8 @@ async function arenaRun(args: string[]): Promise<number> {
   if (modelsList.length === 0) {
     throw new ConfigError('arena requires --models <ref1,ref2,...>');
   }
-  if (winnerIndex !== undefined && !Number.isInteger(winnerIndex)) {
-    throw new ConfigError("arena --winner must be an integer (1-based entry index)");
+  if (winnerIndex !== undefined && (!Number.isInteger(winnerIndex) || winnerIndex < 1)) {
+    throw new ConfigError("arena --winner must be a positive integer (1-based entry index)");
   }
 
   const home = tenjinHome();
