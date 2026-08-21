@@ -62,7 +62,9 @@ export interface HeadlessOptions {
   sessionBot?: string;
   guard?: import("../security/guard").SecurityGuard | null;
   redactor?: Redactor | null;
-  audit?: (kind: "write_exec" | "budget_halt", detail: string, correlationId?: string) => void;
+  audit?: (kind: "write_exec" | "budget_halt" | "prompt_injection", detail: string, correlationId?: string) => void;
+  /** Mask suspected prompt-injection tool output before it reaches the model. */
+  paranoid?: boolean;
   /** Shared id threaded into this run's audit events (e.g. a delegation correlation id). */
   correlationId?: string;
   /** Global spend cap (solo + all bots) enforced before each provider call. */
@@ -177,6 +179,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       (async (_name, group) => group === "read"),
     guard: opts.guard,
     audit: opts.audit,
+    paranoid: opts.paranoid,
     correlationId: opts.correlationId,
     onTextDelta: opts.onTextDelta,
     contextGuard: resolveContextGuard(opts.model, opts.context ?? undefined),

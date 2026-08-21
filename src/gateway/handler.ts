@@ -9,6 +9,7 @@ import { runHeadless, capPolicy } from "../agent/headless";
 import { loadAgentsMd } from "../agent/prompt";
 import { formatUSD } from "../agent/budget";
 import { guardForBot } from "../security/guard";
+import { resolveParanoid } from "../security/injection";
 import {
   routeText,
   botsAllowedForUser,
@@ -196,6 +197,7 @@ export function createMessageHandler(deps: HandlerDeps) {
           profile.config.security,
           (detail) => deps.audit.append("tool_block", ctx.actor, detail, botName),
         ),
+        paranoid: resolveParanoid(deps.config.security, profile.config.security),
         approve,
         audit: (kind, detail) => deps.audit.append(kind, ctx.actor, detail, botName),
         onTextDelta: ctx.onDelta,

@@ -12,7 +12,8 @@ export type AuditKind =
   | "gateway_msg"
   | "data_delete"
   | "settings_changed"
-  | "guard_disabled";
+  | "guard_disabled"
+  | "prompt_injection";
 
 export const AUDIT_KINDS: readonly AuditKind[] = [
   "tool_block",
@@ -25,6 +26,7 @@ export const AUDIT_KINDS: readonly AuditKind[] = [
   "data_delete",
   "settings_changed",
   "guard_disabled",
+  "prompt_injection",
 ];
 
 export interface AuditEvent {

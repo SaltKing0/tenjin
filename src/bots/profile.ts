@@ -29,6 +29,8 @@ export interface BotSecurityConfig {
   blockedPatterns?: string[];
   policy?: ToolPolicy;
   denyTools?: string[];
+  /** Mask suspected prompt-injection tool output before it reaches the model. */
+  paranoid?: boolean;
 }
 
 export interface BotTelegramConfig {
@@ -101,6 +103,12 @@ function parseBotSecurity(raw: unknown): BotSecurityConfig | undefined {
   }
   if (s.denyTools !== undefined) {
     out.denyTools = parseStringList(s.denyTools, "bot security.denyTools");
+  }
+  if (s.paranoid !== undefined) {
+    if (typeof s.paranoid !== "boolean") {
+      throw new ConfigError("bot security.paranoid must be a boolean");
+    }
+    out.paranoid = s.paranoid;
   }
   return out;
 }

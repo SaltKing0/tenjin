@@ -3,6 +3,7 @@ import type { HarnessConfig, ProviderName } from "../config/types";
 import { resolveBot, botModelRef, botBudgetUSD } from "./profile";
 import { runHeadless, capPolicy } from "../agent/headless";
 import { guardForBot } from "../security/guard";
+import { resolveParanoid } from "../security/injection";
 import { Budget, formatUSD } from "../agent/budget";
 import { randomUUID } from "node:crypto";
 import type { ToolDef } from "../tools/registry";
@@ -16,7 +17,7 @@ export interface AskBotDeps {
   sessionBudget?: Budget;
   guard?: import("../security/guard").SecurityGuard | null;
   audit?: (
-    kind: "delegation" | "write_exec" | "budget_halt",
+    kind: "delegation" | "write_exec" | "budget_halt" | "prompt_injection",
     detail: string,
     correlationId?: string,
   ) => void;
@@ -81,6 +82,7 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
           profile.config.security,
           deps.guard?.onBlock,
         ),
+        paranoid: resolveParanoid(deps.globalConfig.security, profile.config.security),
         correlationId,
         audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
         sessionLogDir: profile.sessionsDir,

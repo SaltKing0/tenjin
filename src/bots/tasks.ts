@@ -7,6 +7,7 @@ import { ConfigError } from "../config/types";
 import { resolveBot, botModelRef, botBudgetUSD, botDir, listBots } from "./profile";
 import { runHeadless, capPolicy } from "../agent/headless";
 import { guardForBot } from "../security/guard";
+import { resolveParanoid } from "../security/injection";
 import { formatUSD } from "../agent/budget";
 import type { ToolDef } from "../tools/registry";
 import type { Budget } from "../agent/budget";
@@ -77,7 +78,7 @@ export interface AsyncTaskDeps {
   globalConfig: HarnessConfig;
   sessionBudget?: Budget;
   guard?: import("../security/guard").SecurityGuard | null;
-  audit?: (kind: "delegation" | "write_exec" | "budget_halt", detail: string, correlationId?: string) => void;
+  audit?: (kind: "delegation" | "write_exec" | "budget_halt" | "prompt_injection", detail: string, correlationId?: string) => void;
   defaultTimeoutMs?: number;
 }
 
@@ -157,6 +158,7 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: {
         home: deps.home,
         memoryDir: profile.memoryDir,
         guard: guardForBot(deps.globalConfig.security, profile.config.security, deps.guard?.onBlock),
+        paranoid: resolveParanoid(deps.globalConfig.security, profile.config.security),
         correlationId,
         audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
         sessionLogDir: profile.sessionsDir,

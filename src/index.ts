@@ -59,6 +59,7 @@ import {
   buildGuardStatus,
   guardForBot,
 } from "./security/guard";
+import { resolveParanoid } from "./security/injection";
 import { Redactor } from "./security/redact";
 import { AuditLog, formatAudit, auditPath } from "./audit/log";
 import { aggregateSpend, renderSpend } from "./audit/spend";
@@ -1008,6 +1009,7 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     home: ctx.home,
     memoryDir: ctx.memoryDir,
     guard: ctx.guard,
+    paranoid: resolveParanoid(ctx.config.security, ctx.botSecurity),
     audit: (kind, detail, correlationId) =>
       new AuditLog(auditPath(ctx.home)).append(kind, "user", detail, undefined, correlationId),
     redactor: Redactor.fromConfig(ctx.config.security),

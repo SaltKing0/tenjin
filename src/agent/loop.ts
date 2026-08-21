@@ -9,6 +9,7 @@ import type {
 import { schemas } from "../tools/registry";
 import { dispatch, cap, type ToolDef, type ToolGroup } from "../tools/registry";
 import type { SecurityGuard } from "../security/guard";
+import { detectSuspiciousOutput, frameToolOutput, maskToolOutput } from "../security/injection";
 import type { Budget } from "./budget";
 import { compressMessages } from "../session/context";
 
@@ -58,7 +59,9 @@ export interface AgentTurnOptions {
   approve: ApproveFn;
   cwd: string;
   guard?: SecurityGuard | null;
-  audit?: (kind: "write_exec" | "budget_halt", detail: string, correlationId?: string) => void;
+  audit?: (kind: "write_exec" | "budget_halt" | "prompt_injection", detail: string, correlationId?: string) => void;
+  /** Mask suspected prompt-injection tool output before it reaches the model. */
+  paranoid?: boolean;
   /** Shared id threaded into this run's audit events (e.g. a delegation correlation id). */
   correlationId?: string;
   /** Consulted before each provider call; returns blocked=false to halt the run. */
@@ -134,6 +137,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
 
       let ok = false;
       let output: string;
+      let injectionWarning: string | undefined;
       const approved = await opts.approve(block.name, groupOf(opts.tools, block.name), block.input);
       if (!approved) {
         output = "User declined this tool call.";
@@ -141,6 +145,16 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
         const dispatched = await dispatch(opts.tools, block.name, block.input, { cwd: opts.cwd, guard: opts.guard });
         ok = dispatched.ok;
         output = cap(dispatched.output);
+        // #129: tool output is untrusted data. Flag suspicious content, audit
+        // it, and (under security.paranoid) mask it before it reaches the model.
+        const suspicious = detectSuspiciousOutput(dispatched.output);
+        if (suspicious) {
+          opts.audit?.("prompt_injection", `${block.name} output flagged: ${suspicious}`, opts.correlationId);
+          injectionWarning = `suspected prompt injection (${suspicious})`;
+          if (opts.paranoid) {
+            output = maskToolOutput(output);
+          }
+        }
       }
 
       if (ok && groupOf(opts.tools, block.name) === "write") {
@@ -149,7 +163,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
       results.push({
         type: "tool_result",
         toolUseId: block.id,
-        content: output,
+        content: frameToolOutput(output, injectionWarning ? { warning: injectionWarning } : undefined),
         isError: !ok,
       });
       opts.onEvent?.({ t: "tool_result", id: block.id, name: block.name, ok, output });

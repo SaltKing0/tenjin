@@ -6,6 +6,7 @@ import { ProviderRegistry } from "../provider/registry";
 import { resolveBot, listBots, botModelRef, botBudgetUSD, type BotProfile, type BotRoutineConfig, type BotHeartbeatConfig } from "../bots/profile";
 import { runHeadless, capPolicy, type HeadlessOptions, type HeadlessResult } from "../agent/headless";
 import { guardForBot } from "../security/guard";
+import { resolveParanoid } from "../security/injection";
 import { formatUSD } from "../agent/budget";
 import { parseSchedule, nextRun, parseEvery, type Schedule } from "./schedule";
 import { Redactor } from "../security/redact";
@@ -519,6 +520,7 @@ export class Gateway {
           profile.config.security,
           this.deps.guard?.onBlock,
         ),
+        paranoid: resolveParanoid(this.deps.config.security, profile.config.security),
         redactor: Redactor.fromConfig(this.deps.config.security),
         context: this.deps.config.context,
       });

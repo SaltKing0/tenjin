@@ -9,6 +9,7 @@ import { resolveBot, botModelRef, botBudgetUSD, type BotProfile } from "../bots/
 import { runHeadless, capPolicy } from "../agent/headless";
 import { loadAgentsMd } from "../agent/prompt";
 import { guardForBot } from "../security/guard";
+import { resolveParanoid } from "../security/injection";
 import { Redactor } from "../security/redact";
 import { formatUSD } from "../agent/budget";
 import type { Provider } from "../provider/types";
@@ -167,7 +168,7 @@ export interface RunJobDeps {
   cwd: string;
   config: HarnessConfig;
   provider: Provider;
-  audit?: (kind: "write_exec" | "budget_halt", detail: string, correlationId?: string) => void;
+  audit?: (kind: "write_exec" | "budget_halt" | "prompt_injection", detail: string, correlationId?: string) => void;
 }
 
 export type RunJobResult =
@@ -212,6 +213,7 @@ export async function runJob(
       sessionLogDir: profile.sessionsDir,
       sessionBot: profile.name,
       guard: guardForBot(deps.config.security, profile.config.security, undefined),
+      paranoid: resolveParanoid(deps.config.security, profile.config.security),
       redactor: Redactor.fromConfig(deps.config.security),
       audit: deps.audit,
     });

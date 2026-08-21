@@ -36,6 +36,8 @@ export interface HarnessConfig {
     redaction?: boolean;
     workspaceRoot?: string;
     allowedPaths?: string[];
+    /** Mask suspected prompt-injection tool output before it reaches the model. */
+    paranoid?: boolean;
   };
   memory?: {
     enabled?: boolean;

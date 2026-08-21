@@ -85,6 +85,7 @@ const SCHEMA: Record<string, FieldDef> = {
       workspaceRoot: { types: ["string"] },
       blockedPatterns: { types: ["list"] },
       allowedPaths: { types: ["list"] },
+      paranoid: { types: ["boolean"] },
     },
   },
   memory: {
