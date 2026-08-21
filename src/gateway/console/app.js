@@ -300,28 +300,113 @@ async function botEditorCard(main, bot) {
 
 function botCreateForm(main) {
   const nameInput = el("input", { type: "text", placeholder: "new bot name" });
-  const soulArea = el("textarea", { class: "soul-input", rows: 5, placeholder: "optional SOUL text" });
+  const roleSelect = el("select", { style: "width:100%; margin-bottom:8px" });
+  const modelSelect = el("select", { style: "width:100%; margin-bottom:8px" });
+  const soulArea = el("textarea", { class: "soul-input", rows: 6, placeholder: "SOUL.md for this bot — generated from a template or edited" });
+  const preview = el("div", { class: "soul-preview" });
   const status = el("div", { class: "dim" });
   const create = el("button", {}, "Create bot");
+
+  let templates = [];
+  async function refreshTemplates() {
+    roleSelect.replaceChildren(el("option", { value: "" }, "— choose a role —"));
+    try {
+      const data = await apiJson("/api/bots/templates");
+      templates = data.templates || [];
+      for (const t of templates) {
+        roleSelect.append(el("option", { value: t.id }, t.label));
+      }
+    } catch {
+      /* templates unavailable — name-only creation still works */
+    }
+  }
+
+  // Populate the model dropdown from the detected-model cache (mine/grouped).
+  function refreshModels() {
+    modelSelect.replaceChildren(el("option", { value: "" }, "— default model —"));
+    const detected = readDetectedCache();
+    const seen = new Set();
+    for (const [provider, groups] of Object.entries(detected)) {
+      const g = normalizeDetected(groups);
+      const flat = [...g.chat, ...g.embedding, ...g.other];
+      if (flat.length === 0) continue;
+      for (const m of flat) {
+        const key = `${provider}:${m.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const label = m.free ? `${m.id} ⭐free` : m.id;
+        modelSelect.append(el("option", { value: key }, label));
+      }
+    }
+  }
+
+  async function updatePreview() {
+    const name = nameInput.value.trim();
+    const role = roleSelect.value;
+    if (!name || !role) {
+      preview.replaceChildren();
+      return;
+    }
+    try {
+      const data = await apiJson("/api/bots/soul-preview", {
+        method: "POST",
+        body: JSON.stringify({ role, name }),
+      });
+      soulArea.value = data.soul;
+      preview.replaceChildren(renderMarkdown(data.soul));
+    } catch {
+      preview.replaceChildren(el("div", { class: "err" }, "could not preview this template"));
+    }
+  }
+
+  roleSelect.addEventListener("change", updatePreview);
+  nameInput.addEventListener("input", updatePreview);
+
+  function validate() {
+    if (!nameInput.value.trim()) return "name is required";
+    if (modelSelect.value && !modelSelect.value.includes(":")) return "invalid model selection";
+    return null;
+  }
+
   create.onclick = async () => {
-    const body = { name: nameInput.value };
+    const err = validate();
+    if (err) {
+      status.textContent = err;
+      status.className = "err";
+      return;
+    }
+    const body = { name: nameInput.value.trim() };
+    if (roleSelect.value) body.role = roleSelect.value;
+    if (modelSelect.value) body.model = modelSelect.value;
     if (soulArea.value.trim()) body.soul = soulArea.value;
+    status.textContent = "…";
+    status.className = "dim";
     try {
       await apiJson("/api/bots", { method: "POST", body: JSON.stringify(body) });
       status.textContent = "created";
       status.className = "ok";
+      nameInput.value = "";
+      soulArea.value = "";
       await panelStatus(main);
     } catch (e) {
       status.textContent = e.message;
       status.className = "err";
     }
   };
+
+  refreshTemplates();
+  refreshModels();
+
   return el(
     "div",
     { class: "card" },
     el("div", { class: "label" }, "new bot"),
     nameInput,
+    roleSelect,
+    modelSelect,
+    el("div", { class: "dim", style: "margin:4px 0" }, "SOUL.md"),
     soulArea,
+    preview,
     el("div", { class: "bot-actions" }, create, status),
   );
 }

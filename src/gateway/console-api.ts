@@ -15,7 +15,7 @@ import {
   renameBot,
   deleteBot,
 } from "../bots/profile";
-import { templateSoul } from "../bots/templates";
+import { templateSoul, ROLE_TEMPLATES } from "../bots/templates";
 import { sanitizeSkillName } from "../skills/loader";
 import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
 import { SessionLog, sessionLineage } from "../session/log";
@@ -282,6 +282,31 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     }
 
     const botSingleMatch = /^\/api\/bots\/([a-zA-Z0-9_-]+)$/.exec(path);
+
+    if (path === "/api/bots/templates" && req.method === "GET") {
+      // #253: role templates for the "new bot" dialog — id + label + a short
+      // description. The full SOUL is generated server-side on request.
+      return json({
+        templates: ROLE_TEMPLATES.map((t) => ({ id: t.id, label: t.label, desc: t.desc })),
+      });
+    }
+
+    if (path === "/api/bots/soul-preview" && req.method === "POST") {
+      let body: { role?: unknown; name?: unknown };
+      try {
+        body = (await req.json()) as typeof body;
+      } catch {
+        return json({ error: "invalid json" }, 400);
+      }
+      const role = typeof body.role === "string" ? body.role : "";
+      const name = typeof body.name === "string" ? body.name : "";
+      if (!name.trim()) return json({ error: "name is required" }, 400);
+      try {
+        return json({ soul: templateSoul(role, name), role });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 400);
+      }
+    }
 
     if (path === "/api/bots" && req.method === "POST") {
       let body: { name?: unknown; soul?: unknown; role?: unknown; model?: unknown };
