@@ -4,6 +4,7 @@
 import { renderMarkdown } from "./markdown.js";
 import { emptyStateFor } from "./empty-state.js";
 import { setupChecklist } from "./setup-checklist.js";
+import { headerLabels, stackLabels, isHeaderRow } from "./tables.js";
 
 const $app = document.getElementById("app");
 
@@ -31,6 +32,28 @@ function el(tag, attrs = {}, ...children) {
     node.append(child);
   }
   return node;
+}
+
+// #258: annotate every <td> with the matching <th> text so a <768px stylesheet
+// can stack rows into labelled cards instead of overflowing horizontally.
+// The label mapping lives in the pure tables.js module (headless-testable);
+// this DOM glue reads the real table rows and applies it.
+function prepareTables(root) {
+  for (const table of root.querySelectorAll("table")) {
+    const body = table.querySelector("tr");
+    if (!body) continue;
+    const headers = headerLabels(
+      [...body.children].map((c) => ({ tag: c.tagName, text: c.textContent.trim() })),
+    );
+    if (headers.length === 0) continue; // no header row -> skip
+    for (const row of table.querySelectorAll("tr")) {
+      const cells = [...row.children];
+      if (isHeaderRow(cells.map((c) => ({ tag: c.tagName })))) continue; // header row itself
+      stackLabels(headers, cells.map((c) => ({ tag: c.tagName }))).forEach((label, i) => {
+        if (label !== undefined) cells[i].setAttribute("data-label", label);
+      });
+    }
+  }
 }
 
 // #254: build an empty-state guidance card from the pure empty-state module.
@@ -246,6 +269,9 @@ async function panelStatus(main) {
     main.append(el("div", { class: "dim" }, "no jobs configured"));
   } else {
     const table = el("table");
+    table.append(
+      el("tr", {}, el("th", {}, "job"), el("th", {}, "bot"), el("th", { class: "num" }, "next due")),
+    );
     for (const job of jobs) {
       table.append(
         el(
@@ -258,6 +284,7 @@ async function panelStatus(main) {
       );
     }
     main.append(table);
+    prepareTables(main);
   }
 
   main.append(el("h2", {}, "bots"));
@@ -637,6 +664,7 @@ async function panelSpend(main) {
     );
   }
   main.append(el("h2", { class: "dim" }, "by bot"), breakdownTable, el("h2", { class: "dim" }, "details"), detailTable, el("p", { class: "dim" }, `total: ${fmtUsd(total)}`));
+  prepareTables(main);
 }
 
 async function panelAudit(main) {
@@ -1063,6 +1091,7 @@ async function render() {
   }
   try {
     await panel[2](main);
+    prepareTables(main);
   } catch (e) {
     if (e.message !== "unauthorized") {
       main.append(el("div", { class: "err" }, `error: ${e.message}`));
