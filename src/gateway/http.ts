@@ -36,7 +36,7 @@ export interface HttpServerHandle {
 const STATIC_FILES: Record<string, { file: string; type: string }> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/console": { file: "index.html", type: "text/html; charset=utf-8" },
-  "/console/app.js": { file: "app.js", type: "application/javascript; charset=utf-8" },
+  "/console/app.bundle.js": { file: "app.bundle.js", type: "application/javascript; charset=utf-8" },
   "/console/markdown.js": { file: "markdown.js", type: "application/javascript; charset=utf-8" },
   "/console/empty-state.js": { file: "empty-state.js", type: "application/javascript; charset=utf-8" },
   "/console/setup-checklist.js": { file: "setup-checklist.js", type: "application/javascript; charset=utf-8" },
