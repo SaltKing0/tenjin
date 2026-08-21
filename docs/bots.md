@@ -94,6 +94,7 @@ gateway:
       bot: writer             # this job runs the writer bot
       prompt: "Draft the weekly changelog."
       cron: "0 9 * * 1"
+      tz: Europe/Berlin       # optional; default is server local time
 ```
 
 See [docs/architecture.md](architecture.md#gateway) for the full gateway config.
