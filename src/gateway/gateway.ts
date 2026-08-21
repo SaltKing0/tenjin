@@ -6,7 +6,7 @@ import { ProviderRegistry } from "../provider/registry";
 import { resolveBot, listBots, botModelRef, botBudgetUSD, type BotProfile, type BotRoutineConfig, type BotHeartbeatConfig } from "../bots/profile";
 import { scanInstalledBots } from "../bots/catalog";
 import { reconcileOrphanedTasks } from "../bots/tasks";
-import { runHeadless, capPolicy, type HeadlessOptions, type HeadlessResult } from "../agent/headless";
+import { runHeadless, capPolicy, type HeadlessOptions, type HeadlessResult, type ToolPolicy } from "../agent/headless";
 import { guardForBot } from "../security/guard";
 import { resolveParanoid, hardenUntrustedInput } from "../security/injection";
 import { createBudget, formatUSD, type Budget } from "../agent/budget";
@@ -447,6 +447,109 @@ export function saveGatewayState(home: string, state: GatewayStateFile): void {
   renameSync(tmp, path);
 }
 
+/**
+ * What a job run needs from its builder before the common execution machinery
+ * (slot, budget, runHeadless, history/persist) runs. Built by either
+ * {@link buildHeartbeatRun} (heartbeat path) or {@link buildJobRun} (scheduled
+ * job path); execute() is thin glue that consumes one of these.
+ */
+interface RunPlan {
+  message: string;
+  /** Effective tool policy for the run (job policy, bot-capped). */
+  policy: ToolPolicy;
+  extraTools?: ToolDef[];
+  approve: HeadlessOptions["approve"];
+}
+
+/**
+ * Build the effective message, extra tools and approve logic for a heartbeat
+ * job. Behavior-neutral extraction of the heartbeat arm of the old execute():
+ * reads + hardens + marks the user-originated inbox, wires the heartbeat's own
+ * tools, and grants them full autonomy (reads always allowed, own tools always
+ * allowed).
+ */
+function buildHeartbeatRun(
+  deps: GatewayDeps,
+  replyCooldownMs: number,
+  profile: BotProfile,
+  job: ScheduledJob,
+): RunPlan {
+  // Effective tool policy for this run: the job's own policy, capped by
+  // the bot's security policy (a bot can only tighten, never upgrade).
+  const jobPolicy = capPolicy(job.policy, profile.config.security?.policy);
+  const inboxPolicy = inboxPolicyFromConfig(deps.config.inbox);
+  // #181: the heartbeat only reacts to user-originated messages. Bot mail
+  // (send_message / notifyBot) is inter-bot traffic the recipient handles
+  // on a real run — surfacing it here would make two heartbeat bots reply
+  // to each other forever. Bot messages stay unread (not auto-replied).
+  const unread = unreadMessages(profile.inboxDir, inboxPolicy).filter(
+    (m) => m.from === USER_SENDER,
+  );
+  const inboxPart =
+    unread.length > 0
+      ? // #189: bot-to-bot inbox content is untrusted — scan, audit and
+        // frame it before it reaches the heartbeat prompt, matching the
+        // tool-output hardening (a hostile bot could otherwise steer it).
+        `You have ${unread.length} unread message(s):\n${hardenUntrustedInput(formatInbox(unread), {
+          paranoid: resolveParanoid(deps.config.security, profile.config.security),
+          audit: (kind, detail) => deps.log?.(`[${kind}] ${detail}`),
+        })}\n`
+      : "Your inbox is empty.\n";
+  const message =
+    `Heartbeat check. ${inboxPart}` +
+    `If a message needs a reply, answer the sender with send_message. ` +
+    `Briefly note anything actionable; if nothing needs attention reply with just "ok".`;
+  if (unread.length > 0) {
+    markRead(
+      profile.inboxDir,
+      unread.map((m) => m.id),
+    );
+  }
+  const tools: ToolDef[] = [
+    createCheckInboxTool({
+      profile,
+      policy: inboxPolicy,
+      paranoid: resolveParanoid(deps.config.security, profile.config.security),
+      audit: (kind, detail) => deps.log?.(`[${kind}] ${detail}`),
+    }),
+    createSendMessageTool({
+      home: deps.home,
+      fromBot: profile.name,
+      policy: inboxPolicy,
+      // #181 safety net: per-bot-pair cooldown so a heartbeat can't loop.
+      replyCooldownMs,
+    }),
+    createRememberTool({ memoryDirPath: profile.memoryDir }),
+  ];
+  // The heartbeat is fully autonomous: allow its own tools, keep read access.
+  const approve: HeadlessOptions["approve"] = async (name, group) =>
+    group === "read" || tools.some((t) => t.name === name);
+  return { message, policy: jobPolicy, extraTools: tools, approve };
+}
+
+/**
+ * Build the effective message, extra tools and approve logic for a scheduled
+ * (non-heartbeat) job. Behavior-neutral extraction of the job arm of the old
+ * execute(): the job's own prompt, no extra tools, and policy-based approval
+ * (reads fine, writes only when the bot-capped policy is full).
+ */
+function buildJobRun(
+  deps: GatewayDeps,
+  profile: BotProfile,
+  job: ScheduledJob,
+): RunPlan {
+  // Effective tool policy for this run: the job's own policy, capped by
+  // the bot's security policy (a bot can only tighten, never upgrade).
+  const jobPolicy = capPolicy(job.policy, profile.config.security?.policy);
+  return {
+    message: job.prompt,
+    policy: jobPolicy,
+    // Scheduled jobs are headless/autonomous: reads are fine, writes are
+    // allowed only when the job's (bot-capped) policy is full.
+    approve: async (_name, group) => (group === "read" ? true : jobPolicy === "full"),
+  };
+}
+
 export class Gateway {
   settings: GatewaySettings;
   jobs: ScheduledJob[];
@@ -704,67 +807,19 @@ export class Gateway {
       const profile = resolveBot(this.deps.home, job.botName);
       const ref = botModelRef(profile, this.deps.config);
 
-      let message = job.prompt;
-      let extraTools: ToolDef[] | undefined;
-      let approve: HeadlessOptions["approve"];
-      // Effective tool policy for this run: the job's own policy, capped by
-      // the bot's security policy (a bot can only tighten, never upgrade).
-      const jobPolicy = capPolicy(job.policy, profile.config.security?.policy);
-      if (job.kind === "heartbeat") {
-        const inboxPolicy = inboxPolicyFromConfig(this.deps.config.inbox);
-        // #181: the heartbeat only reacts to user-originated messages. Bot mail
-        // (send_message / notifyBot) is inter-bot traffic the recipient handles
-        // on a real run — surfacing it here would make two heartbeat bots reply
-        // to each other forever. Bot messages stay unread (not auto-replied).
-        const unread = unreadMessages(profile.inboxDir, inboxPolicy).filter(
-          (m) => m.from === USER_SENDER,
-        );
-        const inboxPart =
-          unread.length > 0
-            ? // #189: bot-to-bot inbox content is untrusted — scan, audit and
-              // frame it before it reaches the heartbeat prompt, matching the
-              // tool-output hardening (a hostile bot could otherwise steer it).
-              `You have ${unread.length} unread message(s):\n${hardenUntrustedInput(formatInbox(unread), {
-                paranoid: resolveParanoid(this.deps.config.security, profile.config.security),
-                audit: (kind, detail) => this.deps.log?.(`[${kind}] ${detail}`),
-              })}\n`
-            : "Your inbox is empty.\n";
-        message =
-          `Heartbeat check. ${inboxPart}` +
-          `If a message needs a reply, answer the sender with send_message. ` +
-          `Briefly note anything actionable; if nothing needs attention reply with just "ok".`;
-        if (unread.length > 0) {
-          markRead(
-            profile.inboxDir,
-            unread.map((m) => m.id),
-          );
-        }
-        const tools: ToolDef[] = [
-          createCheckInboxTool({
-            profile,
-            policy: inboxPolicy,
-            paranoid: resolveParanoid(this.deps.config.security, profile.config.security),
-            audit: (kind, detail) => this.deps.log?.(`[${kind}] ${detail}`),
-          }),
-          createSendMessageTool({
-            home: this.deps.home,
-            fromBot: profile.name,
-            policy: inboxPolicy,
-            // #181 safety net: per-bot-pair cooldown so a heartbeat can't loop.
-            replyCooldownMs: this.settings.heartbeat?.replyCooldownMs ?? DEFAULT_HEARTBEAT_REPLY_COOLDOWN_MS,
-          }),
-          createRememberTool({ memoryDirPath: profile.memoryDir }),
-        ];
-        extraTools = tools;
-        // The heartbeat is fully autonomous: allow its own tools, keep read access.
-        approve = async (name, group) =>
-          group === "read" || tools.some((t) => t.name === name);
-      } else {
-        // Scheduled jobs are headless/autonomous: reads are fine, writes are
-        // allowed only when the job's (bot-capped) policy is full.
-        approve = async (_name, group) =>
-          group === "read" ? true : jobPolicy === "full";
-      }
+      // Build the run's effective message + tools + approve from the job's
+      // kind (heartbeat vs scheduled), keeping the two arms separate and
+      // testable while execute() stays thin glue below.
+      const plan =
+        job.kind === "heartbeat"
+          ? buildHeartbeatRun(
+              this.deps,
+              this.settings.heartbeat?.replyCooldownMs ?? DEFAULT_HEARTBEAT_REPLY_COOLDOWN_MS,
+              profile,
+              job,
+            )
+          : buildJobRun(this.deps, profile, job);
+      const { message, extraTools, approve, policy: jobPolicy } = plan;
 
       controller = new AbortController();
       // #190: give the run an external budget so a timed-out (aborted) run
