@@ -16,6 +16,7 @@ import { renderTrajectory } from "../session/trajectory";
 import { buildSkillsSection, summarizeSkills } from "../skills/activate";
 import { createAskBotTool } from "../bots/delegate";
 import { listBots } from "../bots/profile";
+import { AuditLog, formatAudit, auditPath } from "../audit/log";
 import { unreadMessages } from "../bots/inbox";
 import { getSkill, listSkills, scaffoldSkill } from "../skills/loader";
 import { listSummaries, sessionsWithoutSummary } from "../memory/summaries";
@@ -50,6 +51,7 @@ export interface ReplOptions {
 
 export async function startRepl(opts: ReplOptions): Promise<void> {
   const rl = createInterface({ input: stdin, output: stdout });
+  const audit = new AuditLog(auditPath(opts.home));
   const state = {
     messages: [...(opts.initialMessages ?? [])],
     budget: new Budget(opts.config.budgetUSD, opts.config.pricing),
@@ -57,6 +59,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     sessionId: opts.sessionId,
     active: opts.defaultRef,
     pinnedSkills: new Set<string>(),
+    audit,
   };
   if (opts.bot) {
     opts.tools.push(
@@ -134,8 +137,9 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           maxTokens: opts.config.maxTokens,
           cwd: opts.cwd,
           approve: (name, group, input) =>
-            approve(name, group, input, opts.config, rl, sessionAllowed),
+            approve(name, group, input, opts.config, rl, sessionAllowed, audit, opts.bot),
           guard: opts.guard,
+          audit: (kind, detail) => audit.append(kind, "user", detail, opts.bot),
           onTextDelta: (d) => stdout.write(d),
           onEvent: (e) => forwardEvent(e, state.logger, state.budget),
           signal: controller.signal,
@@ -178,6 +182,7 @@ interface ReplState {
   sessionId: string;
   active: ModelRef;
   pinnedSkills: Set<string>;
+  audit: AuditLog;
 }
 
 function activeProvider(opts: ReplOptions, state: ReplState): Provider {
@@ -208,6 +213,7 @@ async function handleCommand(
           "/memory          memory layer status",
           "/whoami          current identity and model",
           "/bots            list bots and unread inbox counts",
+          "/audit [n]       recent security-relevant events",
           "/skills          list installed skills",
           "/skill <n> [off] pin a skill into every turn",
           "",
@@ -407,6 +413,13 @@ async function handleCommand(
       }
       return;
     }
+    case "/audit": {
+      const tail = rest[0] !== undefined && /^\d+$/.test(rest[0]) ? Number(rest[0]) : 20;
+      for (const line of formatAudit(state.audit.query({ tail })).split("\n")) {
+        stdout.write(dim(line) + "\n");
+      }
+      return;
+    }
     default:
       stdout.write(red(`unknown command ${cmd} — /help\n`));
       return;
@@ -420,20 +433,26 @@ async function approve(
   config: HarnessConfig,
   rl: Interface,
   sessionAllowed: Set<string>,
+  audit?: AuditLog,
+  bot?: string,
 ): Promise<boolean> {
   if (sessionAllowed.has(name)) return true;
   const policy = config.approval[name] ?? (group === "write" ? "ask" : "allow");
   if (policy === "allow") return true;
   if (policy === "deny") {
     stdout.write(dim(`  (blocked by policy: ${name})\n`));
+    audit?.append("approval", "user", `${name} denied by policy`, bot);
     return false;
   }
   const answer = (await rl.question(green(`  approve ${name}? [y/N/a] `))).trim().toLowerCase();
   if (answer === "a") {
     sessionAllowed.add(name);
+    audit?.append("approval", "user", `${name} approved (always this session)`, bot);
     return true;
   }
-  return answer === "y" || answer === "yes";
+  const allowed = answer === "y" || answer === "yes";
+  audit?.append("approval", "user", `${name} ${allowed ? "approved" : "declined"}`, bot);
+  return allowed;
 }
 
 function adoptLog(state: ReplState, log: SessionLog, sessionAllowed: Set<string>): void {

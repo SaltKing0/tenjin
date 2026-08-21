@@ -42,6 +42,7 @@ export interface AgentTurnOptions {
   approve: ApproveFn;
   cwd: string;
   guard?: SecurityGuard | null;
+  audit?: (kind: "write_exec" | "budget_halt", detail: string) => void;
   onEvent?: (e: TurnEvent) => void;
   onTextDelta?: (delta: string) => void;
   signal?: AbortSignal;
@@ -54,6 +55,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
 
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
     if (opts.budget.exhausted) {
+      opts.audit?.("budget_halt", `halted at ${opts.budget.spentUSD.toFixed(4)} USD`);
       return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText };
     }
 
@@ -102,6 +104,9 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
         output = cap(dispatched.output);
       }
 
+      if (ok && groupOf(opts.tools, block.name) === "write") {
+        opts.audit?.("write_exec", `${block.name} succeeded`);
+      }
       results.push({
         type: "tool_result",
         toolUseId: block.id,

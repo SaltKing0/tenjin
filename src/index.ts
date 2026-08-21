@@ -43,6 +43,7 @@ import { createSendMessageTool, createCheckInboxTool } from "./bots/tools";
 import { createAskBotTool } from "./bots/delegate";
 import { Gateway } from "./gateway/gateway";
 import { SecurityGuard } from "./security/guard";
+import { AuditLog, formatAudit, auditPath } from "./audit/log";
 import { TelegramChannel, routeText } from "./gateway/telegram";
 import { unreadMessages } from "./bots/inbox";
 import { readTool } from "./tools/read";
@@ -73,6 +74,10 @@ async function main(): Promise<number> {
 
   if (process.argv[2] === "gateway") {
     return gatewayCommand(process.argv.slice(3));
+  }
+
+  if (process.argv[2] === "audit") {
+    return auditCommand(process.argv.slice(3));
   }
 
   let cli: CliArgs;
@@ -199,7 +204,10 @@ async function main(): Promise<number> {
       tools.push(createSendMessageTool({ home, fromBot: profile.name }));
       tools.push(createCheckInboxTool({ profile }));
     }
-    const guard = SecurityGuard.fromConfig(config.security);
+    const audit = new AuditLog(auditPath(home));
+    const guard = SecurityGuard.fromConfig(config.security, (detail) =>
+      audit.append("tool_block", "user", detail),
+    );
     const ctx: AppContext = { config, registry, defaultRef, cheapRef, system, tools, cwd, guard };
 
     if (cli.print !== undefined) {
@@ -293,6 +301,22 @@ function botCommand(args: string[]): number {
   }
 }
 
+function auditCommand(args: string[]): number {
+  let tail = 50;
+  let bot: string | undefined;
+  let kind: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--tail") tail = Number(args[++i]);
+    else if (args[i] === "--bot") bot = args[++i];
+    else if (args[i] === "--kind") kind = args[++i];
+  }
+  const audit = new AuditLog(auditPath(tenjinHome()));
+  stdout.write(
+    formatAudit(audit.query({ tail, bot, kind: kind as never })) + "\n",
+  );
+  return 0;
+}
+
 async function gatewayCommand(args: string[]): Promise<number> {
   const dryRun = args.includes("--dry-run");
   const home = tenjinHome();
@@ -305,7 +329,10 @@ async function gatewayCommand(args: string[]): Promise<number> {
     process.on("SIGINT", () => controller.abort());
     process.on("SIGTERM", () => controller.abort());
     const log = (l: string) => stdout.write(`${l}\n`);
-    const guard = SecurityGuard.fromConfig(config.security);
+    const audit = new AuditLog(auditPath(home));
+    const guard = SecurityGuard.fromConfig(config.security, (detail) =>
+      audit.append("tool_block", "gateway", detail),
+    );
     const gateway = new Gateway({ home, cwd, config, registry, log, guard });
 
     const channels: Record<string, (text: string) => Promise<void>> = {};
@@ -325,6 +352,7 @@ async function gatewayCommand(args: string[]): Promise<number> {
           defaultBot,
           allowedUsers: tg.allowedUsers,
           apiBase: process.env.TELEGRAM_API_BASE,
+          onReject: (userId) => audit.append("channel_reject", String(userId), "telegram message from non-allowlisted user"),
         },
         async (msg) => {
           const { bot: botName, rest } = routeText(msg.text, defaultBot, available);
@@ -343,6 +371,7 @@ async function gatewayCommand(args: string[]): Promise<number> {
             sessionLogDir: profile.sessionsDir,
             sessionBot: profile.name,
           });
+          audit.append("gateway_msg", String(msg.userId), `${botName}: ${msg.text.slice(0, 120)}`, botName);
           log(`telegram: handled for ${botName} (${formatUSD(result.costUSD)})`);
           return result.text || null;
         },
@@ -421,6 +450,8 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     policy: "read-only",
     agentsMd: loadAgentsMd(ctx.cwd),
     guard: ctx.guard,
+    audit: (kind, detail) =>
+      new AuditLog(auditPath(tenjinHome())).append(kind, "user", detail),
   });
   stdout.write(`${result.text}\n`);
   stdout.write(

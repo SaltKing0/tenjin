@@ -25,6 +25,7 @@ export interface HeadlessOptions {
   sessionLogDir?: string;
   sessionBot?: string;
   guard?: import("../security/guard").SecurityGuard | null;
+  audit?: (kind: "write_exec" | "budget_halt", detail: string) => void;
 }
 
 export interface HeadlessResult {
@@ -76,6 +77,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     cwd: opts.cwd,
     approve: async (_name, group) => group === "read",
     guard: opts.guard,
+    audit: opts.audit,
     onEvent: logger
       ? (e: TurnEvent) => {
           const ts = new Date().toISOString();

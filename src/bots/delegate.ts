@@ -13,6 +13,7 @@ export interface AskBotDeps {
   globalConfig: HarnessConfig;
   sessionBudget?: Budget;
   guard?: import("../security/guard").SecurityGuard | null;
+  audit?: (kind: "delegation", detail: string) => void;
 }
 
 const DEFAULT_DELEGATION_CAP_USD = 1.0;
@@ -38,6 +39,7 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
       const message = String(args.message ?? "").trim();
       if (!message) throw new Error("message must not be empty");
 
+      deps.audit?.("delegation", `ask_bot -> ${targetName}: ${message.slice(0, 120)}`);
       const ref = botModelRef(profile, deps.globalConfig);
       const provider = deps.getProvider(ref.provider);
 

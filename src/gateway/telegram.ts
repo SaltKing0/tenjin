@@ -6,6 +6,7 @@ export interface TelegramOptions {
   defaultBot: string;
   allowedUsers: number[];
   pollTimeoutSec?: number;
+  onReject?: (userId: number) => void;
 }
 
 export interface TgUser {
@@ -98,6 +99,7 @@ export class TelegramChannel {
       if (!msg?.text || !msg.from) continue;
       if (!this.opts.allowedUsers.includes(msg.from.id)) {
         this.log(`telegram: ignored unauthorized user ${msg.from.id}`);
+        this.opts.onReject?.(msg.from.id);
         continue;
       }
       handled++;
