@@ -64,6 +64,7 @@ import { AuditLog, formatAudit, auditPath } from "./audit/log";
 import { aggregateSpend, renderSpend } from "./audit/spend";
 import { TelegramChannel } from "./gateway/telegram";
 import { SlackChannel } from "./gateway/slack";
+import { WebhookChannel } from "./gateway/webhook";
 import { createMessageHandler, chatStreamResponse, type HandleContext } from "./gateway/handler";
 import { startHttpServer } from "./gateway/http";
 import { createConsoleApi } from "./gateway/console-api";
@@ -711,6 +712,7 @@ async function gatewayCommand(args: string[]): Promise<number> {
 
     const tg = gateway.settings.telegram;
     const sl = gateway.settings.slack;
+    const wh = gateway.settings.webhook;
     let telegramHandle:
       | ((
           text: string,
@@ -855,6 +857,61 @@ async function gatewayCommand(args: string[]): Promise<number> {
         handleForSlack(msg.text, {
           actor: String(msg.userId),
           source: "slack",
+          chatId: msg.chatId,
+          userId: msg.userId,
+        }),
+      );
+      return channel;
+    });
+
+    registerChannel("webhook", () => {
+      if (!wh?.enabled) throw new ConfigError("gateway.webhook is not enabled");
+      if (!wh.secret) throw new ConfigError("gateway.webhook.enabled requires a secret");
+      const defaultBot = wh.defaultBot as string;
+      const available = listBots(home);
+      let channel: WebhookChannel;
+      // Approvals and job postTo deliver out-of-band through the outbound
+      // webhook; without one they cannot be pushed anywhere.
+      const notifyApproval = wh.outboundWebhookUrl
+        ? async (_chatId: number, text: string) => channel.send(text)
+        : undefined;
+      const handleForWebhook = createMessageHandler({
+        home,
+        cwd,
+        config,
+        registry,
+        availableBots: available,
+        defaultBot,
+        allowWrites: wh.allowWrites === true,
+        approvalTimeoutMs: wh.approvalTimeoutMs ?? 120_000,
+        guard,
+        audit,
+        log,
+        notifyApproval,
+      });
+      channel = new WebhookChannel(
+        {
+          secret: wh.secret,
+          defaultBot,
+          allowedSenders: wh.allowedSenders,
+          outboundWebhookUrl: wh.outboundWebhookUrl,
+          webhookPath: wh.webhookPath,
+          rateLimitMax: wh.rateLimitMax,
+          rateLimitWindowMs: wh.rateLimitWindowMs,
+          maxMessageLength: wh.maxMessageLength,
+          onRejected: (info) =>
+            audit.append(
+              "channel_reject",
+              info.sender,
+              `webhook message rejected (${info.reason})`,
+            ),
+        },
+        log,
+      );
+      channel.onMessage((msg) =>
+        handleForWebhook(msg.text, {
+          actor: String(msg.userId),
+          source: "webhook",
           chatId: msg.chatId,
           userId: msg.userId,
         }),

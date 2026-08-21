@@ -40,3 +40,7 @@ registerChannel("telegram", () => {
 registerChannel("slack", () => {
   throw new ConfigError("slack channel factory not wired");
 });
+
+registerChannel("webhook", () => {
+  throw new ConfigError("webhook channel factory not wired");
+});

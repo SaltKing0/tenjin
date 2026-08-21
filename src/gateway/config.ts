@@ -42,6 +42,23 @@ export interface SlackChannelConfig {
   maxMessageLength?: number;
 }
 
+export interface WebhookChannelConfig {
+  enabled: boolean;
+  defaultBot?: string;
+  /** HMAC secret required to authenticate inbound signatures. */
+  secret?: string;
+  /** If non-empty, only these sender ids are accepted. */
+  allowedSenders: string[];
+  /** When set, bot replies are POSTed here as JSON instead of returned in the HTTP response. */
+  outboundWebhookUrl?: string;
+  webhookPath?: string;
+  allowWrites?: boolean;
+  approvalTimeoutMs?: number;
+  rateLimitMax?: number;
+  rateLimitWindowMs?: number;
+  maxMessageLength?: number;
+}
+
 export interface HeartbeatConfig {
   bot: string;
   intervalMs: number;
@@ -67,6 +84,7 @@ export interface GatewaySettings {
   jobs: JobConfig[];
   telegram: TelegramChannelConfig | null;
   slack: SlackChannelConfig | null;
+  webhook: WebhookChannelConfig | null;
   channels: string[];
   heartbeat: HeartbeatConfig | null;
   listen: ListenConfig | null;
@@ -107,6 +125,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
       jobs: [],
       telegram: null,
       slack: null,
+      webhook: null,
       channels: [],
       heartbeat: null,
       listen: null,
@@ -122,6 +141,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     jobs: [],
     telegram: null,
     slack: null,
+    webhook: null,
     channels: [],
     heartbeat: null,
     listen: null,
@@ -272,6 +292,46 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     };
   }
 
+  const rawWebhook = gw.webhook;
+  if (rawWebhook !== undefined && rawWebhook !== null) {
+    if (typeof rawWebhook !== "object") throw new ConfigError("gateway.webhook must be a mapping");
+    const wh = rawWebhook as Record<string, unknown>;
+    const enabled = wh.enabled === true;
+    const allowedSenders = Array.isArray(wh.allowedSenders)
+      ? (wh.allowedSenders as unknown[]).map((s) => {
+          if (typeof s !== "string" || !s.trim()) {
+            throw new ConfigError("gateway.webhook.allowedSenders must be sender id strings");
+          }
+          return s.trim();
+        })
+      : [];
+    if (enabled && (typeof wh.secret !== "string" || !wh.secret.trim())) {
+      throw new ConfigError("gateway.webhook.enabled requires a secret (HMAC signing key)");
+    }
+    settings.webhook = {
+      enabled,
+      defaultBot: typeof wh.defaultBot === "string" ? wh.defaultBot : undefined,
+      secret: typeof wh.secret === "string" ? wh.secret : undefined,
+      allowedSenders,
+      outboundWebhookUrl:
+        typeof wh.outboundWebhookUrl === "string" && wh.outboundWebhookUrl.trim()
+          ? wh.outboundWebhookUrl.trim()
+          : undefined,
+      webhookPath:
+        typeof wh.webhookPath === "string" && wh.webhookPath.trim()
+          ? wh.webhookPath.trim()
+          : undefined,
+      allowWrites: wh.allowWrites === true,
+      approvalTimeoutMs:
+        typeof wh.approvalTimeoutMs === "number" ? wh.approvalTimeoutMs : undefined,
+      rateLimitMax: typeof wh.rateLimitMax === "number" ? wh.rateLimitMax : undefined,
+      rateLimitWindowMs:
+        typeof wh.rateLimitWindowMs === "number" ? wh.rateLimitWindowMs : undefined,
+      maxMessageLength:
+        typeof wh.maxMessageLength === "number" ? wh.maxMessageLength : undefined,
+    };
+  }
+
   const rawChannels = gw.channels;
   if (rawChannels !== undefined && rawChannels !== null) {
     if (!Array.isArray(rawChannels)) {
@@ -293,6 +353,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     const defaults: string[] = [];
     if (settings.telegram?.enabled) defaults.push("telegram");
     if (settings.slack?.enabled) defaults.push("slack");
+    if (settings.webhook?.enabled) defaults.push("webhook");
     settings.channels = defaults;
   }
 
@@ -329,7 +390,9 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
 
   if (settings.allowWrites === undefined) {
     settings.allowWrites =
-      settings.telegram?.allowWrites === true || settings.slack?.allowWrites === true;
+      settings.telegram?.allowWrites === true ||
+      settings.slack?.allowWrites === true ||
+      settings.webhook?.allowWrites === true;
   }
 
   return settings;
