@@ -502,12 +502,28 @@ if (token) {
 
 /* ---------- settings ---------- */
 
+// Persist per-provider detected model lists across reloads so the
+// dropdown isn't empty every time the console is reopened.
+const DETECT_CACHE_KEY = "tenjin_detected_models";
+
+function readDetectedCache() {
+  try {
+    return JSON.parse(localStorage.getItem(DETECT_CACHE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function writeDetectedCache(cache) {
+  localStorage.setItem(DETECT_CACHE_KEY, JSON.stringify(cache));
+}
+
 async function panelSettings(main) {
   main.replaceChildren(el("h1", {}, "Settings"));
   const settings = await apiJson("/api/settings");
 
   const state = {
-    detected: {},
+    detected: readDetectedCache(),
     defaultModel: settings.models.default || "",
     cheapModel: settings.models.cheap || "",
   };
@@ -515,6 +531,13 @@ async function panelSettings(main) {
   const statusLine = el("div", { class: "dim" });
   const modelSelect = el("select", { style: "width:100%; margin-bottom:8px" },
     el("option", { value: "" }, "— run detect on a provider to list models —"));
+  // restore previously detected models from the cache so the dropdown
+  // is populated immediately on reopen, before any detect runs
+  for (const [provider, models] of Object.entries(state.detected)) {
+    for (const model of models) {
+      modelSelect.append(el("option", { value: provider + ":" + model }, provider + ":" + model));
+    }
+  }
   const cheapSelect = el("select", { style: "width:100%" },
     el("option", { value: "" }, "(none)"));
   main.append(statusLine);
@@ -557,6 +580,7 @@ async function panelSettings(main) {
           return;
         }
         state.detected[name] = data.models;
+        writeDetectedCache(state.detected);
         detectOut.textContent = data.models.length + " models detected";
         detectOut.className = "ok";
         modelSelect.append(...data.models.map((m) => el("option", { value: name + ":" + m }, name + ":" + m)));
