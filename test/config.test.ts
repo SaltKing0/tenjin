@@ -126,6 +126,126 @@ test("tenjinHome respects TENJIN_HOME env", () => {
   else process.env.TENJIN_HOME = prev;
 });
 
+describe("iss#67 schema validation", () => {
+  test("unknown top-level field warns with file, still loads", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: m\nbogusField: 1\n");
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg: unknown) => warns.push(String(msg));
+    try {
+      const { config } = loadConfig(project, home);
+      expect(config.model).toBe("m");
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(
+      warns.some((w) => w.includes("unknown field") && w.includes("bogusField") && w.includes("config.yaml")),
+    ).toBe(true);
+  });
+
+  test("unknown nested field warns with dotted path", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "config.yaml"),
+      "model: m\nmemory:\n  vector:\n    whatev: 1\n",
+    );
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg: unknown) => warns.push(String(msg));
+    try {
+      loadConfig(project, home);
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warns.some((w) => w.includes("memory.vector.whatev"))).toBe(true);
+  });
+
+  test("wrong scalar type reports file + dotted path + expected/found", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: m\nmaxTokens: \"many\"\n");
+    expect(() => loadConfig(project, home)).toThrow(ConfigError);
+    try {
+      loadConfig(project, home);
+    } catch (e) {
+      const msg = (e as Error).message;
+      expect(msg).toContain("config.yaml");
+      expect(msg).toContain("maxTokens: expected number, found string");
+    }
+  });
+
+  test("wrong nested type reports dotted path", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "config.yaml"),
+      "model: m\nmemory:\n  enabled: \"yes\"\n",
+    );
+    expect(() => loadConfig(project, home)).toThrow(/memory\.enabled: expected boolean, found string/);
+  });
+
+  test("wrong type in project config attributes to that file", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: m\n");
+    mkdirSync(join(project, ".tenjin"));
+    writeFileSync(join(project, ".tenjin", "config.yaml"), "budgetUSD: cheap\n");
+    expect(() => loadConfig(project, home)).toThrow(ConfigError);
+    try {
+      loadConfig(project, home);
+    } catch (e) {
+      const msg = (e as Error).message;
+      expect(msg).toContain(".tenjin");
+      expect(msg).toContain("budgetUSD: expected number, found string");
+    }
+  });
+
+  test("broken yaml reports line for unclosed flow collection", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "ok: 1\nmodel: [unclosed\n");
+    expect(() => loadConfig(project, home)).toThrow(ConfigError);
+    try {
+      loadConfig(project, home);
+    } catch (e) {
+      const msg = (e as Error).message;
+      expect(msg).toContain("Invalid YAML");
+      expect(msg).toContain("(line 2)");
+      expect(msg).toContain("config.yaml");
+    }
+  });
+
+  test("broken yaml reports line for unterminated quote", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "ok: 1\nmodel: 'oops\n");
+    expect(() => loadConfig(project, home)).toThrow(/\(line 2\)/);
+  });
+
+  test("boot exits controlled (code 2, no stack trace) on bad scalar type", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "provider: anthropic\nmodel: m\nmaxTokens: \"many\"\n");
+    const proc = Bun.spawnSync(
+      ["bun", "run", join(import.meta.dir, "..", "src", "index.ts")],
+      { cwd: join(import.meta.dir, ".."), env: { ...process.env, TENJIN_HOME: home } },
+    );
+    const out = proc.stdout?.toString() ?? "";
+    expect(proc.exitCode).toBe(2);
+    expect(out).toContain("config error:");
+    expect(out).toContain("maxTokens: expected number, found string");
+    expect(out).not.toContain("    at "); // no raw stack trace
+  });
+
+  test("boot exits controlled on broken yaml with line", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: 'oops\n");
+    const proc = Bun.spawnSync(
+      ["bun", "run", join(import.meta.dir, "..", "src", "index.ts")],
+      { cwd: join(import.meta.dir, ".."), env: { ...process.env, TENJIN_HOME: home } },
+    );
+    const out = proc.stdout?.toString() ?? "";
+    expect(proc.exitCode).toBe(2);
+    expect(out).toContain("Invalid YAML");
+    expect(out).not.toContain("    at ");
+  });
+});
+
 describe("memory flags", () => {
   const cfg = (over: any) => ({
     provider: "anthropic",

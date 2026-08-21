@@ -24,6 +24,157 @@ const DEFAULTS: HarnessConfig = {
   approval: {},
 };
 
+/**
+ * Known config fields and the types they accept. Used to tell a bad type
+ * (clear error with dotted path) apart from an unknown field (warning) at
+ * load time, before the value can fail deep in a runtime stack.
+ *
+ * `valueType` marks a "bag" mapping whose keys are dynamic (e.g. approval
+ * per tool, provider keys) — only the values' type is checked there.
+ */
+type TypeName = "string" | "number" | "boolean" | "mapping" | "list" | "null";
+interface FieldDef {
+  types: TypeName[];
+  children?: Record<string, FieldDef>;
+  valueType?: TypeName;
+}
+
+const SCHEMA: Record<string, FieldDef> = {
+  provider: { types: ["string"] },
+  model: { types: ["string"] },
+  maxTokens: { types: ["number"] },
+  budgetUSD: { types: ["number"] },
+  approval: { types: ["mapping"], valueType: "string" },
+  pricing: {
+    types: ["mapping"],
+    children: {
+      inputPerMTok: { types: ["number"] },
+      outputPerMTok: { types: ["number"] },
+      default: { types: ["mapping"], valueType: "number" },
+    },
+  },
+  providers: {
+    types: ["mapping"],
+    children: {
+      openai: { types: ["mapping"], valueType: "string" },
+      anthropic: { types: ["mapping"], valueType: "string" },
+    },
+  },
+  models: {
+    types: ["mapping"],
+    children: { default: { types: ["string"] }, cheap: { types: ["string"] } },
+  },
+  // `gateway` is deep-validated in gateway/config.ts with its own messages.
+  gateway: { types: ["mapping"] },
+  security: {
+    types: ["mapping"],
+    children: {
+      disabled: { types: ["boolean"] },
+      redaction: { types: ["boolean"] },
+      workspaceRoot: { types: ["string"] },
+      blockedPatterns: { types: ["list"] },
+      allowedPaths: { types: ["list"] },
+    },
+  },
+  memory: {
+    types: ["mapping"],
+    children: {
+      enabled: { types: ["boolean"] },
+      vector: {
+        types: ["mapping"],
+        children: {
+          enabled: { types: ["boolean"] },
+          model: { types: ["string"] },
+        },
+      },
+    },
+  },
+  // `inbox` from #64 (yaml TTL/max config); added here so schema-validate
+  // (#74) doesn't warn "unknown field inbox".
+  inbox: {
+    types: ["mapping"],
+    children: {
+      ttlDays: { types: ["number"] },
+      maxMessages: { types: ["number"] },
+    },
+  },
+};
+
+function configTypeName(v: unknown): TypeName {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "list";
+  switch (typeof v) {
+    case "string":
+      return "string";
+    case "number":
+      return "number";
+    case "boolean":
+      return "boolean";
+    case "object":
+      return "mapping";
+    default:
+      return typeof v as TypeName;
+  }
+}
+
+interface SourceIssues {
+  unknown: string[];
+  typeErrors: string[];
+}
+
+function walkNode(
+  node: Record<string, unknown>,
+  path: string,
+  defMap: Record<string, FieldDef>,
+  issues: SourceIssues,
+): void {
+  for (const [key, value] of Object.entries(node)) {
+    const dot = path ? `${path}.${key}` : key;
+    const def = defMap[key];
+    if (!def) {
+      issues.unknown.push(dot);
+      continue;
+    }
+    const actual = configTypeName(value);
+    if (!def.types.includes(actual)) {
+      issues.typeErrors.push(
+        `${dot}: expected ${def.types.join(" or ")}, found ${actual}`,
+      );
+      continue;
+    }
+    if (actual !== "mapping") continue;
+    if (def.children) {
+      walkNode(value as Record<string, unknown>, dot, def.children, issues);
+    } else if (def.valueType) {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        const av = configTypeName(v);
+        if (av !== def.valueType) {
+          issues.typeErrors.push(
+            `${dot}.${k}: expected ${def.valueType}, found ${av}`,
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Schema-check a single source file. Unknown fields are collected as warnings;
+ * wrong-typed known fields surface as type errors prefixed by `file` (and a
+ * dotted path), so a bad value points at exactly where it lives.
+ */
+function inspectSource(
+  obj: Record<string, unknown>,
+  file: string,
+): SourceIssues {
+  const issues: SourceIssues = { unknown: [], typeErrors: [] };
+  walkNode(obj, "", SCHEMA, issues);
+  for (const dot of issues.unknown) {
+    console.warn(`[config] ${file}: unknown field "${dot}" ignored`);
+  }
+  return issues;
+}
+
 const CONFIG_TEMPLATE = `# Tenjin harness configuration
 provider: anthropic        # anthropic | openai (any OpenAI-compatible endpoint)
 model: ""                  # REQUIRED, e.g. claude-sonnet-4-5, gpt-4o, deepseek-chat
@@ -121,6 +272,45 @@ export function ensureGlobalDir(home = tenjinHome()): { created: boolean } {
   return { created };
 }
 
+/**
+ * Best-effort 1-based line estimate for a YAML parse failure. Bun's parser
+ * reports no position, so we scan the raw text for the most common breakage —
+ * an unterminated quoted scalar or an unclosed flow collection — and fall back
+ * to the last non-empty line otherwise.
+ */
+function locateYamlError(raw: string, message: string): number {
+  const lines = raw.split("\n");
+  let quote: "'" | '"' | null = null;
+  let quoteLine = 0;
+  let flowOpenLine = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    for (let j = 0; j < line.length; j++) {
+      const ch = line[j];
+      // treat '#' at start or after whitespace as a comment start
+      if (ch === "#" && (j === 0 || /\s/.test(line[j - 1] ?? ""))) break;
+      if (ch === "'" || ch === '"') {
+        if (quote === ch) {
+          quote = null;
+        } else if (quote === null) {
+          quote = ch;
+          quoteLine = i + 1;
+        }
+        continue;
+      }
+      if (ch === "[" || ch === "{") {
+        if (flowOpenLine === 0) flowOpenLine = i + 1;
+      }
+    }
+  }
+  if (quote) return quoteLine;
+  if (flowOpenLine > 0 && /EOF|token/i.test(message)) return flowOpenLine;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if ((lines[i] ?? "").trim()) return i + 1;
+  }
+  return Math.max(1, lines.length);
+}
+
 function parseYamlFile(path: string): Partial<HarnessConfig> {
   if (!existsSync(path)) return {};
   const raw = readFileSync(path, "utf8");
@@ -129,7 +319,10 @@ function parseYamlFile(path: string): Partial<HarnessConfig> {
   try {
     parsed = YAML.parse(raw);
   } catch (e) {
-    throw new ConfigError(`Invalid YAML in ${path}: ${(e as Error).message}`);
+    const line = locateYamlError(raw, (e as Error).message);
+    throw new ConfigError(
+      `Invalid YAML in ${path} (line ${line}): ${(e as Error).message}`,
+    );
   }
   if (parsed === null || parsed === undefined) return {};
   if (typeof parsed !== "object") {
@@ -162,6 +355,19 @@ export function loadConfig(
   const globalCfg = parseYamlFile(globalPath);
   const managedCfg = parseYamlFile(managedPath);
   const projectCfg = parseYamlFile(projectPath);
+
+  for (const [src, file] of [
+    [globalCfg, globalPath],
+    [managedCfg, managedPath],
+    [projectCfg, projectPath],
+  ] as [Partial<HarnessConfig>, string][]) {
+    const issues = inspectSource(src as Record<string, unknown>, file);
+    if (issues.typeErrors.length > 0) {
+      throw new ConfigError(
+        issues.typeErrors.map((m) => `${file}: ${m}`).join("\n"),
+      );
+    }
+  }
 
   const merged: HarnessConfig = {
     ...DEFAULTS,
