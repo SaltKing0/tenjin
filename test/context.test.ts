@@ -121,4 +121,23 @@ describe("compressMessages", () => {
     expect(b1?.[0]?.content).toMatch(/^\[elided \d+ tokens\]$/);
     expect(b2?.[0]?.content).toMatch(/^\[elided \d+ tokens\]$/);
   });
+
+  test("accounts for placeholder tokens so afterTokens never exceeds target (#312)", () => {
+    // The elision frees only (blockTokens - placeholderTokens), not the full
+    // block value. Set the target so the third block is barely over the
+    // residual need: the placeholder correction is what keeps us under budget.
+    const msgs = [
+      text("user", "do"),
+      toolResultMsg("t1", bigOutput), // 200 tokens
+      toolResultMsg("t2", bigOutput), // 200 tokens
+      toolResultMsg("t3", bigOutput), // 200 tokens
+      text("assistant", "done"),
+    ];
+    // beforeTokens = 1 + 200 + 200 + 200 + 1 = 602; need = 602 - 205 = 397.
+    const { afterTokens } = compressMessages(msgs, { targetTokens: 205 });
+    // If placeholder tokens were not subtracted, elision would stop after t2
+    // (leaving t3 full at 200 → afterTokens 212 > 205). The fix must keep
+    // going and guarantee the documented contract: fits within targetTokens.
+    expect(afterTokens).toBeLessThanOrEqual(205);
+  });
 });
