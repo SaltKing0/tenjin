@@ -986,3 +986,82 @@ describe("audit kind validation (#58)", () => {
     expect(ok.status).toBe(200);
   });
 });
+
+describe("first-run setup state (#251)", () => {
+  let freshHome: string;
+  let freshServer: HttpServerHandle | null = null;
+
+  /** Serve a console API against its own home, so we can test a truly empty home. */
+  function startFreshServer(cfg: HarnessConfig): string {
+    const audit = new AuditLog(join(freshHome, "audit.jsonl"));
+    freshServer = startHttpServer({
+      config: { port: 0, host: "127.0.0.1", token: TOKEN },
+      handleMessage: async () => null,
+      status: () => ({}),
+      api: createConsoleApi({
+        home: freshHome,
+        cwd: freshHome,
+        config: cfg,
+        registry: {
+          get: () => ({
+            name: "mock",
+            chat: async () => ({ stopReason: "end_turn", content: [], usage: { inputTokens: 0, outputTokens: 0 } }),
+          }),
+        } as never,
+        audit,
+      }),
+      consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
+    });
+    return `http://127.0.0.1:${freshServer.port}`;
+  }
+
+  beforeEach(() => {
+    freshHome = mkdtempSync(join(tmpdir(), "tj-fresh-"));
+  });
+
+  afterEach(() => {
+    freshServer?.stop();
+    freshServer = null;
+    rmSync(freshHome, { recursive: true, force: true });
+  });
+
+  test("fresh home reports a fully unset state", async () => {
+    const base = startFreshServer({ ...config(), model: "" });
+    const res = await fetch(`${base}/api/setup/state`, { headers: auth });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, boolean>;
+    expect(data).toEqual({
+      hasModel: false,
+      hasBot: false,
+      hasGatewayToken: false,
+      channelsEnabled: false,
+    });
+  });
+
+  test("configured home reports model, bot, token and channels", async () => {
+    createBot(freshHome, "researcher");
+    const base = startFreshServer({
+      ...config(),
+      model: "claude-sonnet-4-5",
+      gateway: {
+        listen: { port: 3000, host: "0.0.0.0", token: "real-token" },
+        channels: ["telegram"],
+      },
+    });
+    const res = await fetch(`${base}/api/setup/state`, { headers: auth });
+    const data = (await res.json()) as Record<string, boolean>;
+    expect(data.hasModel).toBe(true);
+    expect(data.hasBot).toBe(true);
+    expect(data.hasGatewayToken).toBe(true);
+    expect(data.channelsEnabled).toBe(true);
+  });
+
+  test("present but empty model counts as not set", async () => {
+    createBot(freshHome, "researcher");
+    const base = startFreshServer({ ...config(), model: "   " });
+    const res = await fetch(`${base}/api/setup/state`, { headers: auth });
+    const data = (await res.json()) as Record<string, boolean>;
+    expect(data.hasModel).toBe(false);
+    expect(data.hasBot).toBe(true);
+  });
+});
