@@ -8,11 +8,15 @@ const WORKFLOW_PATH = join(import.meta.dir, "..", ".github", "workflows", "ci.ym
 type WorkflowStep = { uses?: string; run?: string; name?: string; with?: Record<string, unknown> };
 type WorkflowJob = {
   "runs-on"?: string;
+  "continue-on-error"?: boolean;
   steps?: WorkflowStep[];
 };
 type Workflow = {
   name?: string;
-  on?: { pull_request?: { branches?: string[] | string } | null };
+  on?: {
+    pull_request?: { branches?: string[] | string } | null;
+    push?: { branches?: string[] | string } | null;
+  };
   concurrency?: { group?: string; "cancel-in-progress"?: boolean };
   jobs?: Record<string, WorkflowJob>;
 };
@@ -75,6 +79,38 @@ describe("CI workflow", () => {
     const runs = runCommands(wf);
     expect(runs.some((r) => r === "bun install" || r.startsWith("bun install "))).toBe(true);
     expect(runs).toContain("bun run typecheck");
-    expect(runs).toContain("bun test");
+    expect(runs.some((r) => r.startsWith("bun test"))).toBe(true);
+  });
+
+  test("also runs on pushes to main", () => {
+    const wf = loadWorkflow();
+    const push = wf.on?.push;
+    expect(push).toBeDefined();
+    const branches = push && typeof push === "object" ? push.branches : undefined;
+    const list = Array.isArray(branches) ? branches : branches ? [branches] : [];
+    expect(list).toContain("main");
+  });
+
+  test("soak is isolated in a non-required job and excluded from the fast test run (#188)", () => {
+    const wf = loadWorkflow();
+    const jobs = Object.entries(wf.jobs ?? {});
+    // The dedicated soak job runs the soak file directly (its run references
+    // test/soak.test.ts but not the `-not -name` exclusion of the fast job).
+    const soakJob = jobs.find(([, j]) =>
+      (j.steps ?? []).some(
+        (s) =>
+          typeof s.run === "string" &&
+          s.run.includes("test/soak.test.ts") &&
+          !s.run.includes("-not -name"),
+      ),
+    );
+    expect(soakJob).toBeDefined();
+    expect(soakJob![1]["continue-on-error"]).toBe(true);
+
+    // The fast, required test run explicitly excludes the flaky soak file.
+    const runs = runCommands(wf);
+    expect(
+      runs.some((r) => r.startsWith("bun test") && r.includes("-not -name 'soak.test.ts'")),
+    ).toBe(true);
   });
 });

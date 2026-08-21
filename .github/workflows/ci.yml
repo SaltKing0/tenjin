@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -25,5 +27,23 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Typecheck
         run: bun run typecheck
-      - name: Test
-        run: bun test
+      # The soak test lives in its own non-required job (#188): the flaky
+      # RSS/wall-clock soak run must not gate PRs. Exclude it from the fast,
+      # required run here.
+      - name: Test (non-soak)
+        run: bun test $(find test -maxdepth 1 -name '*.test.ts' -not -name 'soak.test.ts')
+
+  soak:
+    name: soak (non-required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Soak test
+        run: bun test test/soak.test.ts
