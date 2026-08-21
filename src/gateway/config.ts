@@ -14,6 +14,8 @@ export interface TelegramChannelConfig {
   defaultBot?: string;
   allowedUsers: number[];
   adminChatId?: number;
+  allowWrites?: boolean;
+  approvalTimeoutMs?: number;
 }
 
 export interface HeartbeatConfig {
@@ -98,6 +100,9 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
       defaultBot: typeof tg.defaultBot === "string" ? tg.defaultBot : undefined,
       allowedUsers,
       adminChatId: typeof tg.adminChatId === "number" ? tg.adminChatId : undefined,
+      allowWrites: tg.allowWrites === true,
+      approvalTimeoutMs:
+        typeof tg.approvalTimeoutMs === "number" ? tg.approvalTimeoutMs : undefined,
     };
   }
 

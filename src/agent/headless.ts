@@ -7,9 +7,12 @@ import type { TurnEvent } from "./loop";
 import { readTool } from "../tools/read";
 import { globTool } from "../tools/glob";
 import { grepTool } from "../tools/grep";
+import { writeTool } from "../tools/write";
+import { editTool } from "../tools/edit";
+import { bashTool } from "../tools/bash";
 import type { ToolDef } from "../tools/registry";
 
-export type ToolPolicy = "read-only" | "none";
+export type ToolPolicy = "read-only" | "none" | "full";
 
 export interface HeadlessOptions {
   provider: Provider;
@@ -26,6 +29,7 @@ export interface HeadlessOptions {
   sessionBot?: string;
   guard?: import("../security/guard").SecurityGuard | null;
   audit?: (kind: "write_exec" | "budget_halt", detail: string) => void;
+  approve?: (toolName: string, group: "read" | "write", input: unknown) => Promise<boolean>;
 }
 
 export interface HeadlessResult {
@@ -39,6 +43,8 @@ export function toolsForPolicy(policy: ToolPolicy): ToolDef[] {
   switch (policy) {
     case "read-only":
       return [readTool, globTool, grepTool];
+    case "full":
+      return [readTool, globTool, grepTool, writeTool, editTool, bashTool];
     case "none":
       return [];
   }
@@ -75,7 +81,9 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     budget,
     maxTokens: opts.maxTokens,
     cwd: opts.cwd,
-    approve: async (_name, group) => group === "read",
+    approve:
+      opts.approve ??
+      (async (_name, group) => group === "read"),
     guard: opts.guard,
     audit: opts.audit,
     onEvent: logger
