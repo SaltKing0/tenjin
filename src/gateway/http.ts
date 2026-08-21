@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { timingSafeEqual, createHash } from "node:crypto";
 import { ConfigError } from "../config/types";
+import { subscribe, historySince, formatEvent, type GatewayEvent } from "./events";
 
 export interface HttpListenConfig {
   port: number;
@@ -174,6 +175,16 @@ export function startHttpServer(deps: HttpDeps): HttpServerHandle {
         const streamed = await deps.streamChat(req);
         return streamed ?? Response.json({ error: "not found" }, { status: 404 });
       }
+      if (req.method === "GET" && url.pathname === "/api/events") {
+        try {
+          const header = req.headers.get("last-event-id");
+          const fromId =
+            header && header.trim() !== "" ? Number(header) || 0 : Number.MAX_SAFE_INTEGER;
+          return eventsStream(fromId);
+        } catch (err) {
+          return new Response(`events error: ${(err as Error).message}`, { status: 500 });
+        }
+      }
       if (url.pathname.startsWith("/api/")) {
         if (deps.api) {
           const response = await deps.api(req, url);
@@ -186,4 +197,50 @@ export function startHttpServer(deps: HttpDeps): HttpServerHandle {
   });
   const port = server.port ?? deps.config.port;
   return { port, stop: () => server.stop(true) };
+}
+
+function eventsStream(fromId: number): Response {
+  const encoder = new TextEncoder();
+  let unsub: (() => void) | null = null;
+  let cleanup: (() => void) | null = null;
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      let closed = false;
+      const send = (e: GatewayEvent) => {
+        if (closed) return;
+        try {
+          c.enqueue(encoder.encode(formatEvent(e)));
+        } catch {
+          /* stream already cancelled */
+        }
+      };
+      for (const e of historySince(fromId)) send(e);
+      unsub = subscribe(send);
+      const hb = setInterval(() => {
+        if (closed) return;
+        try {
+          c.enqueue(encoder.encode(": ping\n\n"));
+        } catch {
+          /* ignore */
+        }
+      }, 3000);
+      cleanup = () => {
+        closed = true;
+        unsub?.();
+        unsub = null;
+        clearInterval(hb);
+      };
+    },
+    cancel() {
+      cleanup?.();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    },
+  });
 }
