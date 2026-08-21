@@ -8,7 +8,7 @@ import { scanInstalledBots } from "../bots/catalog";
 import { runHeadless, capPolicy, type HeadlessOptions, type HeadlessResult } from "../agent/headless";
 import { guardForBot } from "../security/guard";
 import { resolveParanoid } from "../security/injection";
-import { formatUSD } from "../agent/budget";
+import { createBudget, formatUSD, type Budget } from "../agent/budget";
 import { parseSchedule, nextRun, parseEvery, type Schedule } from "./schedule";
 import { Redactor } from "../security/redact";
 import { parseGatewaySettings, type GatewaySettings } from "./config";
@@ -417,23 +417,6 @@ export function saveGatewayState(home: string, state: GatewayStateFile): void {
   renameSync(tmp, path);
 }
 
-/** Settle `p` within `ms`; a timeout rejects with `msg`. The loser is detached. */
-function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(msg)), ms);
-    p.then(
-      (v) => {
-        clearTimeout(timer);
-        resolve(v);
-      },
-      (e) => {
-        clearTimeout(timer);
-        reject(e);
-      },
-    );
-  });
-}
-
 export class Gateway {
   settings: GatewaySettings;
   jobs: ScheduledJob[];
@@ -667,6 +650,11 @@ export class Gateway {
     this.log(`job ${job.name} start (bot=${job.botName})`);
     const runStartedMs = Date.now();
     emit("job.status", { name: job.name, bot: job.botName, running: true });
+    // #190: per-run abort signal + external budget are scoped here so the error
+    // path can report what an aborted (timed-out) run spent up to the abort.
+    let timedOut = false;
+    let controller: AbortController | null = null;
+    let runBudget: Budget | null = null;
     try {
       const profile = resolveBot(this.deps.home, job.botName);
       const ref = botModelRef(profile, this.deps.config);
@@ -710,6 +698,15 @@ export class Gateway {
           group === "read" ? true : jobPolicy === "full";
       }
 
+      controller = new AbortController();
+      // #190: give the run an external budget so a timed-out (aborted) run
+      // still reports what it spent up to the abort, and thread an abort
+      // signal through so a co-operating provider is really cancelled instead
+      // of pinning the job slot while it keeps spending unrecorded.
+      runBudget = createBudget(
+        botBudgetUSD(profile, this.deps.config.budgetUSD),
+        this.deps.config.pricing,
+      );
       const headless = runHeadless({
         provider: this.deps.registry.get(ref.provider),
         model: ref.model,
@@ -720,6 +717,8 @@ export class Gateway {
         maxTreeIterations: this.deps.config.maxTreeIterations ?? 0,
         capUSD: botBudgetUSD(profile, this.deps.config.budgetUSD),
         pricing: this.deps.config.pricing,
+        budget: runBudget,
+        signal: controller.signal,
         globalBudget: this.deps.config.globalBudget,
         policy: jobPolicy,
         denyTools: profile.config.security?.denyTools,
@@ -739,16 +738,42 @@ export class Gateway {
         redactor: Redactor.fromConfig(this.deps.config.security),
         context: this.deps.config.context,
       });
-      // #19: a per-job timeout releases a hung provider call so it can't pin
-      // the job slot forever. The loser is detached (may settle later in the
-      // background) — freeing the slot is what matters.
-      const result = job.timeoutMs
-        ? await withTimeout(
-            headless,
+
+      // #19/#190: a per-job timeout aborts the run (so a co-operating provider
+      // stops, freeing its work) AND releases the slot on a hard deadline (so
+      // a provider that ignores the abort can't pin the slot forever). The
+      // timeout path rejects here; the catch below books what the run spent up
+      // to the abort from the shared budget.
+      const result: HeadlessResult = await new Promise<HeadlessResult>((resolve, reject) => {
+        let settled = false;
+        const once = (fn: () => void) => () => {
+          if (settled) return;
+          settled = true;
+          fn();
+        };
+        if (job.timeoutMs) {
+          const timer = setTimeout(
+            once(() => {
+              timedOut = true;
+              controller?.abort();
+              reject(new Error(`job ${job.name} timed out after ${job.timeoutMs}ms`));
+            }),
             job.timeoutMs,
-            `job ${job.name} timed out after ${job.timeoutMs}ms`,
-          )
-        : await headless;
+          );
+          headless.then(
+            (r) => {
+              clearTimeout(timer);
+              once(() => resolve(r))();
+            },
+            (e) => {
+              clearTimeout(timer);
+              once(() => reject(e))();
+            },
+          );
+        } else {
+          headless.then(resolve, reject);
+        }
+      });
       const finishedAtMs = Date.now();
       const sessionId = result.sessionId;
       job.lastRun = {
@@ -794,13 +819,16 @@ export class Gateway {
       return result;
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e));
-      const isTimeout = /timed out/.test(err.message);
+      const isTimeout = timedOut || /timed out/.test(err.message);
       const status: JobRunStatus = isTimeout ? "timeout" : "error";
       const failedAtMs = Date.now();
+      // #190: a timed-out (aborted) run books what it spent up to the abort
+      // instead of a flat 0, so the spend shows up in history.
+      const costUSD = isTimeout ? (runBudget?.spentUSD ?? 0) : 0;
       job.lastRun = {
         atMs: failedAtMs,
         stopReason: isTimeout ? "timeout" : "error",
-        costUSD: 0,
+        costUSD,
         error: err.message,
       };
       job.history = pushRun(
@@ -809,7 +837,7 @@ export class Gateway {
           atMs: failedAtMs,
           status,
           stopReason: job.lastRun.stopReason,
-          costUSD: 0,
+          costUSD,
           durationMs: failedAtMs - runStartedMs,
           error: err.message,
         },
