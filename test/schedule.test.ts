@@ -4,6 +4,8 @@ import {
   parseCron,
   parseEvery,
   parseSchedule,
+  type CronExpr,
+  type Schedule,
 } from "../src/gateway/schedule";
 import { ConfigError } from "../src/config/types";
 
@@ -126,4 +128,104 @@ describe("nextRun — cron", () => {
     const next = nextRun(parseSchedule({ cron: "0 0 29 2 *" }), at("2026-08-21T00:00:00"));
     expect(new Date(next).toString()).toContain("Feb 29 2028 00:00");
   });
+});
+
+describe("nextRun — month & leap-year boundaries", () => {
+  test("non-leap year skips Feb 29, lands on next leap year", () => {
+    // 2027 is not a leap year; the 29th of Feb only exists in 2028.
+    const next = nextRun(parseSchedule({ cron: "0 0 29 2 *" }), at("2027-02-28T12:00:00"));
+    expect(new Date(next).toString()).toContain("Feb 29 2028");
+  });
+
+  test("Feb 30 never exists → throws ConfigError", () => {
+    expect(() =>
+      nextRun(parseSchedule({ cron: "0 0 30 2 *" }), at("2026-01-01T00:00:00")),
+    ).toThrow(ConfigError);
+  });
+
+  test("dom 31 in a month that lacks a 31st → throws ConfigError", () => {
+    // April has 30 days; dom 31 can never match in April any year.
+    expect(() =>
+      nextRun(parseSchedule({ cron: "0 0 31 4 *" }), at("2026-01-01T00:00:00")),
+    ).toThrow(ConfigError);
+  });
+
+  test("rolls across a 30-day month to the next month with a 31st", () => {
+    // April has no 31st, so "0 0 31 * *" from April lands on May 31.
+    const next = nextRun(parseSchedule({ cron: "0 0 31 * *" }), at("2026-04-20T00:00:00"));
+    expect(new Date(next).toString()).toContain("May 31 2026");
+  });
+
+  test("crosses a January 31st boundary into February", () => {
+    const next = nextRun(parseSchedule({ cron: "0 0 1 * *" }), at("2026-01-31T12:00:00"));
+    expect(new Date(next).toString()).toContain("Feb 01 2026");
+  });
+});
+
+/**
+ * Slow reference implementation (the previous minute-scan) used only to prove
+ * the direct field-by-field computation returns identical results.
+ */
+function bruteDayMatches(d: Date, expr: CronExpr): boolean {
+  if (expr.doms === null && expr.dows === null) return true;
+  if (expr.doms === null) return expr.dows?.has(d.getDay()) ?? false;
+  if (expr.dows === null) return expr.doms.has(d.getDate());
+  return expr.doms.has(d.getDate()) || expr.dows.has(d.getDay());
+}
+
+function bruteNextRun(schedule: Schedule, fromMs: number): number | undefined {
+  if (schedule.kind === "every") return fromMs + schedule.intervalMs;
+  const expr = schedule.expr;
+  const t = new Date(fromMs);
+  t.setSeconds(0, 0);
+  t.setMilliseconds(0);
+  for (let i = 0; i < 4 * 366 * 24 * 60; i++) {
+    t.setMinutes(t.getMinutes() + 1);
+    if (!expr.minutes.has(t.getMinutes())) continue;
+    if (!expr.hours.has(t.getHours())) continue;
+    if (!expr.months.has(t.getMonth() + 1)) continue;
+    if (!bruteDayMatches(t, expr)) continue;
+    return t.getTime();
+  }
+  return undefined;
+}
+
+describe("nextRun — direct computation matches brute-force baseline", () => {
+  const expressions = [
+    "* * * * *",
+    "*/15 * * * *",
+    "0 9 * * *",
+    "30 14 * * 1-5",
+    "0 12 13 * 5",
+    "0 0 1 * *",
+    "0 0 29 2 *",
+    "5 4 1,15 * *",
+    "0 0 1 1 *",
+    "10-50/10 8-18 * * *",
+    "0 0 * * 0",
+    "15,45 */2 * * 1,3,5",
+  ];
+  const froms = [
+    "2026-08-21T08:30:00",
+    "2026-08-21T09:00:00",
+    "2026-12-31T23:30:00",
+    "2027-02-28T12:00:00", // day before a non-leap Feb 29 target
+    "2028-02-28T12:00:00", // day before the leap Feb 29
+    "2024-02-29T12:00:00", // on an actual leap day
+    "2096-02-28T12:00:00", // near the upper bound guard
+    "2026-04-20T00:00:00", // 30-day month boundary
+    "2026-01-31T00:00:00", // month rollover
+    "2026-08-21T15:00:00",
+  ];
+  for (const raw of expressions) {
+    for (const from of froms) {
+      test(`${raw} from ${from}`, () => {
+        const schedule = parseSchedule({ cron: raw });
+        const fromMs = at(from);
+        const expected = bruteNextRun(schedule, fromMs);
+        if (expected === undefined) return; // no match within brute-force window
+        expect(nextRun(schedule, fromMs)).toBe(expected);
+      });
+    }
+  }
 });

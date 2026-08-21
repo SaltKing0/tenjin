@@ -112,27 +112,126 @@ export function parseSchedule(spec: { every?: string; cron?: string }): Schedule
   return { kind: "cron", expr: parseCron(spec.cron as string) };
 }
 
+/**
+ * Whether `d` satisfies the expression's day-of-month / day-of-week fields.
+ *
+ * Standard cron semantics: when both fields are restricted (`*` is unconstrained
+ * and stored as `null`) the day matches if EITHER field matches (OR). When one
+ * is `null` the other alone decides.
+ */
 function dayMatches(d: Date, expr: CronExpr): boolean {
   if (expr.doms === null && expr.dows === null) return true;
-  if (expr.doms === null) return expr.dows?.has(d.getDay()) ?? true;
+  if (expr.doms === null) return expr.dows?.has(d.getDay()) ?? false;
   if (expr.dows === null) return expr.doms.has(d.getDate());
-  return (expr.doms.has(d.getDate()) || expr.dows.has(d.getDay())) ?? true;
+  return expr.doms.has(d.getDate()) || expr.dows.has(d.getDay());
 }
 
-const MAX_MINUTE_ITERATIONS = 4 * 366 * 24 * 60;
+/** Smallest value in `set` (sets produced by `parseField` are never empty). */
+function firstOf(set: Set<number>): number {
+  let smallest = Infinity;
+  for (const v of set) if (v < smallest) smallest = v;
+  return smallest;
+}
 
+/** Smallest value in `set` strictly greater than `v`, or `undefined` if none. */
+function nextGreater(set: Set<number>, v: number): number | undefined {
+  let best: number | undefined;
+  for (const x of set) if (x > v && (best === undefined || x < best)) best = x;
+  return best;
+}
+
+function lastDayOfMonth(year: number, month0: number): number {
+  return new Date(year, month0 + 1, 0).getDate();
+}
+
+/**
+ * Compute the next run of a cron schedule strictly after `fromMs`, advancing
+ * field-by-field (minute → hour → day → month) instead of scanning every
+ * minute. Each failed field jumps straight to its next allowed value, so the
+ * work is bounded by field cardinality (≤ 60 minutes, ≤ 24 hours, ≤ 31 days,
+ * ≤ 12 months per year) rather than by the number of minutes in a year.
+ */
 export function nextRun(schedule: Schedule, fromMs: number): number {
   if (schedule.kind === "every") return fromMs + schedule.intervalMs;
 
+  const expr = schedule.expr;
+
+  // Start strictly after `fromMs`, at minute precision.
   const t = new Date(fromMs);
   t.setSeconds(0, 0);
-  for (let i = 0; i < MAX_MINUTE_ITERATIONS; i++) {
-    t.setMinutes(t.getMinutes() + 1);
-    if (!schedule.expr.minutes.has(t.getMinutes())) continue;
-    if (!schedule.expr.hours.has(t.getHours())) continue;
-    if (!schedule.expr.months.has(t.getMonth() + 1)) continue;
-    if (!dayMatches(t, schedule.expr)) continue;
+  t.setMilliseconds(0);
+  t.setMinutes(t.getMinutes() + 1);
+
+  for (;;) {
+    const year = t.getFullYear();
+    if (year > 2100) {
+      // Unreachable in practice for any satisfiable expression; guards against
+      // an infinite loop on impossible schedules (e.g. "0 0 30 2 *").
+      throw new ConfigError(`no matching time for cron "${expr.raw}"`);
+    }
+
+    // Month.
+    const month = t.getMonth() + 1;
+    if (!expr.months.has(month)) {
+      const nextMonth = nextGreater(expr.months, month);
+      if (nextMonth === undefined) {
+        t.setFullYear(year + 1, 0, 1);
+        t.setHours(0, 0, 0, 0);
+      } else {
+        t.setFullYear(year, nextMonth - 1, 1);
+        t.setHours(0, 0, 0, 0);
+      }
+      continue; // day/hour/minute reset to valid-fresh values by the jump
+    }
+
+    // Day (dom/dow). If the current day doesn't match, move to the next one
+    // that does within this month; otherwise roll to the 1st of next month.
+    if (!dayMatches(t, expr)) {
+      const curMonth0 = t.getMonth();
+      const monthDays = lastDayOfMonth(year, curMonth0);
+      let advanced = false;
+      for (let d = t.getDate() + 1; d <= monthDays; d++) {
+        t.setDate(d);
+        t.setHours(0, 0, 0, 0);
+        if (dayMatches(t, expr)) {
+          advanced = true;
+          break;
+        }
+      }
+      if (!advanced) {
+        t.setDate(1);
+        t.setHours(0, 0, 0, 0);
+        t.setMonth(t.getMonth() + 1); // may roll the year
+      }
+      continue;
+    }
+
+    // Hour.
+    const hour = t.getHours();
+    if (!expr.hours.has(hour)) {
+      const nextHour = nextGreater(expr.hours, hour);
+      if (nextHour === undefined) {
+        t.setHours(0, 0, 0, 0);
+        t.setDate(t.getDate() + 1);
+      } else {
+        t.setHours(nextHour, 0, 0, 0);
+        t.setMinutes(firstOf(expr.minutes));
+      }
+      continue;
+    }
+
+    // Minute.
+    const minute = t.getMinutes();
+    if (!expr.minutes.has(minute)) {
+      const nextMinute = nextGreater(expr.minutes, minute);
+      if (nextMinute === undefined) {
+        t.setHours(t.getHours() + 1, firstOf(expr.minutes), 0, 0);
+      } else {
+        t.setMinutes(nextMinute);
+      }
+      continue;
+    }
+
     return t.getTime();
   }
-  throw new ConfigError(`no matching time for cron "${schedule.expr.raw}" within a year`);
 }
