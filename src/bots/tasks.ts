@@ -55,6 +55,14 @@ export interface BotTask {
 export const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
 /** Poll interval while a dependent task waits for its dependency. */
 const DEP_POLL_MS = 100;
+/**
+ * #176: cap on a dependency's result injected into a successor's opening
+ * prompt. The Context-Guard cannot compress the opening user message, so an
+ * unbounded result would overflow the prompt (provider-400 / cost spike).
+ * Kept consistent with the notifyCompletion inbox-note cap; the full result
+ * stays queryable via `bot_task_status`.
+ */
+export const DEP_RESULT_MAX_CHARS = 4000;
 
 export function tasksDir(home: string, bot: string): string {
   return join(botDir(home, bot), "tasks");
@@ -178,7 +186,7 @@ function notifyCompletion(home: string, task: BotTask): void {
   const inboxDir = join(botDir(home, task.notifyBot), "inbox");
   const done = task.status === "done";
   const body = done
-    ? `Task ${task.id} completed.\n\n${(task.result ?? "").slice(0, 4000)}`
+    ? `Task ${task.id} completed.\n\n${(task.result ?? "").slice(0, DEP_RESULT_MAX_CHARS)}`
     : `Task ${task.id} failed: ${task.error ?? task.status}`;
   try {
     sendMessage(inboxDir, {
@@ -273,8 +281,16 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
           task.finishedAt = new Date().toISOString();
           return task; // persisted + notified in finally
         }
+        // #176: cap the dependency result injected into this successor's
+        // opening prompt (the Context-Guard cannot compress it), and point to
+        // bot_task_status for the full text.
+        const depResult = dep.result ?? "(no result)";
+        const truncated = depResult.length > DEP_RESULT_MAX_CHARS;
+        const depText = truncated
+          ? `${depResult.slice(0, DEP_RESULT_MAX_CHARS)}\n\n(Result truncated; full text via bot_task_status)`
+          : depResult;
         runMessage =
-          `Result from dependency task ${dependsOnId} (${dep.bot}):\n${dep.result ?? "(no result)"}\n\n` +
+          `Result from dependency task ${dependsOnId} (${dep.bot}):\n${depText}\n\n` +
           `Now handle the original request:\n${message}`;
       }
 

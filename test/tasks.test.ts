@@ -228,6 +228,33 @@ describe("delegation chains", () => {
     expect(String(userMsg)).toContain("step B");
   });
 
+  test("a huge dependency result is capped in the successor's prompt (#176)", async () => {
+    const big = "X".repeat(10000);
+    const dep = startAsyncTask(deps(delayedProvider(0, big)), {
+      targetBot: "researcher",
+      message: "produce big result",
+    });
+    const depFinal = await dep.settled;
+    expect(depFinal.status).toBe("done");
+    expect(depFinal.result!.length).toBeGreaterThan(4000);
+
+    const capture = capturingProvider("OK");
+    const chain = startAsyncTask(deps(capture), {
+      targetBot: "researcher",
+      message: "step B",
+      dependsOn: dep.task_id,
+    });
+    const chainFinal = await chain.settled;
+    expect(chainFinal.status).toBe("done");
+
+    const userMsg = String(capture.requests[0]?.messages[0]?.content ?? "");
+    expect(userMsg).toContain("step B");
+    // result is capped and the full text is referenced for retrieval
+    expect(userMsg).not.toContain("X".repeat(4001));
+    expect(userMsg.length).toBeLessThan(9000);
+    expect(userMsg).toMatch(/bot_task_status|truncated/i);
+  });
+
   test("a cycle is rejected at creation", () => {
     // Fabricate two persisted tasks that reference each other via dependsOn.
     const base = {
