@@ -371,12 +371,80 @@ async function panelChat(main) {
   });
 }
 
+function formatApprovalInput(input) {
+  if (input == null) return "";
+  if (typeof input === "string") return input;
+  try {
+    return JSON.stringify(input, null, 2);
+  } catch {
+    return String(input);
+  }
+}
+
+function approvalActionButtons(req, onDone) {
+  return el(
+    "div",
+    { style: "margin-top:8px; display:flex; gap:8px" },
+    el(
+      "button",
+      {
+        class: "primary",
+        onclick: async () => {
+          await apiJson(`/api/approvals/${req.id}`, {
+            method: "POST",
+            body: JSON.stringify({ action: "approve" }),
+          });
+          onDone();
+        },
+      },
+      "approve",
+    ),
+    el(
+      "button",
+      {
+        class: "danger",
+        onclick: async () => {
+          await apiJson(`/api/approvals/${req.id}`, {
+            method: "POST",
+            body: JSON.stringify({ action: "deny" }),
+          });
+          onDone();
+        },
+      },
+      "deny",
+    ),
+  );
+}
+
 async function panelApprovals(main) {
   main.replaceChildren(el("h1", {}, "Approvals"));
   const container = el("div");
   main.append(container);
+  let viewingId = null;
+
+  function closeFull() {
+    viewingId = null;
+    refresh();
+  }
+
+  async function showFull(req) {
+    viewingId = req.id;
+    try {
+      const detail = await apiJson(`/api/approvals/${req.id}`);
+      container.replaceChildren(
+        el("button", { onclick: closeFull }, "< back"),
+        el("h2", {}, `[${detail.id}] ${detail.tool} `, el("span", { class: "badge" }, detail.bot)),
+        el("pre", { class: "approval-input" }, formatApprovalInput(detail.input ?? detail.inputSummary)),
+        approvalActionButtons(detail, closeFull),
+      );
+    } catch {
+      viewingId = null;
+      await refresh();
+    }
+  }
 
   async function refresh() {
+    if (viewingId) return;
     const data = await apiJson("/api/approvals");
     container.replaceChildren();
     if (data.pending.length === 0) {
@@ -387,43 +455,20 @@ async function panelApprovals(main) {
       container.append(
         el(
           "div",
-          { class: "card" },
+          {
+            class: "card",
+            style: "cursor:pointer",
+            title: "view full input",
+            onclick: (e) => {
+              if (e.target.closest("button")) return;
+              showFull(req);
+            },
+          },
           el("strong", {}, `[${req.id}] ${req.tool}`),
           " ",
           el("span", { class: "badge" }, req.bot),
           el("div", { class: "dim" }, req.inputSummary),
-          el(
-            "div",
-            { style: "margin-top:8px; display:flex; gap:8px" },
-            el(
-              "button",
-              {
-                class: "primary",
-                onclick: async () => {
-                  await apiJson(`/api/approvals/${req.id}`, {
-                    method: "POST",
-                    body: JSON.stringify({ action: "approve" }),
-                  });
-                  refresh();
-                },
-              },
-              "approve",
-            ),
-            el(
-              "button",
-              {
-                class: "danger",
-                onclick: async () => {
-                  await apiJson(`/api/approvals/${req.id}`, {
-                    method: "POST",
-                    body: JSON.stringify({ action: "deny" }),
-                  });
-                  refresh();
-                },
-              },
-              "deny",
-            ),
-          ),
+          approvalActionButtons(req, refresh),
         ),
       );
     }
