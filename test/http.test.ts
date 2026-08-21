@@ -158,6 +158,9 @@ test("console responses carry security headers", async () => {
   expect(res.status).toBe(200);
   expect(res.headers.get("content-security-policy")).toContain("default-src 'self'");
   expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+  // Console el() sets styles via inline style="" attributes, so style-src must
+  // allow 'unsafe-inline' or the UI loses its layout (script-src stays 'self').
+  expect(res.headers.get("content-security-policy")).toContain("style-src 'self' 'unsafe-inline'");
   expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   expect(res.headers.get("x-frame-options")).toBe("DENY");
 });
