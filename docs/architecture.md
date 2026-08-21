@@ -276,6 +276,7 @@ gateway:
       tz: Europe/Berlin       # optional IANA zone; default is server local time
       postTo: telegram
       timeoutMs: 300000       # optional hard cap (ms); release a hung run
+      policy: full            # optional per-job tool policy (read-only | full)
   listen:
     port: 8787
     host: 127.0.0.1
@@ -286,7 +287,8 @@ gateway:
 
 - **`allowWrites`** — when false, the gateway runs bots read-only; when true it
   is the master switch, with Telegram's own `allowWrites` able to override per
-  channel.
+  channel. Scheduled jobs honor it too: a job without an explicit `policy`
+  defaults to `full` when `allowWrites` is true, and `read-only` otherwise.
 - **`catchUp`** — on boot the gateway re-runs scheduled jobs whose slot came due
   while it was down (default `enabled: true`, `max: 50` runs per boot). A job is
   caught up when the next scheduled run after its last run is already in the
@@ -301,6 +303,11 @@ gateway:
   cron fields in that zone, including across DST; omitted `tz` keeps server local time.
   Optional per-job `timeoutMs` (ms) sets a hard cap on a single run — a hung
   provider call is released after this so it can't pin the job slot forever.
+  Optional per-job `policy` (`read-only` | `full`) sets the job's tool policy;
+  the default is `read-only` (or `full` when the gateway `allowWrites` is set).
+  A job's effective policy is still capped by the bot's `security.policy`, so a
+  read-only bot can never be upgraded to write via a job — the upgrade is
+  explicit and remains bounded by the bot's own security.
 - **`heartbeat`** — a recurring prompt to a bot at a fixed interval.
 - **`listen`** — enables the web console; `token` is mandatory.
 

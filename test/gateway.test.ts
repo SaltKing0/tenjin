@@ -47,6 +47,36 @@ function mockProvider(reply = "job output"): Provider {
   };
 }
 
+/** Provider that first issues a write_file tool-call, then ends the turn. */
+function writeScriptProvider(path: string, content: string): Provider {
+  let calls = 0;
+  return {
+    name: "mockwrite",
+    async chat(): Promise<ChatResponse> {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          stopReason: "tool_use",
+          content: [
+            {
+              type: "tool_use",
+              id: "w1",
+              name: "write_file",
+              input: { path, content },
+            },
+          ],
+          usage: { inputTokens: 10, outputTokens: 5 },
+        };
+      }
+      return {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "wrote it" }],
+        usage: { inputTokens: 10, outputTokens: 5 },
+      };
+    },
+  };
+}
+
 describe("parseGatewaySettings", () => {
   test("empty/missing → defaults", () => {
     expect(parseGatewaySettings(undefined)).toEqual({
@@ -75,6 +105,25 @@ describe("parseGatewaySettings", () => {
     });
     expect(s.jobs).toHaveLength(1);
     expect(s.jobs[0]?.scheduleSpec.every).toBe("10m");
+  });
+
+  test("job policy parses and validates (#52)", () => {
+    const s = parseGatewaySettings({
+      jobs: [
+        { name: "a", bot: "worker", prompt: "do it", every: "10m", policy: "full" },
+        { name: "b", bot: "worker", prompt: "do it", every: "10m", policy: "read-only" },
+      ],
+    });
+    expect(s.jobs[0]?.policy).toBe("full");
+    expect(s.jobs[1]?.policy).toBe("read-only");
+    // absent → undefined (defaults resolved at build time from allowWrites)
+    const plain = parseGatewaySettings({
+      jobs: [{ name: "c", bot: "worker", prompt: "p", every: "10m" }],
+    });
+    expect(plain.jobs[0]?.policy).toBeUndefined();
+    expect(() =>
+      parseGatewaySettings({ jobs: [{ name: "a", bot: "b", prompt: "p", every: "10m", policy: "admin" }] }),
+    ).toThrow(/policy/);
   });
 
   test("job tz is parsed and validated", () => {
@@ -205,6 +254,38 @@ describe("job scheduling helpers", () => {
     if (!fast || !slow) throw new Error("unreachable");
     expect(fast.nextDueMs).toBe(t0 + 60_000);
     expect(new Date(slow.nextDueMs).getHours()).toBe(9);
+  });
+
+  test("buildJobs derives job policy from per-job policy, allowWrites, or default (#52)", () => {
+    const mixed = parseGatewaySettings({
+      jobs: [
+        { name: "explicit-full", bot: "worker", prompt: "p", every: "1m", policy: "full" },
+        { name: "explicit-ro", bot: "worker", prompt: "p", every: "1m", policy: "read-only" },
+        { name: "default-ro", bot: "worker", prompt: "p", every: "1m" },
+      ],
+    });
+    const byName = Object.fromEntries(buildJobs(mixed, 0).map((j) => [j.name, j.policy]));
+    expect(byName["explicit-full"]).toBe("full");
+    expect(byName["explicit-ro"]).toBe("read-only");
+    expect(byName["default-ro"]).toBe("read-only");
+
+    // gateway allowWrites upgrades the default, but an explicit per-job
+    // policy still overrides it (read-only can be locked per job).
+    const aw = parseGatewaySettings({
+      allowWrites: true,
+      jobs: [{ name: "upgraded", bot: "worker", prompt: "p", every: "1m" }],
+    });
+    expect(buildJobs(aw, 0)[0]?.policy).toBe("full");
+    const locked = parseGatewaySettings({
+      allowWrites: true,
+      jobs: [
+        { name: "upgraded", bot: "worker", prompt: "p", every: "1m" },
+        { name: "locked", bot: "worker", prompt: "p", every: "1m", policy: "read-only" },
+      ],
+    });
+    const lockedBy = Object.fromEntries(buildJobs(locked, 0).map((j) => [j.name, j.policy]));
+    expect(lockedBy["upgraded"]).toBe("full");
+    expect(lockedBy["locked"]).toBe("read-only");
   });
 
   test("buildJobs honors per-job tz across DST", () => {
@@ -362,6 +443,66 @@ describe("Gateway execution", () => {
     expect(listed[0]?.every).toBe("1h");
     expect(listed[0]?.lastRun?.stopReason).toBe("end_turn");
     expect(listed[0]?.nextDueMs).toBe(before);
+  });
+
+  test("job with policy full can write a file (#52)", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        // Guard is disabled to isolate the job-policy mechanism (the path
+        // guard is orthogonal to #52 and trips on the macOS /var symlink).
+        security: { disabled: true },
+        gateway: {
+          jobs: [{ name: "writejob", bot: "worker", prompt: "write a file", every: "1m", policy: "full" }],
+        },
+      }),
+      registry: { get: () => writeScriptProvider("out.txt", "hello") } as never,
+    });
+    expect(gw.jobs[0]?.policy).toBe("full");
+    const result = await gw.runNow("writejob");
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(home, "out.txt"))).toBe(true);
+    expect(readFileSync(join(home, "out.txt"), "utf8")).toBe("hello");
+    expect(gw.listJobs()[0]?.policy).toBe("full");
+  });
+
+  test("default read-only job cannot write a file (#52)", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        security: { disabled: true },
+        gateway: {
+          jobs: [{ name: "rojob", bot: "worker", prompt: "write", every: "1m" }],
+        },
+      }),
+      registry: { get: () => writeScriptProvider("nope.txt", "x") } as never,
+    });
+    expect(gw.jobs[0]?.policy).toBe("read-only");
+    const result = await gw.runNow("rojob");
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(home, "nope.txt"))).toBe(false);
+  });
+
+  test("bot security policy still caps a full job to read-only (#52)", async () => {
+    // worker security.policy read-only must win over a job-level full policy
+    const botCfg = join(home, "bots", "worker", "config.yaml");
+    writeFileSync(botCfg, "security:\n  policy: read-only\n");
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        security: { disabled: true },
+        gateway: {
+          jobs: [{ name: "capped", bot: "worker", prompt: "p", every: "1m", policy: "full" }],
+        },
+      }),
+      registry: { get: () => writeScriptProvider("cap.txt", "x") } as never,
+    });
+    const result = await gw.runNow("capped");
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(home, "cap.txt"))).toBe(false);
   });
 
   test("runNow returns not_found / busy without starting a second run", async () => {

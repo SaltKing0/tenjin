@@ -55,6 +55,7 @@ export interface ScheduledJob {
   botName: string;
   prompt: string;
   postTo?: string;
+  policy: "read-only" | "full";
   schedule: Schedule;
   nextDueMs: number;
   running: boolean;
@@ -84,6 +85,8 @@ export function buildJobs(settings: GatewaySettings, fromMs: number): ScheduledJ
     botName: j.bot,
     prompt: j.prompt,
     postTo: j.postTo,
+    // A per-job policy wins; otherwise defer to the gateway allowWrites flag.
+    policy: j.policy ?? (settings.allowWrites ? "full" : "read-only"),
     schedule: parseSchedule(j.scheduleSpec),
     nextDueMs: nextRun(parseSchedule(j.scheduleSpec), fromMs),
     running: false,
@@ -98,6 +101,7 @@ export function buildJobs(settings: GatewaySettings, fromMs: number): ScheduledJ
       name: "heartbeat",
       botName: hb.bot,
       prompt: "",
+      policy: "read-only",
       schedule,
       nextDueMs: nextRun(schedule, fromMs),
       running: false,
@@ -116,7 +120,7 @@ export function jobView(job: ScheduledJob): JobView {
     prompt: job.prompt,
     cron: job.schedule.kind === "cron" ? job.schedule.expr.raw : null,
     every: job.schedule.kind === "every" ? job.schedule.raw : null,
-    policy: "read-only",
+    policy: job.policy,
     lastRun: job.lastRun
       ? {
           at: new Date(job.lastRun.atMs).toISOString(),
@@ -355,6 +359,9 @@ export class Gateway {
       let message = job.prompt;
       let extraTools: ToolDef[] | undefined;
       let approve: HeadlessOptions["approve"];
+      // Effective tool policy for this run: the job's own policy, capped by
+      // the bot's security policy (a bot can only tighten, never upgrade).
+      const jobPolicy = capPolicy(job.policy, profile.config.security?.policy);
       if (job.kind === "heartbeat") {
         const inboxPolicy = inboxPolicyFromConfig(this.deps.config.inbox);
         const unread = unreadMessages(profile.inboxDir, inboxPolicy);
@@ -381,6 +388,11 @@ export class Gateway {
         // The heartbeat is fully autonomous: allow its own tools, keep read access.
         approve = async (name, group) =>
           group === "read" || tools.some((t) => t.name === name);
+      } else {
+        // Scheduled jobs are headless/autonomous: reads are fine, writes are
+        // allowed only when the job's (bot-capped) policy is full.
+        approve = async (_name, group) =>
+          group === "read" ? true : jobPolicy === "full";
       }
 
       const headless = runHeadless({
@@ -393,7 +405,7 @@ export class Gateway {
         capUSD: botBudgetUSD(profile, this.deps.config.budgetUSD),
         pricing: this.deps.config.pricing,
         globalBudget: this.deps.config.globalBudget,
-        policy: capPolicy("read-only", profile.config.security?.policy),
+        policy: jobPolicy,
         denyTools: profile.config.security?.denyTools,
         extraTools,
         approve,

@@ -9,6 +9,8 @@ export interface JobConfig {
   postTo?: string;
   /** Optional hard cap on a single run (ms). A hung run is released after this. */
   timeoutMs?: number;
+  /** Tool policy for this job. Default: read-only (or gateway allowWrites if set). */
+  policy?: "read-only" | "full";
   scheduleSpec: { every?: string; cron?: string; tz?: string };
 }
 
@@ -66,6 +68,7 @@ interface RawJob {
   cron?: unknown;
   tz?: unknown;
   timeoutMs?: unknown;
+  policy?: unknown;
 }
 
 const DEFAULT_CATCH_UP: CatchUpConfig = { enabled: true, max: 50 };
@@ -143,12 +146,22 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
         }
         timeoutMs = t;
       }
+      let policy: "read-only" | "full" | undefined;
+      if (entry.policy !== undefined && entry.policy !== null) {
+        if (entry.policy !== "read-only" && entry.policy !== "full") {
+          throw new ConfigError(
+            `gateway job "${name}" policy must be "read-only" or "full"`,
+          );
+        }
+        policy = entry.policy;
+      }
       settings.jobs.push({
         name,
         bot,
         prompt,
         postTo: typeof entry.postTo === "string" ? entry.postTo : undefined,
         timeoutMs,
+        policy,
         scheduleSpec,
       });
     }
