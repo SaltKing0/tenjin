@@ -14,6 +14,12 @@ import type { Channel, ChannelInbound } from "./channel";
  * The signature scheme mirrors the Slack adapter: `x-webhook-signature` is
  * `sha256=<hex hmac-sha256(secret, "<timestamp>:<rawBody>")>` and
  * `x-webhook-timestamp` guards against replay within a freshness window.
+ *
+ * Pre-auth hardening (#203): before the body is read or any HMAC/parse work,
+ * the handler applies a per-connection-IP rate limit and a `content-length`
+ * cap, so unsigned garbage can't cost unbounded memory/CPU. Valid signed
+ * messages are deduped on `hash(timestamp:rawBody)` so re-sending the identical
+ * message within the validity window does not re-run the agent.
  */
 
 export type WebhookRejectReason =
@@ -89,11 +95,18 @@ interface InboundPayload {
   username?: unknown;
 }
 
+interface RateWindow {
+  count: number;
+  resetAt: number;
+}
+
 export class WebhookChannel implements Channel {
   readonly name = "webhook" as const;
   private handler?: (msg: ChannelInbound) => Promise<string | null>;
   private server?: ReturnType<typeof Bun.serve>;
   private rateHits = new Map<string, number[]>();
+  private ipHits = new Map<string, RateWindow>();
+  private recentMessages = new Map<string, number>(); // signature -> expiry (replay dedup)
   private port = 0;
 
   constructor(
@@ -132,6 +145,37 @@ export class WebhookChannel implements Channel {
     return false;
   }
 
+  /** Per-connection-IP rate limit, applied BEFORE auth so an unsigned flood is
+   * throttled regardless of the (attacker-controlled) `sender` payload field. */
+  private isIpLimited(ip: string): boolean {
+    const max = this.opts.rateLimitMax ?? DEFAULT_RATE_LIMIT_MAX;
+    if (max <= 0) return false;
+    const windowMs = this.opts.rateLimitWindowMs ?? DEFAULT_RATE_LIMIT_WINDOW_MS;
+    const now = Date.now();
+    const entry = this.ipHits.get(ip);
+    if (!entry || now >= entry.resetAt) {
+      this.ipHits.set(ip, { count: 1, resetAt: now + windowMs });
+      return false;
+    }
+    entry.count += 1;
+    return entry.count > max;
+  }
+
+  /** Replay dedup: returns true when `signature` (HMAC over timestamp:rawBody)
+   * was already processed within the signature-validity window — so re-sending
+   * the identical signed message does not re-run the agent (#203). */
+  private isReplay(signature: string, nowMs = Date.now()): boolean {
+    const expiry = this.recentMessages.get(signature);
+    if (expiry !== undefined && nowMs < expiry) return true;
+    this.recentMessages.set(signature, nowMs + MAX_SIGNATURE_AGE_MS);
+    if (this.recentMessages.size > 1000) {
+      for (const [k, e] of this.recentMessages) {
+        if (nowMs >= e) this.recentMessages.delete(k);
+      }
+    }
+    return false;
+  }
+
   private reject(info: WebhookRejection, status: number, body: unknown): Response {
     this.opts.onRejected?.(info);
     return Response.json(body, { status });
@@ -159,6 +203,24 @@ export class WebhookChannel implements Channel {
   }
 
   private eventHandler = async (req: Request): Promise<Response> => {
+    // Pre-auth guards run BEFORE the body is read or any HMAC/parse work, so
+    // unsigned garbage can't cost unbounded memory or CPU (DoS, #203): per-IP
+    // rate limit + content-length cap, keyed by the connection IP (not the
+    // attacker-controlled `sender` payload field).
+    const ip = this.server?.requestIP(req)?.address ?? "unknown";
+    if (this.isIpLimited(ip)) {
+      return this.reject({ sender: "unknown", reason: "rate_limited" }, 429, {
+        error: "too many requests",
+        "retry-after": String(Math.ceil((this.opts.rateLimitWindowMs ?? DEFAULT_RATE_LIMIT_WINDOW_MS) / 1000)),
+      });
+    }
+    const maxBytes = this.opts.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH;
+    const contentLength = Number(req.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+      return this.reject({ sender: "unknown", reason: "too_long" }, 413, {
+        error: `payload too large (max ${maxBytes} bytes)`,
+      });
+    }
     const rawBody = await req.text();
     const signature = req.headers.get("x-webhook-signature");
     const timestamp = req.headers.get("x-webhook-timestamp");
@@ -167,6 +229,12 @@ export class WebhookChannel implements Channel {
       return this.reject({ sender: "unknown", reason: "bad_signature" }, 401, {
         error: "bad signature",
       });
+    }
+    // Only dedup messages that actually authenticate (a re-sent signed message
+    // within the validity window must not re-run the agent, #203).
+    if (signature && this.isReplay(signature)) {
+      this.log("webhook: duplicate signed message ignored (replay)");
+      return Response.json({ reply: null });
     }
     let payload: InboundPayload;
     try {
