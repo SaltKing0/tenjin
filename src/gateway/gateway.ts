@@ -707,7 +707,12 @@ export class Gateway {
           );
         }
         const tools: ToolDef[] = [
-          createCheckInboxTool({ profile, policy: inboxPolicy }),
+          createCheckInboxTool({
+            profile,
+            policy: inboxPolicy,
+            paranoid: resolveParanoid(this.deps.config.security, profile.config.security),
+            audit: (kind, detail) => this.deps.log?.(`[${kind}] ${detail}`),
+          }),
           createSendMessageTool({
             home: this.deps.home,
             fromBot: profile.name,

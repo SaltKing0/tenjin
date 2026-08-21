@@ -10,6 +10,7 @@ import {
   type InboxPolicy,
 } from "./inbox";
 import { ConfigError } from "../config/types";
+import { hardenUntrustedInput } from "../security/injection";
 
 /** Per-(from,to) last-send timestamps for send_message coercion (#181). */
 const sendCooldowns = new Map<string, number>();
@@ -78,6 +79,12 @@ export function createSendMessageTool(deps: {
 export function createCheckInboxTool(deps: {
   profile: BotProfile;
   policy?: InboxPolicy;
+  /** #316: thread the effective paranoid flag + audit sink so hostile inbox
+   * content is hardened (framed / masked + audited) before it reaches the
+   * model — mirroring the task-path hardenUntrustedInput (#189). */
+  paranoid?: boolean;
+  audit?: (kind: "prompt_injection", detail: string, correlationId?: string) => void;
+  correlationId?: string;
 }): ToolDef {
   return {
     name: "check_inbox",
@@ -95,7 +102,14 @@ export function createCheckInboxTool(deps: {
         deps.profile.inboxDir,
         unread.map((m) => m.id),
       );
-      return formatInbox(unread);
+      // #316: inbox messages come from other bots/users and are untrusted data —
+      // scan, audit and frame them before they reach the model, matching the
+      // task-path / heartbeat hardening (#189).
+      return hardenUntrustedInput(formatInbox(unread), {
+        paranoid: deps.paranoid ?? false,
+        audit: deps.audit,
+        correlationId: deps.correlationId,
+      });
     },
   };
 }

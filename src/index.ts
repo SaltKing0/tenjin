@@ -352,7 +352,13 @@ async function main(): Promise<number> {
     tools.push(createListSkillsTool({ home, projectDir: cwd }));
     if (profile) {
       tools.push(createSendMessageTool({ home, fromBot: profile.name, policy: inboxPolicy }));
-      tools.push(createCheckInboxTool({ profile, policy: inboxPolicy }));
+      tools.push(createCheckInboxTool({
+        profile,
+        policy: inboxPolicy,
+        paranoid: resolveParanoid(config.security, profile.config.security),
+        audit: (kind, detail, correlationId) =>
+          audit.append(kind, "user", detail, profile.name, correlationId),
+      }));
       const policy = capPolicy("full", profile.config.security?.policy);
       if (policy === "none") tools = [];
       else if (policy === "read-only") tools = tools.filter((t) => t.group === "read");
