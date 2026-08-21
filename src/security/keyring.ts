@@ -1,5 +1,5 @@
 import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ConfigError } from "../config/types";
 
@@ -38,6 +38,14 @@ export interface Keyring {
 export function openKeyring(home: string): Keyring | null {
   const p = keyringPath(home);
   if (!existsSync(p)) return null;
+  // Secrets at rest must be 0600. Refuse to load a keyring with looser perms
+  // (a stray umask, backup copy, or bad write) instead of silently trusting it.
+  const mode = statSync(p).mode & 0o777;
+  if (mode !== 0o600) {
+    throw new ConfigError(
+      `keyring at ${p} has permissions ${mode.toString(8)}, expected 0600 — re-create it with "tenjin keyring init" so the secret stays machine-local`,
+    );
+  }
   const secret = Buffer.from(readFileSync(p, "utf8").trim(), "base64");
   return secret.length > 0 ? { home, secret } : null;
 }
