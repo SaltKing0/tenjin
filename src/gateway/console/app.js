@@ -675,12 +675,81 @@ async function panelJobs(main) {
   await refresh();
 }
 
+async function panelMemory(main) {
+  main.replaceChildren(
+    el("h1", {}, "Memory"),
+    el(
+      "div",
+      { class: "toolbar" },
+      botSelector(async (value) => {
+        currentBot = value;
+        localStorage.setItem("tenjin_bot", value);
+        await panelMemory(main);
+      }),
+      el("span", { class: "dim" }, "read-only view of a bot's facts, summaries and vector store"),
+    ),
+  );
+  const box = el("div");
+  main.append(box);
+
+  let data;
+  try {
+    data = await apiJson(`/api/memory/${encodeURIComponent(currentBot)}`);
+  } catch (e) {
+    box.append(el("div", { class: "err" }, `no memory for ${currentBot}: ${e.message}`));
+    return;
+  }
+
+  // facts
+  box.append(el("h2", {}, "Facts"));
+  const factsCard = el("div", { class: "card" });
+  factsCard.append(
+    data.facts
+      ? el("pre", {}, data.facts)
+      : el("div", { class: "dim" }, "no facts recorded yet"),
+  );
+  box.append(factsCard);
+
+  // summaries
+  box.append(el("h2", {}, "Summaries"));
+  if (data.summaries.length === 0) {
+    box.append(el("div", { class: "dim" }, "no summaries yet"));
+  } else {
+    for (const s of data.summaries) {
+      const when = s.created ? new Date(s.created).toLocaleString() : "";
+      box.append(
+        el(
+          "div",
+          { class: "card" },
+          el("strong", {}, s.sessionId),
+          when ? el("span", { class: "dim" }, ` — ${when}`) : null,
+          el("pre", {}, s.text),
+        ),
+      );
+    }
+  }
+
+  // vector store stats
+  box.append(el("h2", {}, "Vector store"));
+  const v = data.vector || { count: 0, embedModel: null, dim: null };
+  box.append(
+    el(
+      "div",
+      { class: "card" },
+      el("div", {}, `chunks: ${v.count}`),
+      el("div", {}, `embedding model: ${v.embedModel ?? "—"}`),
+      el("div", {}, `dimensions: ${v.dim ?? "—"}`),
+    ),
+  );
+}
+
 const PANELS = [
   ["chat", "Chat", panelChat],
   ["settings", "Settings", panelSettings],
   ["approvals", "Approvals", panelApprovals],
   ["jobs", "Jobs", panelJobs],
   ["sessions", "Sessions", panelSessions],
+  ["memory", "Memory", panelMemory],
   ["spend", "Spend", panelSpend],
   ["audit", "Audit", panelAudit],
   ["status", "Status", panelStatus],
