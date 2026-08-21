@@ -274,6 +274,91 @@ describe("live-apply through gateway objects", () => {
     }
   });
 
+  test("api accepts a manual model id typed outside the detected list", async () => {
+    // The settings panel lets the user type a model id that /models did not
+    // return (e.g. deepseek-chat). The panel prefixes it with the provider
+    // card (openai:), so the server should accept and apply that prefixed ref.
+    const { startHttpServer } = await import("../src/gateway/http");
+    const { createConsoleApi } = await import("../src/gateway/console-api");
+    const { AuditLog } = await import("../src/audit/log");
+
+    const { deps, config, registry } = setup();
+    let server: any = null;
+    try {
+      server = startHttpServer({
+        config: { port: 0, host: "127.0.0.1", token: "t" },
+        handleMessage: async () => null,
+        status: () => ({}),
+        api: createConsoleApi({
+          home,
+          cwd: home,
+          config,
+          registry,
+          audit: new AuditLog(join(home, "audit.jsonl")),
+        }),
+      });
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
+        method: "POST",
+        headers: { authorization: "Bearer t", "content-type": "application/json" },
+        body: JSON.stringify({
+          models: { default: "openai:deepseek-chat" },
+        }),
+      });
+      expect(res.status).toBe(200);
+
+      // normalized and applied live to the shared config object
+      expect(config.models?.default).toBe("openai:deepseek-chat");
+      expect(config.model).toBe("deepseek-chat");
+      expect(config.provider).toBe("openai");
+
+      const reloaded = loadConfig(project, home, { skipModelCheck: true }).config;
+      expect(reloaded.model).toBe("deepseek-chat");
+    } finally {
+      server?.stop();
+    }
+  });
+
+  test("api rejects an invalid manual model ref with 400 and leaves config unchanged", async () => {
+    // A typo such as "palm:x" must surface a server error instead of silently
+    // landing in the config.
+    const { startHttpServer } = await import("../src/gateway/http");
+    const { createConsoleApi } = await import("../src/gateway/console-api");
+    const { AuditLog } = await import("../src/audit/log");
+
+    const { deps, config, registry } = setup();
+    let server: any = null;
+    try {
+      server = startHttpServer({
+        config: { port: 0, host: "127.0.0.1", token: "t" },
+        handleMessage: async () => null,
+        status: () => ({}),
+        api: createConsoleApi({
+          home,
+          cwd: home,
+          config,
+          registry,
+          audit: new AuditLog(join(home, "audit.jsonl")),
+        }),
+      });
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
+        method: "POST",
+        headers: { authorization: "Bearer t", "content-type": "application/json" },
+        body: JSON.stringify({
+          models: { default: "palm:x" },
+        }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: string };
+      expect(body.error).toContain("unknown provider");
+
+      // nothing changed on the shared config
+      expect(config.models?.default).toBeUndefined();
+      expect(config.model).toBe("claude-sonnet-4-5");
+    } finally {
+      server?.stop();
+    }
+  });
+
   test("detect endpoint returns 504 with provider hint on timeout", async () => {
     const { startHttpServer } = await import("../src/gateway/http");
     const { createConsoleApi } = await import("../src/gateway/console-api");
