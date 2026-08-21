@@ -7,7 +7,7 @@ import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
 import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { aggregateSpend } from "../audit/spend";
-import { AuditLog } from "../audit/log";
+import { AuditLog, formatAuditMarkdown, type AuditKind, type AuditQuery } from "../audit/log";
 import { approvalsDir, getRequest, resolveRequest } from "./approvals";
 import { getSettings, applySettings, detectModels, DetectTimeoutError } from "./settings";
 import { sessionsDir } from "../config/loader";
@@ -30,6 +30,49 @@ function scopeSessionsDir(home: string, bot: string | null): string | null {
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
+}
+
+function parseIsoBound(raw: string | null, field: "from" | "to"): { ms?: number; error?: string } {
+  if (!raw) return {};
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return { error: `invalid ${field}` };
+  return { ms };
+}
+
+function auditQueryFromUrl(
+  url: URL,
+  defaultTail?: number,
+): { opts: AuditQuery } | { error: string } {
+  const from = parseIsoBound(url.searchParams.get("from"), "from");
+  if (from.error) return { error: from.error };
+  const to = parseIsoBound(url.searchParams.get("to"), "to");
+  if (to.error) return { error: to.error };
+  const kindParam = url.searchParams.get("kind");
+  const tailParam = url.searchParams.get("tail");
+  const opts: AuditQuery = {};
+  if (from.ms !== undefined) opts.from = from.ms;
+  if (to.ms !== undefined) opts.to = to.ms;
+  if (kindParam) opts.kind = kindParam as AuditKind;
+  if (tailParam) opts.tail = Number(tailParam);
+  else if (defaultTail !== undefined) opts.tail = defaultTail;
+  return { opts };
+}
+
+function parseExportFormat(raw: string | null): "json" | "markdown" | null {
+  const v = (raw ?? "").toLowerCase();
+  if (v === "json") return "json";
+  if (v === "markdown" || v === "md") return "markdown";
+  return null;
+}
+
+function auditDownload(body: string, contentType: string, filename: string): Response {
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": contentType,
+      "content-disposition": `attachment; filename="${filename}"`,
+    },
+  });
 }
 
 export function createConsoleApi(deps: ConsoleApiDeps) {
@@ -149,13 +192,30 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     }
 
     if (path === "/api/audit" && req.method === "GET") {
-      const tailParam = url.searchParams.get("tail");
-      const kindParam = url.searchParams.get("kind");
-      const events = deps.audit.query({
-        tail: tailParam ? Number(tailParam) : 100,
-        kind: kindParam ? (kindParam as never) : undefined,
-      });
-      return json({ events });
+      const parsed = auditQueryFromUrl(url, 100);
+      if ("error" in parsed) return json({ error: parsed.error }, 400);
+      return json({ events: deps.audit.query(parsed.opts) });
+    }
+
+    if (path === "/api/audit/export" && req.method === "GET") {
+      const format = parseExportFormat(url.searchParams.get("format"));
+      if (!format) return json({ error: 'format must be "json" or "markdown"' }, 400);
+      const parsed = auditQueryFromUrl(url);
+      if ("error" in parsed) return json({ error: parsed.error }, 400);
+      const events = deps.audit.query(parsed.opts);
+      const day = new Date().toISOString().slice(0, 10);
+      if (format === "json") {
+        return auditDownload(
+          `${JSON.stringify({ events }, null, 2)}\n`,
+          "application/json; charset=utf-8",
+          `audit-${day}.json`,
+        );
+      }
+      return auditDownload(
+        formatAuditMarkdown(events),
+        "text/markdown; charset=utf-8",
+        `audit-${day}.md`,
+      );
     }
 
     if (path === "/api/approvals" && req.method === "GET") {
