@@ -677,6 +677,96 @@ describe("Gateway execution", () => {
     expect(gw.listJobs().map((j) => j.name)).toEqual(["two", "three"]);
     expect(gw.listJobs()).toHaveLength(2);
   });
+
+  test("caps concurrent job executions so fireDue never launches unbounded parallelism (#314)", async () => {
+    const track = { active: 0, max: 0 };
+    const provider: Provider = {
+      name: "mock",
+      async chat(): Promise<ChatResponse> {
+        track.active++;
+        if (track.active > track.max) track.max = track.active;
+        try {
+          await Bun.sleep(40);
+          return {
+            stopReason: "end_turn",
+            content: [{ type: "text", text: "ok" }],
+            usage: { inputTokens: 10, outputTokens: 5 },
+          };
+        } finally {
+          track.active--;
+        }
+      },
+    };
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: {
+          jobs: [1, 2, 3, 4].map((i) => ({
+            name: `j${i}`,
+            bot: "worker",
+            prompt: `p${i}`,
+            every: "1m",
+            postTo: "telegram",
+          })),
+        },
+      }),
+      registry: { get: () => provider } as never,
+      channels: { telegram: async () => {} },
+      maxConcurrentJobs: 2,
+    });
+
+    const t0 = Date.now();
+    await gw.fireDue(t0 + 120_000); // all four are due at the same instant
+    await Bun.sleep(200); // give them time to run
+    // Without a cap all four would run at once (max would be 4).
+    expect(track.max).toBeLessThanOrEqual(2);
+  });
+
+  test("run loop does not accumulate abort listeners across ticks (#314)", async () => {
+    const ctrl = new AbortController();
+    const real = ctrl.signal;
+    let added = 0;
+    let removed = 0;
+    const spy = new Proxy(real, {
+      get(target, prop) {
+        if (prop === "addEventListener") {
+          return (...a: unknown[]) => {
+            added++;
+            return target.addEventListener(...(a as [never, never]));
+          };
+        }
+        if (prop === "removeEventListener") {
+          return (...a: unknown[]) => {
+            removed++;
+            return target.removeEventListener(...(a as [never, never]));
+          };
+        }
+        const v = Reflect.get(target, prop);
+        return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(target) : v;
+      },
+    }) as AbortSignal;
+
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: {
+          jobs: [{ name: "tick", bot: "worker", prompt: "p", every: "1s", postTo: "telegram" }],
+        },
+      }),
+      registry: { get: () => mockProvider("ok") } as never,
+      channels: { telegram: async () => {} },
+    });
+
+    const runPromise = gw.run(spy);
+    await Bun.sleep(3200); // several loop ticks, none aborting
+    ctrl.abort();
+    await runPromise;
+    // Per-tick wait listeners must be removed on the normal timer path, so a
+    // small constant remains (not a count that grows with every tick).
+    expect(added - removed).toBeLessThanOrEqual(2);
+  });
 });
 
 describe("heartbeat", () => {

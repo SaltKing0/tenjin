@@ -9,6 +9,7 @@ import {
   expirePendingRequests,
   getRequest,
   resolveRequest,
+  sleepAbortable,
   summarizeInput,
   waitApproval,
 } from "../src/gateway/approvals";
@@ -72,6 +73,47 @@ test("waitApproval picks up async approval", async () => {
   const req = createRequest(home, { bot: "b", tool: "bash", inputSummary: "z" });
   setTimeout(() => resolveRequest(home, req.id, "approved"), 400);
   expect(await waitApproval(home, req.id, 5000)).toBe("approved");
+});
+
+test("sleepAbortable does not accumulate listeners on a long-lived signal (#314)", async () => {
+  const ctrl = new AbortController();
+  const real = ctrl.signal;
+  let added = 0;
+  let removed = 0;
+  const spy = new Proxy(real, {
+    get(target, prop) {
+      if (prop === "addEventListener") {
+        return (...a: unknown[]) => {
+          added++;
+          return target.addEventListener(...(a as [never, never]));
+        };
+      }
+      if (prop === "removeEventListener") {
+        return (...a: unknown[]) => {
+          removed++;
+          return target.removeEventListener(...(a as [never, never]));
+        };
+      }
+      const v = Reflect.get(target, prop);
+      return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(target) : v;
+    },
+  }) as AbortSignal;
+
+  // Simulate N gateway loop ticks that all complete without aborting.
+  for (let i = 0; i < 50; i++) {
+    await sleepAbortable(1, spy);
+  }
+  // Every listener added per tick must be removed on the normal timer path,
+  // so the net count stays constant (0) instead of growing with each tick.
+  expect(added - removed).toBe(0);
+});
+
+test("sleepAbortable resolves early on abort and still removes its listener (#314)", async () => {
+  const ctrl = new AbortController();
+  const p = sleepAbortable(5_000, ctrl.signal);
+  ctrl.abort();
+  await p; // must not hang
+  // No listener leaks even after an abort fires.
 });
 
 test("summarizeInput truncates and flattens", () => {

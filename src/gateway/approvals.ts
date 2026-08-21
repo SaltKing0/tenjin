@@ -164,15 +164,35 @@ export async function waitApproval(
       // An expired request will never be resolved by a human — treat as timeout.
       return req.status === "expired" ? "timeout" : req.status;
     }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 250);
-      signal?.addEventListener("abort", () => {
-        clearTimeout(timer);
-        resolve();
-      }, { once: true });
-    });
+    await sleepAbortable(250, signal);
   }
   return "timeout";
+}
+
+/**
+ * Sleep for `ms`, resolving early when `signal` aborts. Unlike a bare
+ * `{ once: true }` abort listener per call, this ALWAYS removes its listener —
+ * on the normal timer path too — so a long-lived signal never accumulates
+ * closures across repeated calls (e.g. gateway loop ticks, approval polls) (#314).
+ */
+export function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = (): void => {
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export function summarizeInput(input: unknown): string {
