@@ -1,5 +1,13 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startHttpServer, type HttpServerHandle } from "../src/gateway/http";
@@ -97,6 +105,159 @@ test("GET /api/bots lists bots with model and unread", async () => {
   expect(data.bots[0].name).toBe("researcher");
   expect(typeof data.bots[0].model).toBe("string");
   expect(data.bots[0].unread).toBe(0);
+});
+
+describe("bots CRUD + SOUL editor", () => {
+  test("POST /api/bots creates a bot and it appears in the list", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/bots`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ name: "My Writer!", soul: "# SOUL — my-writer\nDraft things." }),
+    });
+    expect(res.status).toBe(201);
+    const data = (await res.json()) as any;
+    expect(data.name).toBe("my-writer");
+    expect(data.soul).toContain("Draft things");
+    expect(readFileSync(join(home, "bots", "my-writer", "SOUL.md"), "utf8")).toContain("Draft things");
+    const list = await fetch(`${base}/api/bots`, { headers: auth });
+    expect(((await list.json()) as any).bots.some((b: any) => b.name === "my-writer")).toBe(true);
+  });
+
+  test("POST /api/bots rejects duplicate and invalid names", async () => {
+    const base = startServer();
+    const dup = await fetch(`${base}/api/bots`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ name: "researcher" }),
+    });
+    expect(dup.status).toBe(409);
+    const empty = await fetch(`${base}/api/bots`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ name: " " }),
+    });
+    expect(empty.status).toBe(400);
+    const bad = await fetch(`${base}/api/bots`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ name: "!!!" }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  test("GET /api/bots/:name returns full detail incl. soul; unknown is 404", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/bots/researcher`, { headers: auth });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as any;
+    expect(data.name).toBe("researcher");
+    expect(typeof data.soul).toBe("string");
+    expect(data.soul).toContain("SOUL");
+    const missing = await fetch(`${base}/api/bots/nope`, { headers: auth });
+    expect(missing.status).toBe(404);
+  });
+
+  test("PUT /api/bots/:name writes SOUL.md round-trip", async () => {
+    const base = startServer();
+    const newSoul = "# SOUL — researcher\nUpdated role.";
+    const res = await fetch(`${base}/api/bots/researcher`, {
+      method: "PUT",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ soul: newSoul }),
+    });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as any;
+    expect(data.soul).toBe(newSoul);
+    expect(readFileSync(join(home, "bots", "researcher", "SOUL.md"), "utf8")).toBe(newSoul);
+  });
+
+  test("PUT renames a bot; old name disappears, new name resolves", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/bots/researcher`, {
+      method: "PUT",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ rename: "Scribe" }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).name).toBe("scribe");
+    const list = ((await (await fetch(`${base}/api/bots`, { headers: auth })).json()) as any).bots;
+    expect(list.some((b: any) => b.name === "scribe")).toBe(true);
+    expect(list.some((b: any) => b.name === "researcher")).toBe(false);
+    expect(await fetch(`${base}/api/bots/scribe`, { headers: auth }).then((r) => r.status)).toBe(200);
+  });
+
+  test("PUT rename to existing name is 409; empty soul is 400", async () => {
+    const base = startServer();
+    createBot(home, "writer");
+    const conflict = await fetch(`${base}/api/bots/writer`, {
+      method: "PUT",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ rename: "researcher" }),
+    });
+    expect(conflict.status).toBe(409);
+    const empty = await fetch(`${base}/api/bots/researcher`, {
+      method: "PUT",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ soul: "   " }),
+    });
+    expect(empty.status).toBe(400);
+  });
+
+  test("DELETE /api/bots/:name removes the bot; unknown is 404", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/bots/researcher`, { method: "DELETE", headers: auth });
+    expect(res.status).toBe(200);
+    const list = ((await (await fetch(`${base}/api/bots`, { headers: auth })).json()) as any).bots;
+    expect(list).toHaveLength(0);
+    expect(existsSync(join(home, "bots", "researcher"))).toBe(false);
+    const missing = await fetch(`${base}/api/bots/researcher`, { method: "DELETE", headers: auth });
+    expect(missing.status).toBe(404);
+  });
+
+  test("full CRUD round-trip persists SOUL.md through create/read/update/delete", async () => {
+    const base = startServer();
+    const created = await fetch(`${base}/api/bots`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ name: "temp", soul: "original soul" }),
+    });
+    expect(created.status).toBe(201);
+    const read = await fetch(`${base}/api/bots/temp`, { headers: auth });
+    expect(((await read.json()) as any).soul).toBe("original soul");
+    const updated = await fetch(`${base}/api/bots/temp`, {
+      method: "PUT",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ soul: "edited soul", rename: "temp2" }),
+    });
+    expect(updated.status).toBe(200);
+    const data = (await updated.json()) as any;
+    expect(data.name).toBe("temp2");
+    expect(data.soul).toBe("edited soul");
+    const del = await fetch(`${base}/api/bots/temp2`, { method: "DELETE", headers: auth });
+    expect(del.status).toBe(200);
+    expect(existsSync(join(home, "bots", "temp2"))).toBe(false);
+  });
+
+  test("console bots panel wires create, SOUL edit, rename, and delete", () => {
+    const js = readFileSync(
+      join(import.meta.dir, "..", "src", "gateway", "console", "app.js"),
+      "utf8",
+    );
+    const css = readFileSync(
+      join(import.meta.dir, "..", "src", "gateway", "console", "style.css"),
+      "utf8",
+    );
+    expect(js).toMatch(/\/api\/bots"/);
+    expect(js).toMatch(/method: "POST"/);
+    expect(js).toMatch(/method: "PUT"/);
+    expect(js).toMatch(/method: "DELETE"/);
+    expect(js).toMatch(/soul-input/);
+    expect(js).toMatch(/rename-input/);
+    expect(js).toMatch(/Create bot/);
+    expect(css).toMatch(/\.soul-input/);
+    expect(css).toMatch(/\.bot-actions/);
+  });
 });
 
 describe("sessions + trajectory", () => {
