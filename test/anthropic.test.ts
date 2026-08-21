@@ -1,11 +1,12 @@
 import { describe, test, expect } from "bun:test";
 import { parseSse } from "../src/provider/sse";
 import {
+  AnthropicProvider,
   AnthropicStreamAssembler,
   buildRequestBody,
   toApiMessages,
 } from "../src/provider/anthropic";
-import type { ChatMessage, ToolSchema } from "../src/provider/types";
+import type { ChatMessage, ChatRequest, ToolSchema } from "../src/provider/types";
 
 function streamFrom(chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -196,5 +197,65 @@ describe("anthropic stream assembler", () => {
     expect(() =>
       a.handle({ event: "error", data: JSON.stringify({ error: { message: "boom" } }) }),
     ).toThrow(/boom/);
+  });
+});
+
+describe("anthropic provider chat completion guard (#309)", () => {
+  const frame = (event: string, data: unknown) =>
+    `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+
+  const req: ChatRequest = {
+    model: "claude-sonnet-4-5",
+    system: "sys",
+    messages: [{ role: "user", content: "hi" }],
+    tools: [],
+    maxTokens: 64,
+  };
+
+  function sseResponse(sse: string): Response {
+    return new Response(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode(sse));
+          c.close();
+        },
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  }
+
+  async function withFetch(sse: string, fn: () => Promise<void>): Promise<void> {
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async () => sseResponse(sse)) as unknown as typeof fetch;
+    try {
+      await fn();
+    } finally {
+      globalThis.fetch = orig;
+    }
+  }
+
+  test("chat() throws when the stream ends before message_stop (#309)", async () => {
+    const provider = new AnthropicProvider("test-key", "https://api.example.com");
+    const sse =
+      frame("message_start", { type: "message_start", message: { usage: { input_tokens: 5 } } }) +
+      frame("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text" } }) +
+      frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } });
+    // deliberately NO message_stop → clean EOF mid-stream
+    await withFetch(sse, async () => {
+      await expect(provider.chat(req)).rejects.toThrow(/message_stop/);
+    });
+  });
+
+  test("chat() succeeds when the stream ends with message_stop (#309)", async () => {
+    const provider = new AnthropicProvider("test-key", "https://api.example.com");
+    const sse =
+      frame("message_start", { type: "message_start", message: { usage: { input_tokens: 5 } } }) +
+      frame("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text" } }) +
+      frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } }) +
+      frame("message_stop", { type: "message_stop" });
+    await withFetch(sse, async () => {
+      const resp = await provider.chat(req);
+      expect(resp.content[0]).toEqual({ type: "text", text: "partial" });
+    });
   });
 });

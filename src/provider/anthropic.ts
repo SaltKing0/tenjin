@@ -104,7 +104,14 @@ export class AnthropicStreamAssembler {
   private entries = new Map<number, Entry>();
   private usage: Usage = { inputTokens: 0, outputTokens: 0 };
   private stopReason: StopReason = "other";
+  /** #309: set when the stream's `message_stop` terminator is seen. */
+  private completed = false;
   onTextDelta?: (delta: string) => void;
+
+  /** Whether `message_stop` was observed (true completion of the message). */
+  get isComplete(): boolean {
+    return this.completed;
+  }
 
   handle(frame: SseFrame): void {
     if (frame.event === "error") {
@@ -170,6 +177,11 @@ export class AnthropicStreamAssembler {
         if (data.usage?.output_tokens)
           this.usage.outputTokens = data.usage.output_tokens;
         break;
+      case "message_stop":
+        // #309: the stream's completion terminator — a clean EOF without it
+        // means the response was truncated (proxy/gateway cut), not finished.
+        this.completed = true;
+        break;
     }
   }
 
@@ -231,6 +243,12 @@ export class AnthropicProvider implements Provider {
     assembler.onTextDelta = callbacks?.onTextDelta;
     for await (const frame of parseSse(res.body)) {
       assembler.handle(frame);
+    }
+    // #309: a clean EOF without `message_stop` is a truncated response, not a
+    // success — fail closed so the partial reply (and its usage accounting)
+    // never reaches the agent loop as if it were complete.
+    if (!assembler.isComplete) {
+      throw new Error("anthropic stream ended before completion (missing message_stop)");
     }
     return assembler.done();
   }

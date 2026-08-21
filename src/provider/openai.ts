@@ -112,10 +112,22 @@ export class OpenAiStreamAssembler {
   private calls = new Map<number, CallAccumulator>();
   private usage: Usage = { inputTokens: 0, outputTokens: 0 };
   private stopReason: StopReason = "other";
+  /** #309: set when the stream's `[DONE]` terminator is seen. */
+  private completed = false;
   onTextDelta?: (delta: string) => void;
 
+  /** Whether the `[DONE]` terminator was observed (true completion). */
+  get isComplete(): boolean {
+    return this.completed;
+  }
+
   handle(data: string): void {
-    if (data === "[DONE]") return;
+    if (data === "[DONE]") {
+      // #309: the stream's completion terminator — a clean EOF without it
+      // means the response was truncated, not finished.
+      this.completed = true;
+      return;
+    }
     let chunk: any;
     try {
       chunk = JSON.parse(data);
@@ -219,6 +231,11 @@ export class OpenAIProvider implements Provider {
     assembler.onTextDelta = callbacks?.onTextDelta;
     for await (const frame of parseSse(res.body)) {
       assembler.handle(frame.data);
+    }
+    // #309: a clean EOF without `[DONE]` is a truncated response, not a
+    // success — fail closed so the partial reply never reaches the agent loop.
+    if (!assembler.isComplete) {
+      throw new Error("openai stream ended before completion (missing [DONE])");
     }
     return assembler.done();
   }
