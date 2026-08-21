@@ -264,6 +264,18 @@ test("console serves the topbar-state module (#256)", async () => {
   expect(body).toContain("export function connectionView");
 });
 
+test("console serves the tables module (#258)", async () => {
+  const base = start({
+    consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
+  });
+  const res = await fetch(`${base}/console/tables.js`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("application/javascript");
+  const body = await res.text();
+  expect(body).toContain("headerLabels");
+  expect(body).toContain("export function stackLabels");
+});
+
 test("SSE closes an unread (zombie) client and removes its listener on queue overflow (#199)", async () => {
   const baseline = activeSubscriberCount();
   // Build a stream but never read from it → zombie consumer. A fromId past
