@@ -9,7 +9,7 @@ import { renderTrajectory } from "../session/trajectory";
 import { aggregateSpend, perBotBreakdown } from "../audit/spend";
 import { AuditLog, formatAuditMarkdown, type AuditKind, type AuditQuery } from "../audit/log";
 import { approvalsDir, getRequest, resolveRequest } from "./approvals";
-import { getSettings, applySettings, detectModels, testProvider, DetectTimeoutError } from "./settings";
+import { getSettings, applySettings, detectModels, testProvider, verifySettingsApply, DetectTimeoutError } from "./settings";
 import { sessionsDir } from "../config/loader";
 
 export interface ConsoleApiDeps {
@@ -97,10 +97,13 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
           registry: deps.registry,
           audit: (detail: string) => deps.audit.append("settings_changed", "console", detail),
         };
+        await verifySettingsApply(settingsDeps, body);
         applySettings(settingsDeps, body);
         return json({ ok: true, settings: getSettings(settingsDeps) });
       } catch (e) {
-        return json({ error: (e as Error).message }, 400);
+        const err = (e as Error).message;
+        deps.audit.append("settings_changed", "console", `settings apply rejected: ${err}`);
+        return json({ error: err }, 400);
       }
     }
 
