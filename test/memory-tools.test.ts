@@ -9,7 +9,7 @@ import {
   readFacts,
 } from "../src/tools/memory";
 import { dispatch } from "../src/tools/registry";
-import { appendChunks, type VectorChunk } from "../src/memory/vector-store";
+import { appendChunks, VectorStore, vectorsFilePath, type VectorChunk } from "../src/memory/vector-store";
 import type { EmbeddingProvider } from "../src/provider/embeddings";
 
 let dir: string;
@@ -120,5 +120,29 @@ describe("recall", () => {
       { cwd: dir },
     );
     expect(r.output.split("\n")).toHaveLength(3);
+  });
+
+  test("searches the provided VectorStore including buffered-only chunks", async () => {
+    seedVector("s1:0", "fixed the auth bug today", [1, 0]);
+    const store = new VectorStore(vectorsFilePath(dir));
+    // Not yet on disk — must still be searchable through the in-memory store.
+    store.add({
+      id: "s2:0",
+      sessionId: "s2",
+      projectPath: "/proj",
+      role: "user",
+      text: "garden watering schedule",
+      embedding: [0, 1],
+      created: "2026-08-21T00:00:00Z",
+    });
+    const tool = createRecallTool({
+      memoryDirPath: dir,
+      projectPath: "/proj",
+      embeddings: fakeEmbeddings,
+      store,
+    });
+    const r = await dispatch([tool], "recall", { query: "garden" }, { cwd: dir });
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("garden watering schedule");
   });
 });

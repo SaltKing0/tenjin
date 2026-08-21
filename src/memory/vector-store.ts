@@ -1,4 +1,4 @@
-import { existsSync, appendFileSync, readFileSync } from "node:fs";
+import { existsSync, appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
 export interface VectorChunk {
   id: string;
@@ -102,4 +102,122 @@ export function searchChunks(chunks: VectorChunk[], opts: SearchOptions): Search
 
 export function indexedSessionIds(chunks: VectorChunk[]): Set<string> {
   return new Set(chunks.map((c) => c.sessionId));
+}
+
+/** Standard location of the chunk log inside a memory directory. */
+export function vectorsFilePath(memoryDirPath: string): string {
+  return `${memoryDirPath}/vectors.jsonl`;
+}
+
+/** Number of buffered chunks before a `VectorStore` flushes to disk on its own. */
+export const DEFAULT_FLUSH_THRESHOLD = 32;
+
+export interface CompactReport {
+  /** Chunks (buffered + persisted) before compaction. */
+  before: number;
+  /** Chunks after removing duplicates / stale revisions. */
+  after: number;
+  /** `before - after`. */
+  removed: number;
+  /** Whether the underlying file was rewritten (false when nothing was removed). */
+  rewritten: boolean;
+}
+
+/**
+ * In-memory index over the chunk log. The file is read once at construction
+ * (boot); new chunks are buffered and flushed in batches instead of rewriting
+ * the whole file per event. `search` runs against the in-memory index.
+ *
+ * `search` uses a cheap dimension-blocking heuristic: only chunks whose
+ * effective embedding dimension matches the query are scored, and everything
+ * else is counted as `skipped` — observably identical to searching the whole
+ * log, but it avoids scoring every chunk when many models/dimensions coexist.
+ */
+export class VectorStore {
+  private chunks: VectorChunk[];
+  private buffer: VectorChunk[] = [];
+  private readonly flushThreshold: number;
+
+  constructor(
+    private readonly file: string,
+    chunks: VectorChunk[] = [],
+    flushThreshold: number = DEFAULT_FLUSH_THRESHOLD,
+  ) {
+    this.chunks = chunks;
+    this.flushThreshold = flushThreshold;
+  }
+
+  static open(file: string, flushThreshold: number = DEFAULT_FLUSH_THRESHOLD): VectorStore {
+    return new VectorStore(file, loadChunks(file), flushThreshold);
+  }
+
+  /** Total buffered + persisted chunks. */
+  get size(): number {
+    return this.chunks.length + this.buffer.length;
+  }
+
+  /** Distinct session ids present in the index (buffered + persisted). */
+  sessionsIndexed(): Set<string> {
+    return indexedSessionIds(this.chunks.concat(this.buffer));
+  }
+
+  /** Buffer one chunk; flushes automatically once the buffer threshold is reached. */
+  add(chunk: VectorChunk, flush = false): void {
+    this.buffer.push(chunk);
+    if (flush || this.buffer.length >= this.flushThreshold) this.flush();
+  }
+
+  /** Buffer many chunks, auto-flushing on threshold (or once when `flush`). */
+  addAll(chunks: VectorChunk[], flush = false): void {
+    for (const c of chunks) this.add(c, flush);
+  }
+
+  /** Append any buffered chunks to the file once. No-op when the buffer is empty. */
+  flush(): void {
+    if (this.buffer.length === 0) return;
+    appendChunks(this.file, this.buffer);
+    this.chunks.push(...this.buffer);
+    this.buffer = [];
+  }
+
+  /** Search the in-memory index (buffered + persisted) with dimension blocking. */
+  search(opts: SearchOptions): SearchResult {
+    const all = this.chunks.concat(this.buffer);
+    const queryDim = opts.query.length;
+    let skipped = 0;
+    const candidates: VectorChunk[] = [];
+    for (const c of all) {
+      if ((c.embedDim ?? c.embedding.length) !== queryDim) {
+        skipped++;
+        continue;
+      }
+      candidates.push(c);
+    }
+    const res = searchChunks(candidates, opts);
+    return { hits: res.hits, skipped: skipped + res.skipped };
+  }
+
+  /**
+   * Remove duplicate / stale-revision chunks: per id the most recent `created`
+   * wins (later file position breaks ties). Rewrites the file only when
+   * something was actually removed, and resets the in-memory index + buffer.
+   */
+  compact(): CompactReport {
+    const all = this.chunks.concat(this.buffer);
+    const before = all.length;
+    const byId = new Map<string, VectorChunk>();
+    for (const c of all) {
+      const existing = byId.get(c.id);
+      if (!existing || c.created >= existing.created) byId.set(c.id, c);
+    }
+    const compacted = all.filter((c) => byId.get(c.id) === c);
+    const removed = before - compacted.length;
+    if (removed > 0) {
+      const body = compacted.map((c) => JSON.stringify(c)).join("\n");
+      writeFileSync(this.file, compacted.length > 0 ? `${body}\n` : "");
+    }
+    this.chunks = compacted;
+    this.buffer = [];
+    return { before, after: compacted.length, removed, rewritten: removed > 0 };
+  }
 }

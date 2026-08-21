@@ -7,7 +7,7 @@ import {
   extractIndexableTexts,
   indexPendingSessions,
 } from "../src/memory/indexer";
-import { loadChunks } from "../src/memory/vector-store";
+import { loadChunks, VectorStore, vectorsFilePath } from "../src/memory/vector-store";
 import type { EmbeddingProvider } from "../src/provider/embeddings";
 import type { SessionEvent } from "../src/session/events";
 
@@ -148,5 +148,22 @@ describe("indexPendingSessions", () => {
     seedSession({ role: "user", content: "three" });
     const report = await indexPendingSessions({ ...opts(), limit: 2 });
     expect(report.indexed).toHaveLength(2);
+  });
+
+  test("uses a provided VectorStore for dedup and buffered writes", async () => {
+    seedSession({ role: "user", content: "fix the auth bug" });
+    const store = new VectorStore(vectorsFilePath(home));
+    const report = await indexPendingSessions({ ...opts(), store });
+    expect(report.indexed).toHaveLength(1);
+    expect(report.chunks).toBe(1);
+    // buffered chunks were flushed to disk
+    expect(loadChunks(vectorsFilePath(home))).toHaveLength(1);
+    expect(store.size).toBe(1);
+    expect([...store.sessionsIndexed()]).toHaveLength(1);
+
+    // the in-memory index remembers the session: a second pass is a no-op
+    const again = await indexPendingSessions({ ...opts(), store });
+    expect(again.indexed).toHaveLength(0);
+    expect(again.chunks).toBe(0);
   });
 });
