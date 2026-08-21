@@ -155,8 +155,11 @@ The console is token-gated and per-IP rate-limited (see [`src/gateway/http.ts`](
 spend/session counts from disk and the gateway's live provider-outcome counter
 ([`src/provider/stats.ts`](../src/provider/stats.ts)), which the provider
 registry updates on every chat call — so provider reachability is answered from
-cached data instead of a per-request probe. Both endpoints require the same
-`gateway.listen.token` bearer token as the rest of the API.
+cached data instead of a per-request probe. The on-disk spend aggregation is
+cached for a short window (~20s, `OBSERVABILITY_CACHE_TTL_MS`), so a scrape or
+health check does not re-parse every session log on the shared event loop
+(#186). Both endpoints require the same `gateway.listen.token` bearer token as
+the rest of the API.
 
 ## Tools
 

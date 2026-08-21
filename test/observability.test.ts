@@ -11,6 +11,8 @@ import { startHttpServer, type HttpServerHandle } from "../src/gateway/http";
 import {
   buildHealth,
   buildMetrics,
+  resetObservabilityCache,
+  OBSERVABILITY_CACHE_TTL_MS,
 } from "../src/gateway/observability";
 import { ProviderStats, monitoredProvider } from "../src/provider/stats";
 import { ProviderRegistry } from "../src/provider/registry";
@@ -23,6 +25,7 @@ const TOKEN = "observability-token";
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "tj-obs-"));
+  resetObservabilityCache();
 });
 
 afterEach(() => {
@@ -171,6 +174,29 @@ describe("buildHealth", () => {
     expect(h.sessions).toBe(1);
     expect(h.spendUSDTotal).toBe(0.5);
     expect((h.providers as Record<string, { up: boolean }>).anthropic!.up).toBe(true);
+  });
+});
+
+describe("observability spend cache (#186)", () => {
+  test("numbers are identical to direct aggregation and spend is cached within TTL", () => {
+    seedSession("s1", 0.5);
+    const t = new Date();
+    const stats = new ProviderStats();
+    const h1 = buildHealth(t.getTime(), { home, stats, jobs: [] });
+    expect(h1.spendUSDTotal).toBe(0.5);
+    expect(h1.budgetSpentTodayUSD).toBe(0.5);
+
+    // New spend lands after the first computation, but within the TTL the
+    // cached totals are returned (no full rescan of the session logs).
+    seedSession("s2", 0.25);
+    const withinTtl = new Date(t.getTime() + OBSERVABILITY_CACHE_TTL_MS - 1);
+    const h2 = buildHealth(withinTtl.getTime(), { home, stats, jobs: [] });
+    expect(h2.spendUSDTotal).toBe(0.5); // stale-by-design within TTL
+
+    // After the TTL expires the rescan picks up the new session.
+    const pastTtl = new Date(t.getTime() + OBSERVABILITY_CACHE_TTL_MS + 1);
+    const h3 = buildHealth(pastTtl.getTime(), { home, stats, jobs: [] });
+    expect(h3.spendUSDTotal).toBe(0.75);
   });
 });
 
