@@ -521,6 +521,7 @@ export class Gateway {
           this.deps.guard?.onBlock,
         ),
         paranoid: resolveParanoid(this.deps.config.security, profile.config.security),
+        effort: profile.config.effort,
         redactor: Redactor.fromConfig(this.deps.config.security),
         context: this.deps.config.context,
       });

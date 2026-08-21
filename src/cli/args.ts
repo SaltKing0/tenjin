@@ -1,4 +1,5 @@
 import { ConfigError } from "../config/loader";
+import { isEffortLevel, type EffortLevel } from "../agent/effort";
 import { VERSION, PRODUCT } from "../version";
 
 export const HELP = `${PRODUCT} v${VERSION} — personal agent harness
@@ -9,6 +10,7 @@ Usage:
   tenjin --model <id>        override configured model
   tenjin --provider <name>   anthropic | openai
   tenjin --budget <usd>      session spend cap
+  tenjin --effort <level>    low|medium|high|max effort dial for a one-shot run
   tenjin --resume <id>       continue a previous session
   tenjin --fork <id> [n]     branch a copy at event n (default: end)
   tenjin --bot <name>        run as a specific bot
@@ -46,6 +48,7 @@ export interface CliArgs {
   model?: string;
   provider?: string;
   budget?: number;
+  effort?: EffortLevel;
   resume?: string;
   fork?: ForkSpec;
   bot?: string;
@@ -76,6 +79,14 @@ export function parseArgs(argv: string[]): CliArgs {
       case "--budget":
         args.budget = Number(argv[++i]);
         break;
+      case "--effort": {
+        const v = argv[++i];
+        if (!isEffortLevel(v)) {
+          throw new ConfigError(`--effort must be one of: low, medium, high, max`);
+        }
+        args.effort = v;
+        break;
+      }
       case "--resume":
         args.resume = argv[++i];
         break;

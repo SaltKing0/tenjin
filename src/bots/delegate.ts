@@ -83,6 +83,7 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
           deps.guard?.onBlock,
         ),
         paranoid: resolveParanoid(deps.globalConfig.security, profile.config.security),
+        effort: profile.config.effort,
         correlationId,
         audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
         sessionLogDir: profile.sessionsDir,

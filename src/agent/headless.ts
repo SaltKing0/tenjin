@@ -7,6 +7,7 @@ import { checkGlobalBudget } from "../audit/global-budget";
 import type { GlobalBudgetConfig } from "../config/types";
 import { SessionLog } from "../session/log";
 import { resolveContextGuard } from "../session/context";
+import { effortLimits, type EffortLevel } from "./effort";
 import type { TurnEvent } from "./loop";
 import { readTool } from "../tools/read";
 import { globTool } from "../tools/glob";
@@ -77,6 +78,8 @@ export interface HeadlessOptions {
   context?: import("../config/loader").ContextConfig | null;
   /** Abort the run (e.g. a per-task timeout). Propagates to provider calls. */
   signal?: AbortSignal;
+  /** #142: low/medium/high/max dial overriding iteration/token/tool limits. */
+  effort?: EffortLevel;
 }
 
 export interface HeadlessResult {
@@ -111,8 +114,12 @@ export function toolsForPolicy(policy: ToolPolicy, skill?: SkillDirs): ToolDef[]
 }
 
 export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult> {
-  const policy = opts.policy ?? "read-only";
   const redactor = opts.redactor ?? new Redactor();
+  // #142: resolve the effort dial first — it caps iterations, tokens, and (for
+  // low) the tool policy, overriding what the caller passed.
+  const eff = effortLimits(opts.effort, opts.maxTokens);
+  const basePolicy = opts.policy ?? "read-only";
+  const policy = eff.toolPolicy ? capPolicy(basePolicy, eff.toolPolicy) : basePolicy;
   const globalBudgetGate =
     opts.home && opts.globalBudget
       ? () => checkGlobalBudget(opts.home!, opts.globalBudget!)
@@ -142,6 +149,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       provider: opts.provider.name,
       model: opts.model,
       ...(opts.sessionBot ? { bot: opts.sessionBot } : {}),
+      ...(opts.effort ? { effort: opts.effort } : {}),
     });
     logger.append({ t: "message", role: "user", content: opts.message, ts: new Date().toISOString() });
   }
@@ -170,7 +178,8 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     tools,
     messages: [{ role: "user", content: opts.message }],
     budget,
-    maxTokens: opts.maxTokens,
+    maxTokens: eff.maxTokens,
+    maxIterations: eff.maxIterations,
     cwd: opts.cwd,
     signal: opts.signal,
     globalBudgetGate,

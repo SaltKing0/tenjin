@@ -11,6 +11,8 @@ export interface SpendRow {
   outputTokens: number;
   cacheReadInputTokens: number;
   costUSD: number;
+  /** #142: effort level of the session(s) aggregated into this row. */
+  effort?: string;
 }
 
 export interface BotBreakdown {
@@ -28,12 +30,14 @@ interface SessionSummary {
   outputTokens: number;
   cacheReadInputTokens: number;
   costUSD: number;
+  effort?: string;
 }
 
 function readSessionFile(path: string): SessionSummary | null {
   if (!existsSync(path)) return null;
   let model = "?";
   let startedTs = "";
+  let effort: string | undefined;
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheReadInputTokens = 0;
@@ -46,6 +50,7 @@ function readSessionFile(path: string): SessionSummary | null {
         if (e.t === "session_start") {
           model = `${e.provider}:${e.model}`;
           startedTs = e.ts;
+          if (typeof e.effort === "string") effort = e.effort;
         } else if (e.t === "usage") {
           inputTokens += e.inputTokens ?? 0;
           outputTokens += e.outputTokens ?? 0;
@@ -60,7 +65,7 @@ function readSessionFile(path: string): SessionSummary | null {
     return null;
   }
   if (!startedTs) return null;
-  return { model, startedTs, inputTokens, outputTokens, cacheReadInputTokens, costUSD };
+  return { model, startedTs, inputTokens, outputTokens, cacheReadInputTokens, costUSD, effort };
 }
 
 export function collectSessionScopes(home: string): Array<{ scope: string; dir: string }> {
@@ -113,6 +118,7 @@ export function aggregateSpend(
       row.outputTokens += summary.outputTokens;
       row.cacheReadInputTokens += summary.cacheReadInputTokens;
       row.costUSD += summary.costUSD;
+      if (summary.effort !== undefined && row.effort === undefined) row.effort = summary.effort;
       byKey.set(key, row);
     }
   }

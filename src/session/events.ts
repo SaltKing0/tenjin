@@ -14,6 +14,8 @@ export type SessionEvent =
       model: string;
       parent?: SessionParent;
       bot?: string;
+      /** #142: effort level (low/medium/high/max) this session ran under. */
+      effort?: string;
     }
   | { t: "message"; role: Role; content: string | ContentBlock[]; ts: string }
   | { t: "tool_call"; id: string; name: string; input: unknown; ts: string }

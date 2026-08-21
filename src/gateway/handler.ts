@@ -198,6 +198,7 @@ export function createMessageHandler(deps: HandlerDeps) {
           (detail) => deps.audit.append("tool_block", ctx.actor, detail, botName),
         ),
         paranoid: resolveParanoid(deps.config.security, profile.config.security),
+        effort: profile.config.effort,
         approve,
         audit: (kind, detail) => deps.audit.append(kind, ctx.actor, detail, botName),
         onTextDelta: ctx.onDelta,

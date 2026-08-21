@@ -25,6 +25,7 @@ import { loadSoul, loadAgentsMd, buildSystemPrompt } from "./agent/prompt";
 import { formatUSD } from "./agent/budget";
 import { runAgentTurn } from "./agent/loop";
 import { runHeadless, capPolicy, applyDenyTools } from "./agent/headless";
+import type { EffortLevel } from "./agent/effort";
 import { runArena, renderArena, type ArenaEntry } from "./arena";
 import { startRepl } from "./ui/repl";
 import { SessionLog } from "./session/log";
@@ -101,6 +102,8 @@ interface AppContext {
   memoryDir: string;
   guard: ReturnType<typeof SecurityGuard.fromConfig>;
   botSecurity?: BotSecurityConfig;
+  /** #142: effective effort for this run (CLI flag overrides the bot's config). */
+  effort?: EffortLevel;
 }
 
 async function main(): Promise<number> {
@@ -326,6 +329,7 @@ async function main(): Promise<number> {
       memoryDir: memDir,
       guard,
       botSecurity: profile?.config.security,
+      effort: cli.effort ?? profile?.config.effort,
     };
 
     if (cli.print !== undefined) {
@@ -1135,6 +1139,7 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
       new AuditLog(auditPath(ctx.home)).append(kind, "user", detail, undefined, correlationId),
     redactor: Redactor.fromConfig(ctx.config.security),
     context: ctx.config.context,
+    effort: ctx.effort,
   });
   stdout.write(`${result.text}\n`);
   stdout.write(
