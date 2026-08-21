@@ -16,6 +16,12 @@ export const EMPTY_STATES = {
     cta: "Create a bot",
     hash: "#bots",
   },
+  // chat_history — bots exist but this bot has no saved transcript yet (#284)
+  chat_history: {
+    title: "No chat history yet",
+    caption:
+      "Messages you send and the replies will appear here. Prefix @botname to address a specific bot, or just start typing in Solo mode.",
+  },
   // jobs — nothing scheduled yet
   jobs: {
     title: "No scheduled jobs yet",
