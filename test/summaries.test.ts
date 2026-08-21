@@ -160,6 +160,47 @@ describe("generateSummary", () => {
   });
 });
 
+describe("parallel summary writes (#208)", () => {
+  test("an older writer does not regress a fresher on-disk uptoEvent", () => {
+    writeSummary(
+      home,
+      { sessionId: "s", projectPath: "/p", uptoEvent: 12, created: "later" },
+      "fresher summary",
+    );
+    // A stale writer that computed from only 10 events must not overwrite it.
+    writeSummary(
+      home,
+      { sessionId: "s", projectPath: "/p", uptoEvent: 10, created: "earlier" },
+      "stale summary",
+    );
+    const entry = readSummary(summaryPath(home, "s"));
+    expect(entry?.meta.uptoEvent).toBe(12);
+    expect(entry?.text).toBe("fresher summary");
+    // the summaries dir is left clean (no temp-file litter)
+    const { readdirSync } = require("node:fs") as typeof import("node:fs");
+    const leftovers = readdirSync(join(home, "summaries")).filter((f) => f.includes(".tmp-"));
+    expect(leftovers).toHaveLength(0);
+  });
+
+  test("two parallel generateSummary runs settle on the maximum uptoEvent", async () => {
+    const log = seedSession("parallel target");
+    const opts = {
+      provider: mockProvider("summary text"),
+      model: "m",
+      maxTokens: 512,
+      projectPath: project,
+      memoryDirPath: home,
+    };
+    await Promise.all([generateSummary(log, opts), generateSummary(log, opts)]);
+
+    const entry = readSummary(summaryPath(home, log.id));
+    expect(entry).not.toBeNull();
+    // Both runs computed from the same 3 events; the pointer never regresses.
+    expect(entry?.meta.uptoEvent).toBe(3);
+    expect(entry?.text).toBeDefined();
+  });
+});
+
 describe("generatePendingSummaries", () => {
   test("processes pending sessions and reports errors without dying", async () => {
     const a = seedSession("alpha");

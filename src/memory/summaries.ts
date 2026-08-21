@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { YAML } from "bun";
 import type { Provider } from "../provider/types";
@@ -269,6 +277,19 @@ export function writeSummary(
 ): string {
   const path = summaryPath(memoryDirPath, meta.sessionId);
   mkdirSync(join(memoryDirPath, "summaries"), { recursive: true });
+
+  // #208: two concurrent generateSummary runs on the same session can both read
+  // the same old `existing` state and then write one after the other — the older
+  // writer could win and regress `uptoEvent`, so the next incremental pass would
+  // replay events or clobber fresher summaries. Never let an older writer
+  // overwrite a newer summary: if the on-disk pointer is already >= ours we lose
+  // and discard cleanly. The write itself goes through a temp file + atomic
+  // rename so a crash mid-write cannot leave a corrupt or truncated summary.
+  const current = readSummary(path);
+  if (current && current.meta.uptoEvent >= meta.uptoEvent) {
+    return path;
+  }
+
   const frontmatter = [
     "---",
     `sessionId: ${JSON.stringify(meta.sessionId)}`,
@@ -278,7 +299,20 @@ export function writeSummary(
     "---",
     "",
   ].join("\n");
-  writeFileSync(path, `${frontmatter}${text.trim()}\n`);
+  const content = `${frontmatter}${text.trim()}\n`;
+  const tmp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  writeFileSync(tmp, content);
+  try {
+    renameSync(tmp, path);
+  } catch (err) {
+    // Do not leave a stray temp file behind on a failed rename.
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* best-effort */
+    }
+    throw err;
+  }
   return path;
 }
 
