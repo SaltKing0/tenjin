@@ -176,10 +176,14 @@ export function startHttpServer(deps: HttpDeps): HttpServerHandle {
         return streamed ?? Response.json({ error: "not found" }, { status: 404 });
       }
       if (req.method === "GET" && url.pathname === "/api/events") {
-        const header = req.headers.get("last-event-id");
-        const fromId =
-          header && header.trim() !== "" ? Number(header) || 0 : Number.MAX_SAFE_INTEGER;
-        return eventsStream(fromId);
+        try {
+          const header = req.headers.get("last-event-id");
+          const fromId =
+            header && header.trim() !== "" ? Number(header) || 0 : Number.MAX_SAFE_INTEGER;
+          return eventsStream(fromId);
+        } catch (err) {
+          return new Response(`events error: ${(err as Error).message}`, { status: 500 });
+        }
       }
       if (url.pathname.startsWith("/api/")) {
         if (deps.api) {
@@ -197,27 +201,33 @@ export function startHttpServer(deps: HttpDeps): HttpServerHandle {
 
 function eventsStream(fromId: number): Response {
   const encoder = new TextEncoder();
-  let lastId = fromId;
-  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
   let unsub: (() => void) | null = null;
   let cleanup: (() => void) | null = null;
-  const send = (e: GatewayEvent) => {
-    controller?.enqueue(encoder.encode(formatEvent(e)));
-    lastId = e.id;
-  };
   const stream = new ReadableStream<Uint8Array>({
     start(c) {
-      controller = c;
+      let closed = false;
+      const send = (e: GatewayEvent) => {
+        if (closed) return;
+        try {
+          c.enqueue(encoder.encode(formatEvent(e)));
+        } catch {
+          /* stream already cancelled */
+        }
+      };
       for (const e of historySince(fromId)) send(e);
       unsub = subscribe(send);
-      const hb = setInterval(
-        () => controller?.enqueue(encoder.encode(": ping\n\n")),
-        15_000,
-      );
+      const hb = setInterval(() => {
+        if (closed) return;
+        try {
+          c.enqueue(encoder.encode(": ping\n\n"));
+        } catch {
+          /* ignore */
+        }
+      }, 3000);
       cleanup = () => {
+        closed = true;
         unsub?.();
         unsub = null;
-        controller = null;
         clearInterval(hb);
       };
     },
