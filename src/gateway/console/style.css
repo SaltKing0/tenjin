@@ -21,7 +21,7 @@ body {
   line-height: 1.5;
 }
 
-#app { display: flex; min-height: 100vh; }
+#app { display: flex; flex-wrap: wrap; min-height: 100vh; }
 
 .sidebar {
   width: 180px;
@@ -50,6 +50,39 @@ body {
 .sidebar nav a.active { color: var(--text); border-left: 2px solid var(--accent); }
 
 .main { flex: 1; padding: 24px; max-width: 1100px; overflow-wrap: anywhere; }
+
+/* #256: slim persistent top bar + offline banner, spanning every panel. */
+.topbar {
+  flex: 0 0 100%;
+  order: -1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-sse {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text);
+}
+.topbar-sse.ok { border-color: var(--ok); color: var(--ok); }
+.topbar-sse.err { border-color: var(--err); color: var(--err); }
+.topbar-budget { color: var(--dim); }
+.topbar-docs { color: var(--accent); text-decoration: none; margin-left: auto; }
+.offline-banner {
+  flex: 0 0 100%;
+  display: none;
+  background: var(--err);
+  color: #fff;
+  padding: 6px 14px;
+  font-weight: 600;
+}
 
 h1 { font-size: 18px; margin: 0 0 16px; }
 h2 { font-size: 14px; color: var(--dim); margin: 24px 0 8px; text-transform: uppercase; letter-spacing: 1px; }

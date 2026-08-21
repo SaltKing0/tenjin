@@ -250,6 +250,17 @@ test("console serves the setup-checklist module (#252)", async () => {
   const body = await res.text();
   expect(body).toContain("SETUP_ITEMS");
   expect(body).toContain("export function setupChecklist");
+
+test("console serves the topbar-state module (#256)", async () => {
+  const base = start({
+    consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
+  });
+  const res = await fetch(`${base}/console/topbar-state.js`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("application/javascript");
+  const body = await res.text();
+  expect(body).toContain("OFFLINE_BANNER");
+  expect(body).toContain("export function connectionView");
 });
 
 test("SSE closes an unread (zombie) client and removes its listener on queue overflow (#199)", async () => {
