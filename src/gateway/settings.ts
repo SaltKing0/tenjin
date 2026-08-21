@@ -3,6 +3,7 @@ import type { ProviderRegistry, ProviderKeys } from "../provider/registry";
 import { writeProvidersYaml } from "../config/loader";
 import { resolveModelRef } from "../config/models";
 import { ConfigError } from "../config/types";
+import { OpenAIProvider } from "../provider/openai";
 
 export interface SettingsDeps {
   home: string;
@@ -113,6 +114,43 @@ const OPENAI_DEFAULT_BASE = "https://api.openai.com/v1";
 
 export const DETECT_TIMEOUT_MS = 10_000;
 
+/**
+ * Heuristic for whether a model id is usable as a chat (default) model.
+ * Embeds, audio/transcription, image-gen, moderation and known-deprecated
+ * ids are excluded from the chat selection. Manual override is available via
+ * the free-text model input in the settings panel.
+ */
+const NON_CHAT_HINTS = [
+  "embedding",
+  "-embed-",
+  "text-embed",
+  "ada-002", // OpenAI embedding class
+  "text-ada", // deprecated OpenAI embedding generation
+  "text-babbage",
+  "text-curie",
+  "similarity",
+  "rerank",
+  "re-rank",
+  "search-",
+  "whisper",
+  "-audio",
+  "tts",
+  "speech",
+  "transcri",
+  "dall-e",
+  "gpt-image",
+  "image-",
+  "flux-",
+  "moderation",
+  "safety-",
+  "babbage", // legacy embeddings
+];
+
+export function isChatModel(id: string): boolean {
+  const low = id.toLowerCase();
+  return !NON_CHAT_HINTS.some((h) => low.includes(h));
+}
+
 export class DetectTimeoutError extends Error {
   constructor(provider: string, timeoutMs: number) {
     super(
@@ -171,7 +209,7 @@ export async function detectModels(
     const data = (await res.json()) as { data?: Array<{ id?: string }> };
     const ids = (data.data ?? [])
       .map((m) => m.id)
-      .filter((id): id is string => typeof id === "string");
+      .filter((id): id is string => typeof id === "string" && isChatModel(id));
     return ids.sort();
   } finally {
     clearTimeout(timer);
@@ -235,6 +273,76 @@ export async function testProvider(
     };
   } catch (e) {
     return { ok: false, provider, error: (e as Error).message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Smoke-test the would-be provider configuration before live-switching:
+ * fires a tiny chat completion against the target provider/model using the
+ * incoming (new) key + baseUrl. Throws with a message the caller turns into a
+ * 400 response; the shared config is left untouched so a dead key can never
+ * half-apply. When no custom baseUrl is configured (standard provider
+ * endpoints), it applies without a network probe — those are validated on
+ * first real use, and probing official APIs on every save would be wasteful.
+ */
+export async function verifySettingsApply(
+  deps: SettingsDeps,
+  body: {
+    anthropic?: { apiKey?: string } | null;
+    openai?: { apiKey?: string; baseUrl?: string } | null;
+    models?: { default?: string; cheap?: string };
+  },
+  timeoutMs: number = DETECT_TIMEOUT_MS,
+): Promise<void> {
+  const { config } = deps;
+
+  // Determine the target provider + model that applySettings would activate.
+  let providerName: "anthropic" | "openai";
+  let model: string;
+  if (body.models?.default && body.models.default !== "") {
+    const ref = resolveModelRef(body.models.default, config.provider);
+    providerName = ref.provider;
+    model = ref.model;
+  } else {
+    providerName = config.provider;
+    model = config.model;
+  }
+  if (!model) return;
+
+  // Only probe when a custom endpoint is in play; standard endpoints are
+  // validated lazily on first real use (avoid a paid call on every save).
+  if (providerName !== "openai") return;
+  const baseUrl = body.openai?.baseUrl ?? config.providers?.openai?.baseUrl;
+  if (!baseUrl) return;
+
+  const apiKey =
+    body.openai?.apiKey ?? config.providers?.openai?.apiKey ?? process.env.OPENAI_API_KEY;
+
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error(`${providerName} smoke-test timed out after ${Math.round(timeoutMs / 1000)}s`)),
+    timeoutMs,
+  );
+  try {
+    const provider = new OpenAIProvider(apiKey ?? "", baseUrl, undefined);
+    await provider.chat(
+      {
+        model,
+        system: "You are a connectivity check. Reply with the single word: ok",
+        messages: [{ role: "user", content: "ping" }],
+        tools: [],
+        maxTokens: 8,
+      },
+      undefined,
+      controller.signal,
+    );
+  } catch (e) {
+    const msg = (e as Error).message;
+    throw new ConfigError(
+      `settings apply smoke-test failed for ${providerName}/${model} (${baseUrl}): ${msg}`,
+    );
   } finally {
     clearTimeout(timer);
   }
