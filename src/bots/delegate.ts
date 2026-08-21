@@ -4,7 +4,7 @@ import { resolveBot, listBots, botModelRef, botBudgetUSD } from "./profile";
 import { loadTeam, resolveTeamTarget } from "./team";
 import { runHeadless, capPolicy } from "../agent/headless";
 import { guardForBot } from "../security/guard";
-import { resolveParanoid } from "../security/injection";
+import { resolveParanoid, hardenUntrustedInput } from "../security/injection";
 import { Budget, formatUSD } from "../agent/budget";
 import { randomUUID } from "node:crypto";
 import type { ToolDef } from "../tools/registry";
@@ -105,6 +105,17 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
 
       const text = result.text;
 
+      // #316: the delegated bot's output is untrusted data (it runs with its own
+      // soul/model and may be hostile or steered) — scan, audit and frame it
+      // before returning it to the caller, mirroring the task-path hardening (#189).
+      const framed = text
+        ? hardenUntrustedInput(text, {
+            paranoid: resolveParanoid(deps.globalConfig.security, profile.config.security),
+            audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
+            correlationId,
+          })
+        : text;
+
       // #154: the shared tree cap was hit (this run or one it delegated to).
       if (result.stopReason === "tree_budget_exceeded") {
         deps.audit?.(
@@ -120,9 +131,9 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
         return `The ${profile.name} bot returned no text (${result.stopReason}). ${meta}`;
       }
       if (result.stopReason === "budget_exhausted") {
-        return `${text}\n\n(note: hit its spend cap mid-thought) ${meta}`;
+        return `${framed}\n\n(note: hit its spend cap mid-thought) ${meta}`;
       }
-      return `${text}\n\n${meta}`;
+      return `${framed}\n\n${meta}`;
     },
   };
 }

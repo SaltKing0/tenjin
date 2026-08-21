@@ -137,9 +137,15 @@ See [docs/architecture.md](architecture.md#gateway) for the full gateway config.
 - **Inbox** — every bot has an inbox at `~/.tenjin/bots/<name>/inbox/`.
   Bots read it with the `check_inbox` tool and send messages with the
   `send_message` tool (`src/bots/inbox.ts`, `src/bots/tools.ts`). Incoming
-  messages are treated as data, not instructions.
+  messages are treated as data, not instructions — `check_inbox` scans, audits
+  and frames them as delimited data blocks (and, under `security.paranoid`,
+  masks suspicious content) before they reach the model, mirroring the
+  task-path hardening (#189, #316).
 - **Delegation** — the `ask_bot` tool (`src/bots/delegate.ts`) lets one bot
-  ask another and get its answer back, creating a delegation audit event.
+  ask another and get its answer back, creating a delegation audit event. The
+  delegated bot's output is treated as untrusted data and is likewise
+  hardened (scanned, audited, framed, and masked under paranoid) before it is
+  returned to the caller (#316).
   Fire-and-forget work is handled by `ask_bot_async` + `bot_task_status`
   (`src/bots/tasks.ts`): `ask_bot_async` returns a `task_id` immediately and
   runs the target bot headless in the background; each task has a configurable
