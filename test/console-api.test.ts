@@ -697,6 +697,16 @@ interface JobRow {
   every: string | null;
   policy: string;
   lastRun: { at: string; stopReason: string; costUSD: number; error?: string } | null;
+  history: {
+    at: string;
+    end: string;
+    status: string;
+    stopReason: string;
+    costUSD: number;
+    durationMs: number;
+    session?: string;
+    error?: string;
+  }[];
   nextDue: string;
   nextDueMs: number;
   running: boolean;
@@ -728,6 +738,7 @@ describe("jobs API", () => {
     expect(digest.every).toBeNull();
     expect(digest.policy).toBe("read-only");
     expect(digest.lastRun).toBeNull();
+    expect(digest.history).toEqual([]);
     expect(digest.running).toBe(false);
     expect(digest.nextDueMs).toBeGreaterThan(Date.now() - 1000);
     expect(new Date(digest.nextDue).getTime()).toBe(digest.nextDueMs);
@@ -800,6 +811,13 @@ describe("jobs API", () => {
     expect(digest?.lastRun?.stopReason).toBe("end_turn");
     expect(digest?.lastRun?.costUSD).toBe(body.costUSD);
     expect(typeof digest?.lastRun?.at).toBe("string");
+    // The run now appears in history (newest run first) with status/duration.
+    expect(digest?.history).toHaveLength(1);
+    expect(digest?.history[0]?.stopReason).toBe("end_turn");
+    expect(digest?.history[0]?.status).toBe("ok");
+    expect(digest?.history[0]?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(typeof digest?.history[0]?.at).toBe("string");
+    expect(typeof digest?.history[0]?.end).toBe("string");
   });
 
   test("POST /api/jobs/:id/run unknown job is 404", async () => {

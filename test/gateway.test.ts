@@ -88,6 +88,7 @@ describe("parseGatewaySettings", () => {
       listen: null,
       allowWrites: false,
       catchUp: { enabled: true, max: 50 },
+      jobHistory: 20,
     });
     expect(parseGatewaySettings(null)).toEqual({
       jobs: [],
@@ -98,6 +99,7 @@ describe("parseGatewaySettings", () => {
       listen: null,
       allowWrites: false,
       catchUp: { enabled: true, max: 50 },
+      jobHistory: 20,
     });
   });
 
@@ -1025,6 +1027,149 @@ describe("job hang release + per-job timeout (#19)", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
     expect(result.text).toBe("HELLO");
+  });
+});
+
+describe("job run history (#151)", () => {
+  const stateFile = () => join(home, "gateway-state.json");
+
+  function jobGateway(jobs: unknown[], jobHistory?: number) {
+    return new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: {
+          ...(jobHistory !== undefined ? { jobHistory } : {}),
+          jobs,
+        },
+      }),
+      registry: { get: () => mockProvider("OUT") } as never,
+      log: () => {},
+    });
+  }
+
+  function hangingTimeoutProvider() {
+    return {
+      name: "hang",
+      chat: (): Promise<never> => new Promise(() => {}),
+    } as unknown as Provider;
+  }
+
+  test("parse: jobHistory defaults to 20 and must be a positive integer", () => {
+    expect(parseGatewaySettings(undefined).jobHistory).toBe(20);
+    expect(parseGatewaySettings({ jobHistory: 5 }).jobHistory).toBe(5);
+    expect(() => parseGatewaySettings({ jobHistory: 0 })).toThrow(/positive integer/);
+    expect(() => parseGatewaySettings({ jobHistory: -1 })).toThrow(/positive integer/);
+    expect(() => parseGatewaySettings({ jobHistory: "x" })).toThrow(/positive integer/);
+  });
+
+  test("runNow records a run in history (ok, start/end, session)", async () => {
+    const gw = jobGateway([{ name: "digest", bot: "worker", prompt: "p", every: "1h" }]);
+    await gw.runNow("digest");
+    const job = gw.jobs[0];
+    if (!job) throw new Error("missing job");
+    expect(job.history.length).toBe(1);
+    const h = job.history[0];
+    if (!h) throw new Error("missing record");
+    expect(h.status).toBe("ok");
+    expect(h.endMs).toBeGreaterThanOrEqual(h.atMs);
+    expect(h.stopReason).toBe("end_turn");
+    // A session log is written for the bot, so a session reference is present.
+    expect(typeof h.session).toBe("string");
+    // lastRun stays in sync as the newest record.
+    expect(job.lastRun?.atMs).toBe(h.atMs);
+  });
+
+  test("history is newest-first and capped at jobHistory (keeps only last N)", async () => {
+    const gw = jobGateway(
+      [{ name: "digest", bot: "worker", prompt: "p", every: "1h" }],
+      3, // small cap keeps the test fast while exercising the ring
+    );
+    for (let i = 0; i < 5; i++) await gw.runNow("digest");
+    const job = gw.jobs[0];
+    if (!job) throw new Error("missing job");
+    expect(job.history.length).toBe(3); // 5 runs -> the 2 oldest are dropped
+    const ats = job.history.map((h) => h.atMs);
+    expect([...ats].sort((a, b) => b - a)).toEqual(ats); // newest first
+  });
+
+  test("with the default cap of 20, 25 runs keep only the last 20", async () => {
+    const gw = jobGateway([{ name: "digest", bot: "worker", prompt: "p", every: "1h" }]);
+    for (let i = 0; i < 25; i++) await gw.runNow("digest");
+    const job = gw.jobs[0];
+    if (!job) throw new Error("missing job");
+    expect(job.history.length).toBe(20);
+  });
+
+  test("a restart reconstructs history from the state file (no loss)", async () => {
+    const first = jobGateway([{ name: "digest", bot: "worker", prompt: "p", every: "1h" }]);
+    await first.runNow("digest");
+    await first.runNow("digest");
+    // A brand-new Gateway on the same home simulates a fresh boot.
+    const second = jobGateway([{ name: "digest", bot: "worker", prompt: "p", every: "1h" }]);
+    const job = second.jobs[0];
+    if (!job) throw new Error("missing job");
+    expect(job.history.length).toBe(2);
+    expect(job.lastRun?.atMs).toBe(job.history[0]?.atMs);
+  });
+
+  test("legacy v1 state (single lastRun) migrates into history", () => {
+    writeFileSync(
+      stateFile(),
+      JSON.stringify({
+        version: 1,
+        jobs: { digest: { lastRun: { atMs: 123, stopReason: "end_turn", costUSD: 0.5 } } },
+      }),
+    );
+    const gw = jobGateway([{ name: "digest", bot: "worker", prompt: "p", every: "1h" }]);
+    const job = gw.jobs[0];
+    if (!job) throw new Error("missing job");
+    expect(job.history.length).toBe(1);
+    expect(job.history[0]?.atMs).toBe(123);
+    expect(job.history[0]?.status).toBe("ok");
+    expect(job.lastRun?.costUSD).toBe(0.5);
+  });
+
+  test("a timeout run is recorded with status timeout", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: { jobs: [{ name: "digest", bot: "worker", prompt: "p", every: "1h", timeoutMs: 30 }] },
+      }),
+      registry: { get: () => hangingTimeoutProvider() } as never,
+    });
+    const result = await gw.runNow("digest");
+    expect(result.ok).toBe(false);
+    const job = gw.jobs[0];
+    if (!job) throw new Error("missing job");
+    expect(job.history[0]?.status).toBe("timeout");
+    expect(job.history[0]?.error).toMatch(/timed out/);
+  });
+
+  test("an erroring provider is recorded with status error", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: { jobs: [{ name: "digest", bot: "worker", prompt: "p", every: "1h" }] },
+      }),
+      registry: {
+        get: () =>
+          ({
+            name: "boom",
+            async chat() {
+              throw new Error("provider exploded");
+            },
+          }) as unknown as Provider,
+      } as never,
+    });
+    const result = await gw.runNow("digest");
+    expect(result.ok).toBe(false);
+    const job = gw.jobs[0];
+    if (!job) throw new Error("missing job");
+    expect(job.history[0]?.status).toBe("error");
+    expect(job.history[0]?.error).toMatch(/provider exploded/);
   });
 });
 
