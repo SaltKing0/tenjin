@@ -36,6 +36,7 @@ export function buildSystemPrompt(inputs: {
   soulText: string;
   agentsMd: string | null;
   cwd: string;
+  memorySection?: string | null;
 }): string {
   const parts: string[] = [inputs.soulText];
 
@@ -57,6 +58,10 @@ export function buildSystemPrompt(inputs: {
 
   if (inputs.agentsMd) {
     parts.push(`# Project context (AGENTS.md)\n${inputs.agentsMd}`);
+  }
+
+  if (inputs.memorySection) {
+    parts.push(inputs.memorySection);
   }
 
   return parts.join("\n\n");

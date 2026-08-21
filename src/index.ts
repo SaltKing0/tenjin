@@ -6,6 +6,8 @@ import {
   validateConfig,
   tenjinHome,
   sessionsDir,
+  memoryDir,
+  memoryEnabled,
   ConfigError,
   type HarnessConfig,
 } from "./config/loader";
@@ -17,6 +19,8 @@ import { runAgentTurn } from "./agent/loop";
 import { startRepl } from "./ui/repl";
 import { SessionLog } from "./session/log";
 import { rebuildMessages, sumUsage } from "./session/events";
+import { generatePendingSummaries, listSummaries } from "./memory/summaries";
+import { buildMemorySection } from "./memory/inject";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
@@ -62,11 +66,34 @@ async function main(): Promise<number> {
     applyOverrides(config, cli);
     validateConfig(config);
     const provider = createProvider(config);
+
+    const memDir = memoryDir(home);
+    if (memoryEnabled(config) && cli.print === undefined && !cli.fork && !cli.resume) {
+      try {
+        const report = await generatePendingSummaries({
+          sessionsDirPath: sessionsDir(home),
+          memoryDirPath: memDir,
+          provider,
+          model: config.model,
+          maxTokens: config.maxTokens,
+          projectPath: cwd,
+        });
+        for (const err of report.errors) {
+          stdout.write(`memory: ${err}\n`);
+        }
+      } catch (e) {
+        stdout.write(`memory: skipped (${(e as Error).message})\n`);
+      }
+    }
+
     const soul = loadSoul(home, cwd);
     const system = buildSystemPrompt({
       soulText: soul.text,
       agentsMd: loadAgentsMd(cwd),
       cwd,
+      memorySection: memoryEnabled(config)
+        ? buildMemorySection(listSummaries(memDir), { currentProject: cwd })
+        : null,
     });
     const tools: ToolDef[] = [
       readTool,
@@ -86,12 +113,12 @@ async function main(): Promise<number> {
     if (cli.fork) {
       const log = SessionLog.fork(dir, cli.fork.id, cli.fork.uptoEvent);
       stdout.write(`forked ${cli.fork.id} → ${log.id}\n`);
-      await continueSession(ctx, dir, log);
+      await continueSession(ctx, dir, log, memDir);
       return 0;
     }
     if (cli.resume) {
       const log = SessionLog.resolve(dir, cli.resume);
-      await continueSession(ctx, dir, log);
+      await continueSession(ctx, dir, log, memDir);
       return 0;
     }
 
@@ -101,6 +128,7 @@ async function main(): Promise<number> {
       sessionId: log.id,
       logger: log,
       sessionsDir: dir,
+      memoryDir: memDir,
     });
     return 0;
   } catch (e) {
@@ -117,6 +145,7 @@ async function continueSession(
   ctx: AppContext,
   dir: string,
   log: SessionLog,
+  memDir?: string,
 ): Promise<void> {
   const events = log.events();
   await startRepl({
@@ -124,12 +153,14 @@ async function continueSession(
     sessionId: log.id,
     logger: log,
     sessionsDir: dir,
+    memoryDir: memDir,
     initialMessages: rebuildMessages(events),
     initialSpentUSD: sumUsage(events).spentUSD,
   });
 }
 
-function applyOverrides(config: HarnessConfig, cli: CliArgs): void {  if (cli.model) config.model = cli.model;
+function applyOverrides(config: HarnessConfig, cli: CliArgs): void {
+  if (cli.model) config.model = cli.model;
   if (cli.provider) {
     if (cli.provider !== "anthropic" && cli.provider !== "openai") {
       throw new ConfigError(`--provider must be anthropic or openai`);

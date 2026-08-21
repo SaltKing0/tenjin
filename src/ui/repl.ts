@@ -10,6 +10,8 @@ import type { EventLogger, SessionEvent } from "../session/events";
 import { rebuildMessages, sumUsage } from "../session/events";
 import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
+import { listSummaries, sessionsWithoutSummary } from "../memory/summaries";
+import { memoryEnabled } from "../config/loader";
 import { VERSION } from "../version";
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -26,6 +28,7 @@ export interface ReplOptions {
   sessionId: string;
   logger?: SessionLog;
   sessionsDir?: string;
+  memoryDir?: string;
   initialMessages?: ChatMessage[];
   initialSpentUSD?: number;
 }
@@ -160,6 +163,7 @@ async function handleCommand(
           "/resume <id>     continue a previous session",
           "/fork [n]        branch current conversation at event n",
           "/replay          print trajectory of this session",
+          "/memory          memory layer status",
           "",
         ].join("\n"),
       );
@@ -243,6 +247,23 @@ async function handleCommand(
       for (const line of renderTrajectory(state.logger.events())) {
         stdout.write(dim(line) + "\n");
       }
+      return;
+    }
+    case "/memory": {
+      if (!opts.memoryDir || !opts.sessionsDir) {
+        stdout.write(red("memory not available\n"));
+        return;
+      }
+      const summaries = listSummaries(opts.memoryDir);
+      const projectSummaries = summaries.filter((s) => s.meta.projectPath === opts.cwd);
+      const total = SessionLog.list(opts.sessionsDir).length;
+      const pending = sessionsWithoutSummary(opts.sessionsDir, opts.memoryDir).length;
+      const on = memoryEnabled(opts.config);
+      stdout.write(
+        dim(
+          `memory ${on ? "on" : "off"} · ${summaries.length} summaries (${projectSummaries.length} this project) · ${total} sessions · ${pending} pending\n`,
+        ),
+      );
       return;
     }
     default:
