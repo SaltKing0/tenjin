@@ -17,7 +17,7 @@ export interface AskBotDeps {
   sessionBudget?: Budget;
   guard?: import("../security/guard").SecurityGuard | null;
   audit?: (
-    kind: "delegation" | "write_exec" | "budget_halt" | "prompt_injection",
+    kind: "delegation" | "write_exec" | "budget_halt" | "budget_exceeded" | "prompt_injection",
     detail: string,
     correlationId?: string,
   ) => void;
@@ -39,7 +39,7 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
       },
       required: ["bot", "message"],
     },
-    async handler(args, _ctx) {
+    async handler(args, ctx) {
       const targetName = String(args.bot ?? "").trim();
       if (targetName === deps.fromBot) throw new Error("cannot delegate to yourself");
       const profile = resolveBot(deps.home, targetName);
@@ -89,9 +89,22 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
         sessionLogDir: profile.sessionsDir,
         sessionBot: profile.name,
         context: deps.globalConfig.context,
+        // #154: inherit the caller's shared tree budget so this subagent counts
+        // against the same counter as the rest of the delegation tree.
+        treeBudget: ctx.treeBudget,
       });
 
       const text = result.text;
+
+      // #154: the shared tree cap was hit (this run or one it delegated to).
+      if (result.stopReason === "tree_budget_exceeded") {
+        deps.audit?.(
+          "budget_exceeded",
+          `delegation tree budget exhausted during ${profile.name} run`,
+          correlationId,
+        );
+        return `Delegation to ${profile.name} stopped: shared tree budget exhausted (${ctx.treeBudget?.usedIterations ?? 0} iteration(s) across the tree).`;
+      }
 
       const meta = `[delegated to ${profile.name} (${ref.provider}:${ref.model}), ${formatUSD(result.costUSD)}]`;
       if (!text) {

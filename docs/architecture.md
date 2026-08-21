@@ -89,6 +89,18 @@ provides the `ask_bot` tool so one bot can delegate to another;
 [`src/bots/tools.ts`](../src/bots/tools.ts) exposes `send_message` /
 `check_inbox` to bots.
 
+**Delegation-tree budget (#154).** A chain of delegations (a bot that itself
+delegates) can multiply work without any single per-run cap catching it. A
+`TreeBudget` fixes this by giving the whole tree one shared counter: the root
+run creates it (from `maxTreeIterations`, the per-task cap, or the global
+safety-net) and every delegated subagent inherits it through the tool context.
+All iterations and USD accumulate against that one object; once the cap is
+crossed the shared budget is marked exhausted (`budget.exceeded` audit event)
+and every deeper run in the tree halts immediately with a clear error instead
+of starting fresh work. `ask_bot_async` accepts a per-task `maxTreeIterations`
+and reports the consumed tree share on the task (`treeUsedIterations` /
+`treeMaxIterations` / …) via `bot_task_status`.
+
 ## Gateway
 
 [`src/gateway/gateway.ts`](../src/gateway/gateway.ts) (`Gateway`) is the always-on
@@ -225,6 +237,7 @@ with a dotted path; **unknown fields** only warn and are ignored.
 | `security` | map | Blocked patterns, disabled flag, workspace, redaction — see [docs/security.md](security.md) |
 | `inbox` | map | `ttlDays` / `maxMessages` for bot inboxes |
 | `globalBudget` | map | Global spend caps (USD) across solo + all bots: `dailyUSD` / `monthlyUSD`; `0` = unlimited — see [Audit & spend](#audit--spend) |
+| `maxTreeIterations` | number | Global safety-net: max iterations per delegation tree (a parent run + all its delegates share one counter); `0` = unlimited — see below |
 | `context` | map | Context-window guard: `enabled`, `thresholdRatio`, `defaultWindow`, `windows` — see below |
 
 | `gateway` | map | Jobs, Telegram, heartbeat, listen — see below |

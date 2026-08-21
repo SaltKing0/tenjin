@@ -179,6 +179,7 @@ export function createMessageHandler(deps: HandlerDeps) {
         cwd: deps.cwd,
         message: rest,
         maxTokens: deps.config.maxTokens,
+        maxTreeIterations: deps.config.maxTreeIterations ?? 0,
         capUSD: botBudgetUSD(profile, deps.config.budgetUSD),
         pricing: deps.config.pricing,
         globalBudget: deps.config.globalBudget,

@@ -1,9 +1,13 @@
 import type { ToolSchema } from "../provider/types";
 import type { SecurityGuard } from "../security/guard";
+import type { TreeBudget } from "../agent/budget";
 
 export interface ToolContext {
   cwd: string;
   guard?: SecurityGuard | null;
+  /** #154: the shared delegation-tree budget, threaded to delegation tools so
+   * a subagent run inherits the parent's counter. */
+  treeBudget?: TreeBudget;
 }
 
 export type ToolGroup = "read" | "write";

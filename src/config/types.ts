@@ -52,6 +52,9 @@ export interface HarnessConfig {
   retry?: RetryConfig;
   /** Global spend limits (USD) across all scopes — see audit/global-budget.ts. */
   globalBudget?: GlobalBudgetConfig;
+  /** #154: global safety-net — max iterations per delegation tree (shared
+   * across a parent run and every delegate); 0 = unlimited (default). */
+  maxTreeIterations?: number;
   context?: ContextConfig;
 }
 

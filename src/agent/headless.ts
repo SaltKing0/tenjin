@@ -1,6 +1,6 @@
 import type { Provider, Usage } from "../provider/types";
 import { buildSystemPrompt } from "./prompt";
-import { createBudget, type Budget } from "./budget";
+import { createBudget, TreeBudget, type Budget } from "./budget";
 import type { PricingConfig } from "../config/loader";
 import { runAgentTurn } from "./loop";
 import { checkGlobalBudget } from "../audit/global-budget";
@@ -63,7 +63,7 @@ export interface HeadlessOptions {
   sessionBot?: string;
   guard?: import("../security/guard").SecurityGuard | null;
   redactor?: Redactor | null;
-  audit?: (kind: "write_exec" | "budget_halt" | "prompt_injection", detail: string, correlationId?: string) => void;
+  audit?: (kind: "write_exec" | "budget_halt" | "budget_exceeded" | "prompt_injection", detail: string, correlationId?: string) => void;
   /** Mask suspected prompt-injection tool output before it reaches the model. */
   paranoid?: boolean;
   /** Shared id threaded into this run's audit events (e.g. a delegation correlation id). */
@@ -80,6 +80,14 @@ export interface HeadlessOptions {
   signal?: AbortSignal;
   /** #142: low/medium/high/max dial overriding iteration/token/tool limits. */
   effort?: EffortLevel;
+  /** #154: inherit a shared delegation-tree budget (a subagent run receives its
+   * parent's counter, so the whole tree counts against one cap). */
+  treeBudget?: TreeBudget;
+  /** #154: when no `treeBudget` is inherited, start a NEW tree with this
+   * per-tree iteration cap (`0` = unlimited). Acts as a global safety-net. */
+  maxTreeIterations?: number;
+  /** #154: optional shared USD cap for a new tree (`0` = unlimited). */
+  maxTreeUsd?: number;
 }
 
 export interface HeadlessResult {
@@ -155,6 +163,14 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
   }
   const budget = opts.budget ?? createBudget(opts.capUSD, opts.pricing);
 
+  // #154: inherit the parent's tree budget, or seed a fresh tree when caps are
+  // configured. A cap-less run with no inherited budget just has no tree cap.
+  const treeBudget =
+    opts.treeBudget ??
+    (opts.maxTreeIterations || opts.maxTreeUsd
+      ? new TreeBudget(opts.maxTreeIterations ?? 0, opts.maxTreeUsd ?? 0)
+      : undefined);
+
   const tools = applyDenyTools(
     [...toolsForPolicy(policy, skillDirs), ...(opts.extraTools ?? [])],
     opts.denyTools,
@@ -180,6 +196,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     budget,
     maxTokens: eff.maxTokens,
     maxIterations: eff.maxIterations,
+    treeBudget,
     cwd: opts.cwd,
     signal: opts.signal,
     globalBudgetGate,

@@ -103,3 +103,70 @@ export function formatUSD(amount: number): string {
   if (amount < 0.01) return `$${amount.toFixed(4)}`;
   return `$${amount.toFixed(2)}`;
 }
+
+/**
+ * A shared budget counter for a delegation tree (#154). One instance is
+ * created at the root of a tree (or inherited from the parent run) and every
+ * subagent run — however deep — counts its iterations and USD into the SAME
+ * object, so a chain of delegations cannot multiply work past a single cap.
+ *
+ * Caps are optional (`0` = unlimited). `stopped` is sticky: once the iteration
+ * or USD cap is crossed, every deeper run in the tree sees it on its next
+ * iteration and halts with a clear error instead of starting fresh work.
+ */
+export class TreeBudget {
+  usedIterations = 0;
+  usedUSD = 0;
+  stopped = false;
+
+  constructor(
+    /** Max iterations across the whole tree; 0 = unlimited. */
+    readonly maxIterations: number,
+    /** Max USD across the whole tree; 0 = unlimited. */
+    readonly maxUSD: number,
+  ) {}
+
+  get hasIterationCap(): boolean {
+    return this.maxIterations > 0;
+  }
+
+  get hasUsdCap(): boolean {
+    return this.maxUSD > 0;
+  }
+
+  /** True when either cap is configured. A cap-less budget just counts. */
+  get hasCaps(): boolean {
+    return this.hasIterationCap || this.hasUsdCap;
+  }
+
+  /** What fraction of the caps is used, for status/task reporting. */
+  ratio(): { iterations: number; usd: number } {
+    return {
+      iterations: this.hasIterationCap ? Math.min(1, this.usedIterations / this.maxIterations) : 0,
+      usd: this.hasUsdCap ? Math.min(1, this.usedUSD / this.maxUSD) : 0,
+    };
+  }
+
+  /**
+   * Reserve this run's next iteration. Returns true when the run may continue;
+   * false when the (possibly already-sticky) tree iteration cap is exhausted,
+   * which should stop this run immediately.
+   */
+  consumeIteration(): boolean {
+    if (this.stopped) return false;
+    this.usedIterations += 1;
+    if (this.hasIterationCap && this.usedIterations > this.maxIterations) {
+      this.stopped = true;
+      return false;
+    }
+    return true;
+  }
+
+  /** Charge the cost of a just-completed turn against the shared USD cap. */
+  addUsd(cost: number): void {
+    this.usedUSD += cost;
+    if (this.hasUsdCap && this.usedUSD >= this.maxUSD) {
+      this.stopped = true;
+    }
+  }
+}

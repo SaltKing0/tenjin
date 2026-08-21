@@ -25,6 +25,7 @@ const DEFAULTS: HarnessConfig = {
   model: "",
   maxTokens: 8192,
   budgetUSD: 5,
+  maxTreeIterations: 0,
   approval: {},
 };
 
@@ -97,6 +98,7 @@ const SCHEMA: Record<string, FieldDef> = {
   model: { types: ["string"] },
   maxTokens: { types: ["number"] },
   budgetUSD: { types: ["number"] },
+  maxTreeIterations: { types: ["number"] },
   approval: { types: ["mapping"], valueType: "string" },
   pricing: {
     types: ["mapping"],
@@ -277,6 +279,7 @@ provider: anthropic        # anthropic | openai (any OpenAI-compatible endpoint)
 model: ""                  # REQUIRED, e.g. claude-sonnet-4-5, gpt-4o, deepseek-chat
 maxTokens: 8192
 budgetUSD: 5               # hard spend cap per session in USD; 0 = unlimited
+# maxTreeIterations: 0        # global safety-net: max iterations per delegation tree (parent + all delegates); 0 = unlimited
 approval:                  # ask | allow | deny, per tool
   read: allow
   glob: allow
@@ -568,6 +571,12 @@ function validate(cfg: HarnessConfig, globalPath: string, skipModelCheck: boolea
   }
   if (typeof cfg.budgetUSD !== "number" || cfg.budgetUSD < 0) {
     throw new ConfigError(`budgetUSD must be a number >= 0 (0 = unlimited)`);
+  }
+  if (
+    cfg.maxTreeIterations !== undefined &&
+    (typeof cfg.maxTreeIterations !== "number" || !Number.isInteger(cfg.maxTreeIterations) || cfg.maxTreeIterations < 0)
+  ) {
+    throw new ConfigError(`maxTreeIterations must be a non-negative integer (0 = unlimited)`);
   }
   validatePricing(cfg.pricing);
   validateInbox(cfg.inbox);
