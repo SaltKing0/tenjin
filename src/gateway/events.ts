@@ -36,6 +36,11 @@ export function historySince(afterId: number): GatewayEvent[] {
   return out;
 }
 
+/** Number of live subscribers (SSE clients); used to assert no listener leak. */
+export function listenerCount(): number {
+  return listeners.size;
+}
+
 export function formatEvent(e: GatewayEvent): string {
   return `id: ${e.id}\ndata: ${JSON.stringify({ type: e.type, payload: e.payload })}\n\n`;
 }

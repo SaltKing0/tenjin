@@ -224,31 +224,65 @@ function eventsStream(fromId: number): Response {
   const encoder = new TextEncoder();
   let unsub: (() => void) | null = null;
   let cleanup: (() => void) | null = null;
+  // #199: bound per-client buffering. A slow/zombie client whose queue stays
+  // full for this many consecutive writes is actively closed so it can't leak.
+  const BACKPRESSURE_LIMIT = 16;
   const stream = new ReadableStream<Uint8Array>({
     start(c) {
       let closed = false;
-      const send = (e: GatewayEvent) => {
+      // Shared teardown: drop the subscriber, stop the heartbeat, and close the
+      // controller. Called on cancel AND on enqueue failure / backpressure so
+      // the reader sees `done` and a half-open client can't leave a listener +
+      // interval behind (#199).
+      const finish = () => {
         if (closed) return;
-        try {
-          c.enqueue(encoder.encode(formatEvent(e)));
-        } catch {
-          /* stream already cancelled */
-        }
-      };
-      for (const e of historySince(fromId)) send(e);
-      unsub = subscribe(send);
-      const hb = setInterval(() => {
-        if (closed) return;
-        try {
-          c.enqueue(encoder.encode(": ping\n\n"));
-        } catch {
-          /* ignore */
-        }
-      }, 3000);
-      cleanup = () => {
         closed = true;
         unsub?.();
         unsub = null;
+        cleanup?.();
+        try {
+          c.close();
+        } catch {
+          /* already closed or errored */
+        }
+      };
+      let stalled = 0;
+      // Write one SSE frame. Returns false when the client is gone (enqueue
+      // threw) or has been stuck past the backpressure limit — the caller then
+      // tears the stream down.
+      const write = (chunk: Uint8Array): boolean => {
+        if (closed) return false;
+        if (c.desiredSize !== null && c.desiredSize <= 0) {
+          if (++stalled >= BACKPRESSURE_LIMIT) {
+            finish();
+            return false;
+          }
+        } else {
+          stalled = 0;
+        }
+        try {
+          c.enqueue(chunk);
+          return true;
+        } catch {
+          // enqueue failed (stream cancelled or broken) — stop now, don't leak.
+          finish();
+          return false;
+        }
+      };
+      // Replay history without enforcing backpressure: the reader isn't attached
+      // yet, or a reconnect would be wrongly closed. A failed replay still ends
+      // the stream.
+      for (const e of historySince(fromId)) {
+        if (!write(encoder.encode(formatEvent(e)))) break;
+      }
+      unsub = subscribe((e) => {
+        write(encoder.encode(formatEvent(e)));
+      });
+      const hb = setInterval(() => {
+        if (closed) return;
+        if (!write(encoder.encode(": ping\n\n"))) return;
+      }, 3000);
+      cleanup = () => {
         clearInterval(hb);
       };
     },

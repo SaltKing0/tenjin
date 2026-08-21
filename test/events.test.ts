@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startHttpServer } from "../src/gateway/http";
 import { createRequest } from "../src/gateway/approvals";
-import { emit, subscribe } from "../src/gateway/events";
+import { emit, subscribe, listenerCount } from "../src/gateway/events";
 
 let home: string;
 
@@ -120,5 +120,41 @@ describe("SSE /api/events (#57)", () => {
     off();
     emit("custom.after", {});
     expect(seen).toHaveLength(1);
+  });
+});
+
+
+describe("SSE backpressure & zombie cleanup (#199)", () => {
+  test("a client that never reads is closed and its listener removed", async () => {
+    const server = startServer();
+    const before = listenerCount();
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/events`, {
+      headers: { authorization: "Bearer tok" },
+    });
+    expect(res.status).toBe(200);
+
+    // Zombie: hold the stream open but never read from its body.
+    const reader = res.body!.getReader();
+    // Emit far more events than the history replay + backpressure budget; a
+    // live client would consume them, a zombie accumulates them until the
+    // listener is torn down.
+    for (let i = 0; i < 100; i++) {
+      emit("zombie.burst", { i });
+    }
+    // Give the server a moment to drain/close the stalled stream.
+    await Bun.sleep(50);
+
+    // The zombie's listener must be removed (no leak).
+    expect(listenerCount()).toBe(before);
+
+    // The writer closes the stalled stream. Buffered frames (up to the
+    // backpressure budget) come first; drain until the reader reports done.
+    let ended = false;
+    for (let i = 0; i < 200 && !ended; i++) {
+      const { done: d } = await reader.read();
+      if (d) ended = true;
+    }
+    expect(ended).toBe(true);
+    server.stop();
   });
 });
