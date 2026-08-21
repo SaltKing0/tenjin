@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +7,7 @@ import {
   DEFAULT_INBOX_TTL_MS,
   formatInbox,
   inboxFile,
+  inboxPolicyFromConfig,
   listMessages,
   markRead,
   sendMessage,
@@ -97,6 +98,48 @@ describe("bot messaging tools", () => {
     expect(self.ok).toBe(false);
   });
 
+  test("send_message and check_inbox honor an explicit inbox policy", async () => {
+    const policy = { ttlMs: 30 * 24 * 3600 * 1000, maxMessages: 2 };
+    const sender = createSendMessageTool({ home, fromBot: "writer", policy });
+    await dispatch(
+      [sender],
+      "send_message",
+      { to: "researcher", subject: "one", body: "a" },
+      { cwd: home },
+    );
+    await dispatch(
+      [sender],
+      "send_message",
+      { to: "researcher", subject: "two", body: "b" },
+      { cwd: home },
+    );
+    await dispatch(
+      [sender],
+      "send_message",
+      { to: "researcher", subject: "three", body: "c" },
+      { cwd: home },
+    );
+
+    const inboxDir = join(home, "bots", "researcher", "inbox");
+    expect(listMessages(inboxDir, { maxMessages: 0 }).map((m) => m.subject)).toEqual(["two", "three"]);
+
+    const checker = createCheckInboxTool({
+      profile: {
+        name: "researcher",
+        soulText: "",
+        config: {},
+        rootDir: join(home, "bots", "researcher"),
+        sessionsDir: "",
+        memoryDir: "",
+        inboxDir,
+      },
+      policy,
+    });
+    const r = await dispatch([checker], "check_inbox", {}, { cwd: home });
+    expect(r.output).toContain("from writer: two");
+    expect(r.output).not.toContain("from writer: one");
+  });
+
   test("check_inbox returns unread and marks them read", async () => {
     const sender = createSendMessageTool({ home, fromBot: "writer" });
     await dispatch([sender], "send_message", { to: "researcher", subject: "hello", body: "hi there" }, { cwd: home });
@@ -142,6 +185,15 @@ describe("inbox hygiene", () => {
   test("defaults: 30-day TTL and 500-message cap", () => {
     expect(DEFAULT_INBOX_TTL_MS).toBe(30 * 24 * 60 * 60 * 1000);
     expect(DEFAULT_INBOX_MAX_MESSAGES).toBe(500);
+  });
+
+  test("inboxPolicyFromConfig maps ttlDays to ttlMs", () => {
+    expect(inboxPolicyFromConfig(undefined)).toBeUndefined();
+    expect(inboxPolicyFromConfig({ ttlDays: 2, maxMessages: 9 })).toEqual({
+      ttlMs: 2 * 86_400_000,
+      maxMessages: 9,
+    });
+    expect(inboxPolicyFromConfig({ ttlDays: 0 })).toEqual({ ttlMs: 0 });
   });
 
   test("expired messages are purged on read (TTL)", () => {
@@ -193,18 +245,50 @@ describe("inbox hygiene", () => {
     expect(listMessages(dir).map((m) => m.subject)).toEqual(["s3", "s4"]);
   });
 
+  test("listMessages enforces maxMessages on read", () => {
+    const dir = join(home, "inbox");
+    sendMessage(dir, { from: "a", to: "b", subject: "s1", body: "x" }, { maxMessages: 0 });
+    sendMessage(dir, { from: "a", to: "b", subject: "s2", body: "x" }, { maxMessages: 0 });
+    sendMessage(dir, { from: "a", to: "b", subject: "s3", body: "x" }, { maxMessages: 0 });
+    sendMessage(dir, { from: "a", to: "b", subject: "s4", body: "x" }, { maxMessages: 0 });
+
+    expect(listMessages(dir, { maxMessages: 2 }).map((m) => m.subject)).toEqual(["s3", "s4"]);
+    expect(listMessages(dir, { maxMessages: 2 }).map((m) => m.subject)).toEqual(["s3", "s4"]);
+  });
+
+  test("ttlMs 0 disables expiry; maxMessages 0 disables the cap", () => {
+    const dir = join(home, "inbox");
+    const stale = sendMessage(dir, { from: "a", to: "b", subject: "stale", body: "old" }, { ttlMs: 0 });
+    backdate(dir, stale.id, 40);
+    sendMessage(dir, { from: "a", to: "b", subject: "fresh", body: "new" }, { ttlMs: 0, maxMessages: 0 });
+
+    const kept = listMessages(dir, { ttlMs: 0, maxMessages: 0 });
+    expect(kept.map((m) => m.subject)).toEqual(["stale", "fresh"]);
+  });
+
   test("parallel markRead loses no messages and leaves valid files", async () => {
     const dir = join(home, "inbox");
     const msgs = Array.from({ length: 20 }, (_, i) =>
       sendMessage(dir, { from: "a", to: "b", subject: `s${i}`, body: `b${i}` }),
     );
     const ids = msgs.map((m) => m.id);
+    const src = join(import.meta.dir, "../src/bots/inbox.ts");
+
+    const run = async (subset: string[]) => {
+      const script = `import { markRead } from ${JSON.stringify(src)};\nmarkRead(${JSON.stringify(dir)}, ${JSON.stringify(subset)});`;
+      const proc = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
+      const code = await proc.exited;
+      if (code !== 0) {
+        const err = await new Response(proc.stderr).text();
+        throw new Error(`child markRead exited ${code}: ${err}`);
+      }
+    };
 
     await Promise.all([
-      markRead(dir, ids.slice(0, 15)),
-      markRead(dir, ids.slice(10)),
-      markRead(dir, ids),
-      listMessages(dir),
+      run(ids.slice(0, 15)),
+      run(ids.slice(10)),
+      run(ids),
+      run(ids.slice(5, 20)),
     ]);
 
     const all = listMessages(dir);
@@ -214,13 +298,16 @@ describe("inbox hygiene", () => {
       expect(() => JSON.parse(readFileSync(inboxFile(dir, m.id), "utf8"))).not.toThrow();
     }
     expect(readdirSync(dir).filter((f) => f.endsWith(".json"))).toHaveLength(20);
-    expect(readdirSync(dir).filter((f) => f.includes(".tmp-"))).toEqual([]);
+    expect(readdirSync(dir).filter((f) => f.includes(".tmp"))).toEqual([]);
   });
 
   test("orphan tmp files are removed during cleanup", () => {
     const dir = join(home, "inbox");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "deadbeef.tmp-12345678"), "{}");
+    const tmp = join(dir, "deadbeef.tmp-12345678");
+    writeFileSync(tmp, "{}");
+    const stale = Date.now() / 1000 - 120;
+    utimesSync(tmp, stale, stale);
 
     expect(listMessages(dir)).toEqual([]);
     expect(readdirSync(dir).filter((f) => f.includes(".tmp-"))).toEqual([]);

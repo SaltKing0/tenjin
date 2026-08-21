@@ -17,7 +17,7 @@ import { buildSkillsSection, summarizeSkills } from "../skills/activate";
 import { createAskBotTool } from "../bots/delegate";
 import { listBots } from "../bots/profile";
 import { AuditLog, formatAudit, auditPath } from "../audit/log";
-import { unreadMessages } from "../bots/inbox";
+import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
 import { getSkill, listSkills, scaffoldSkill } from "../skills/loader";
 import { listSummaries, sessionsWithoutSummary } from "../memory/summaries";
 import { loadChunks, indexedSessionIds } from "../memory/vector-store";
@@ -230,7 +230,10 @@ async function handleCommand(
         return;
       }
       for (const b of bots) {
-        const unread = unreadMessages(join(opts.home, "bots", b, "inbox")).length;
+        const unread = unreadMessages(
+          join(opts.home, "bots", b, "inbox"),
+          inboxPolicyFromConfig(opts.config.inbox),
+        ).length;
         const marker = b === opts.bot ? green(" <- you") : "";
         const note = unread ? dim(` ${unread} unread`) : "";
         stdout.write(`${b.padEnd(20)}${note}${marker}\n`);

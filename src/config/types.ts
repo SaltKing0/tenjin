@@ -41,4 +41,11 @@ export interface HarnessConfig {
     enabled?: boolean;
     vector?: { enabled?: boolean; model?: string };
   };
+  inbox?: InboxConfig;
+}
+
+/** `inbox` in config.yaml. 0 disables the corresponding limit. */
+export interface InboxConfig {
+  ttlDays?: number;
+  maxMessages?: number;
 }

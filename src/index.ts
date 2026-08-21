@@ -60,7 +60,7 @@ import {
   waitApproval,
   summarizeInput,
 } from "./gateway/approvals";
-import { unreadMessages } from "./bots/inbox";
+import { inboxPolicyFromConfig, unreadMessages } from "./bots/inbox";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
@@ -198,8 +198,9 @@ async function main(): Promise<number> {
       }
     }
 
+    const inboxPolicy = inboxPolicyFromConfig(config.inbox);
     if (profile) {
-      const unread = unreadMessages(profile.inboxDir);
+      const unread = unreadMessages(profile.inboxDir, inboxPolicy);
       if (unread.length > 0) {
         stdout.write(
           `inbox: ${unread.length} unread from ${[...new Set(unread.map((m) => m.from))].join(", ")} — check_inbox to read\n`,
@@ -235,8 +236,8 @@ async function main(): Promise<number> {
     tools.push(createUseSkillTool({ home, projectDir: cwd }));
     tools.push(createSaveSkillTool({ projectDir: cwd }));
     if (profile) {
-      tools.push(createSendMessageTool({ home, fromBot: profile.name }));
-      tools.push(createCheckInboxTool({ profile }));
+      tools.push(createSendMessageTool({ home, fromBot: profile.name, policy: inboxPolicy }));
+      tools.push(createCheckInboxTool({ profile, policy: inboxPolicy }));
     }
     const audit = new AuditLog(auditPath(home));
     const guard = SecurityGuard.fromConfig(config.security, (detail) =>
