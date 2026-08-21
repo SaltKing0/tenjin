@@ -192,19 +192,34 @@ export class SecurityGuard {
     if (direct.blocked && !command.includes(" ")) return direct;
     const inline = this.scanInlineScript(command);
     if (inline) return inline;
-    const tokens = command.split(/[\s"'|;&<>()$`]+/).filter(Boolean);
-    for (const token of tokens) {
+    const base = this.scanSegments(command);
+    if (base) return base;
+    const encoded = this.scanEncoded(command);
+    if (encoded) return encoded;
+    return { blocked: false };
+  }
+
+  /**
+   * Scan a plain string the way a command's visible text is scanned: as a
+   * whole, per whitespace/operator token, and with "contains" patterns.
+   * Used both for the command itself and for each decoded obfuscation payload —
+   * a base64 payload that carries the blocked path mid-sentence (e.g.
+   * "Read the .env file") must be caught as the `.env` token, not just as an
+   * exact whole-string match.
+   */
+  private scanSegments(text: string): GuardResult | null {
+    const direct = this.checkText(text);
+    if (direct.blocked) return direct;
+    for (const token of text.split(/[\s"'|;&<>()$`]+/).filter(Boolean)) {
       const result = this.checkText(token);
       if (result.blocked) return result;
     }
     for (const entry of this.entries) {
-      if (entry.pattern.startsWith("*") && command.toLowerCase().includes(entry.pattern.slice(1).toLowerCase())) {
-        return { blocked: true, pattern: entry.pattern, target: command };
+      if (entry.pattern.startsWith("*") && text.toLowerCase().includes(entry.pattern.slice(1).toLowerCase())) {
+        return { blocked: true, pattern: entry.pattern, target: text };
       }
     }
-    const encoded = this.scanEncoded(command);
-    if (encoded) return encoded;
-    return { blocked: false };
+    return null;
   }
 
   /**
@@ -216,8 +231,8 @@ export class SecurityGuard {
    */
   private scanEncoded(text: string): GuardResult | null {
     for (const payload of decodeEncodedPayloads(text)) {
-      const result = this.checkText(payload);
-      if (result.blocked) return result;
+      const result = this.scanSegments(payload);
+      if (result) return result;
     }
     return null;
   }
@@ -233,8 +248,8 @@ export class SecurityGuard {
     while ((m = re.exec(command))) {
       if (!/^[cerE]$/.test(m[1]!)) continue;
       const script = m[3]!;
-      const direct = this.checkText(script);
-      if (direct.blocked) return direct;
+      const base = this.scanSegments(script);
+      if (base) return base;
       const encoded = this.scanEncoded(script);
       if (encoded) return encoded;
     }
