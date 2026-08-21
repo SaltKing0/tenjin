@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { YAML } from "bun";
 import { ConfigError, type HarnessConfig } from "../config/types";
@@ -192,6 +200,48 @@ export function botModelRef(profile: BotProfile, globalCfg: HarnessConfig): Mode
   const pin = profile.config.model?.trim();
   if (pin) return resolveModelRef(pin, globalCfg.provider);
   return defaultModelRef(globalCfg);
+}
+
+function requireBotDir(home: string, name: string): string {
+  const safe = sanitizeSkillName(name);
+  const root = botDir(home, safe);
+  if (!existsSync(root)) {
+    const available = listBots(home);
+    const hint = available.length
+      ? `available bots: ${available.join(", ")}`
+      : `no bots exist yet — create one with: tenjin bot new <name>`;
+    throw new ConfigError(`unknown bot "${safe}" (${hint})`);
+  }
+  return root;
+}
+
+/** Raw SOUL.md contents (untouched, so a console textarea round-trips exactly). */
+export function readBotSoul(home: string, name: string): string {
+  return readFileSync(join(requireBotDir(home, name), "SOUL.md"), "utf8");
+}
+
+export function writeBotSoul(home: string, name: string, text: string): string {
+  const root = requireBotDir(home, name);
+  if (!text.trim()) throw new ConfigError("bot soul may not be empty");
+  writeFileSync(join(root, "SOUL.md"), text);
+  return text;
+}
+
+/** Rename a bot directory. Returns the sanitized new name. */
+export function renameBot(home: string, name: string, newName: string): string {
+  const safe = sanitizeSkillName(name);
+  requireBotDir(home, name); // validate the source bot exists
+  const target = sanitizeSkillName(newName);
+  if (target === safe) return safe;
+  if (existsSync(botDir(home, target))) {
+    throw new ConfigError(`bot "${target}" already exists`);
+  }
+  renameSync(botDir(home, safe), botDir(home, target));
+  return target;
+}
+
+export function deleteBot(home: string, name: string): void {
+  rmSync(requireBotDir(home, name), { recursive: true, force: true });
 }
 
 export function botBudgetUSD(profile: BotProfile, fallback: number): number {

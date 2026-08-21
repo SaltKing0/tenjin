@@ -1,8 +1,19 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { HarnessConfig } from "../config/types";
+import { ConfigError } from "../config/types";
 import type { ProviderRegistry } from "../provider/registry";
-import { listBots, botModelRef, resolveBot } from "../bots/profile";
+import {
+  listBots,
+  botModelRef,
+  resolveBot,
+  createBot,
+  readBotSoul,
+  writeBotSoul,
+  renameBot,
+  deleteBot,
+} from "../bots/profile";
+import { sanitizeSkillName } from "../skills/loader";
 import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
 import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
@@ -197,6 +208,71 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
       return json({ bots });
     }
 
+    const botSingleMatch = /^\/api\/bots\/([a-zA-Z0-9_-]+)$/.exec(path);
+
+    if (path === "/api/bots" && req.method === "POST") {
+      let body: { name?: unknown; soul?: unknown };
+      try {
+        body = (await req.json()) as typeof body;
+      } catch {
+        return json({ error: "invalid json" }, 400);
+      }
+      const rawName = typeof body.name === "string" ? body.name : "";
+      if (!rawName.trim()) return json({ error: "name is required" }, 400);
+      const soul = typeof body.soul === "string" ? body.soul : undefined;
+      try {
+        createBot(deps.home, rawName, soul !== undefined ? { soul } : {});
+        const name = sanitizeSkillName(rawName);
+        return json({ ok: true, ...botDetailView(deps.home, name, deps.config) }, 201);
+      } catch (e) {
+        return botErrorResponse(e);
+      }
+    }
+
+    if (botSingleMatch && req.method === "GET") {
+      const name = botSingleMatch[1]!;
+      const detail = botDetailView(deps.home, name, deps.config);
+      if (!detail) return json({ error: "unknown bot" }, 404);
+      return json(detail);
+    }
+
+    if (botSingleMatch && req.method === "PUT") {
+      const name = botSingleMatch[1]!;
+      let body: { soul?: unknown; rename?: unknown };
+      try {
+        body = (await req.json()) as typeof body;
+      } catch {
+        return json({ error: "invalid json" }, 400);
+      }
+      try {
+        // Apply the soul first so an invalid (empty) soul fails before any rename.
+        if (body.soul !== undefined) {
+          if (typeof body.soul !== "string") return json({ error: "soul must be a string" }, 400);
+          writeBotSoul(deps.home, name, body.soul);
+        }
+        let finalName = name;
+        if (body.rename !== undefined) {
+          if (typeof body.rename !== "string") return json({ error: "rename must be a string" }, 400);
+          finalName = renameBot(deps.home, name, body.rename);
+        }
+        return json({ ok: true, ...botDetailView(deps.home, finalName, deps.config) });
+      } catch (e) {
+        return botErrorResponse(e);
+      }
+    }
+
+    if (botSingleMatch && req.method === "DELETE") {
+      const name = botSingleMatch[1]!;
+      try {
+        deleteBot(deps.home, name);
+        deps.audit.append("data_delete", "console", `bot ${name} deleted`);
+        return json({ ok: true });
+      } catch (e) {
+        if (e instanceof ConfigError) return json({ error: (e as Error).message }, 404);
+        return json({ error: (e as Error).message }, 400);
+      }
+    }
+
     if (path === "/api/sessions" && req.method === "GET") {
       const bot = url.searchParams.get("bot");
       const dir = scopeSessionsDir(deps.home, bot);
@@ -353,3 +429,28 @@ function resolveBotSafe(home: string, name: string) {
     return null;
   }
 }
+
+/** Map a bot CRUD error to a JSON response; conflicts become 409. */
+function botErrorResponse(e: unknown): Response {
+  const msg = (e as Error).message;
+  if (e instanceof ConfigError) {
+    return json({ error: msg }, msg.includes("already exists") ? 409 : 400);
+  }
+  return json({ error: msg }, 400);
+}
+
+/** Full bot view incl. raw SOUL text (for the console editor). */
+function botDetailView(home: string, name: string, config: HarnessConfig) {
+  const profile = resolveBotSafe(home, name);
+  if (!profile) return null;
+  const ref = botModelRef(profile, config);
+  return {
+    name: profile.name,
+    model: `${ref.provider}:${ref.model}`,
+    soul: readBotSoul(home, profile.name),
+    sessions: existsSync(profile.sessionsDir)
+      ? readdirSync(profile.sessionsDir).filter((f) => f.endsWith(".jsonl")).length
+      : 0,
+  };
+}
+
