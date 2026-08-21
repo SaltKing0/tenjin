@@ -149,7 +149,11 @@ export function compressMessages(
       const tokens = contentTokens([b]);
       b.content = placeholder(tokens);
       elidedTokens += tokens;
-      need -= tokens;
+      // Eliding a block frees only (tokens - placeholderTokens): the
+      // `[elided N tokens]` placeholder still occupies a few tokens, so
+      // crediting the full block value can stop the loop while the trajectory
+      // is still over target (#312).
+      need -= tokens - contentTokens(b.content);
     }
   }
 
