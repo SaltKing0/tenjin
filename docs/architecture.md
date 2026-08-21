@@ -107,6 +107,8 @@ serves the static console (`src/gateway/console/`) and
 | `GET /api/audit` | Security/audit events |
 | `GET /api/approvals` | Pending approvals |
 | `POST /api/approvals/:id` | Approve / deny a request |
+| `GET /api/jobs` | Scheduled jobs (cron/every, policy, lastRun, nextDue) |
+| `POST /api/jobs/:id/run` | Run a job now (does not advance nextDue) |
 | `GET /api/chat/stream` | Streaming chat (SSE) |
 
 The console is token-gated and per-IP rate-limited (see [`src/gateway/http.ts`](../src/gateway/http.ts)).

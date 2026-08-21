@@ -441,10 +441,93 @@ async function panelApprovals(main) {
 
 /* ---------- shell ---------- */
 
+async function panelJobs(main) {
+  main.replaceChildren(el("h1", {}, "Jobs"));
+  const feedback = el(
+    "div",
+    { class: "dim", style: "margin-bottom:12px" },
+    "run now fires immediately; the next scheduled time is unchanged",
+  );
+  const resultBox = el("pre", { style: "display:none; margin-bottom:12px" });
+  const list = el("div");
+  main.append(feedback, resultBox, list);
+
+  function scheduleLabel(job) {
+    if (job.cron) return job.cron;
+    if (job.every) return `every ${job.every}`;
+    return "—";
+  }
+
+  async function refresh() {
+    const data = await apiJson("/api/jobs");
+    const jobs = data.jobs || [];
+    list.replaceChildren();
+    if (jobs.length === 0) {
+      list.append(el("div", { class: "dim" }, "no jobs configured"));
+      return;
+    }
+    for (const job of jobs) {
+      const runBtn = el("button", { class: "primary" }, job.running ? "running…" : "Run now");
+      runBtn.disabled = !!job.running;
+      runBtn.onclick = async () => {
+        runBtn.disabled = true;
+        runBtn.textContent = "running…";
+        feedback.className = "dim";
+        feedback.textContent = `running ${job.name}…`;
+        resultBox.style.display = "none";
+        try {
+          const res = await api(`/api/jobs/${encodeURIComponent(job.name)}/run`, {
+            method: "POST",
+          });
+          const body = await res.json();
+          if (!res.ok || !body.ok) {
+            feedback.className = "err";
+            feedback.textContent = body.error || `run failed (${res.status})`;
+            resultBox.style.display = "none";
+          } else {
+            feedback.className = "ok";
+            feedback.textContent = `${job.name}: ${body.stopReason} (${fmtUsd(body.costUSD ?? 0)})`;
+            resultBox.style.display = "block";
+            resultBox.textContent = body.text?.trim() ? body.text : "(no output)";
+          }
+        } catch (e) {
+          feedback.className = "err";
+          feedback.textContent = `run failed: ${e.message}`;
+        }
+        await refresh();
+      };
+      const last = job.lastRun
+        ? `${job.lastRun.stopReason} · ${new Date(job.lastRun.at).toLocaleString()}`
+        : "never";
+      list.append(
+        el(
+          "div",
+          { class: "card" },
+          el("strong", {}, job.name),
+          " ",
+          el("span", { class: "badge" }, job.bot),
+          " ",
+          el("span", { class: "badge" }, job.policy || "read-only"),
+          job.running ? el("span", { class: "badge" }, "running") : null,
+          el("div", { class: "dim", style: "margin-top:8px" }, `schedule: ${scheduleLabel(job)}`),
+          el("div", { class: "dim" }, `next due: ${new Date(job.nextDueMs).toLocaleString()}`),
+          el("div", { class: "dim" }, `last run: ${last}`),
+          job.prompt ? el("div", { class: "dim" }, `prompt: ${job.prompt}`) : null,
+          job.postTo ? el("div", { class: "dim" }, `postTo: ${job.postTo}`) : null,
+          el("div", { style: "margin-top:8px" }, runBtn),
+        ),
+      );
+    }
+  }
+
+  await refresh();
+}
+
 const PANELS = [
   ["chat", "Chat", panelChat],
   ["settings", "Settings", panelSettings],
   ["approvals", "Approvals", panelApprovals],
+  ["jobs", "Jobs", panelJobs],
   ["sessions", "Sessions", panelSessions],
   ["spend", "Spend", panelSpend],
   ["audit", "Audit", panelAudit],

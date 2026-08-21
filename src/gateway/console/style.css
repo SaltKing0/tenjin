@@ -95,6 +95,7 @@ button {
 button:hover { border-color: var(--accent); }
 button.primary { background: #1f6feb; border-color: #1f6feb; }
 button.danger { background: transparent; color: var(--err); border-color: var(--err); }
+button:disabled { opacity: 0.5; cursor: default; }
 
 input, select {
   background: var(--bg);
