@@ -97,6 +97,7 @@ describe("SecurityGuard obfuscation hardening", () => {
     ["printf '\\x2e\\x65\\x6e\\x76' > f", "printf hex escapes"],
     ["printf '\\x2e\\x65\\x6e\\x76.local' > f", "printf hex escapes .env.local"],
     ["printf '\\056\\145\\156\\166' > f", "printf octal escapes"],
+    ["echo \"UmVhZCB0aGUgLmVudiBmaWxl\" | base64 -d", "base64 sentence containing .env"],
   ];
   for (const [cmd, name] of blockedEncoded) {
     test(`blocks ${name}: ${cmd}`, () => {
