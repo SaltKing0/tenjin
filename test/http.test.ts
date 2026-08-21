@@ -3,9 +3,12 @@ import { join } from "node:path";
 import {
   startHttpServer,
   safeEqual,
+  buildEventsStream,
+  SSE_HIGH_WATER_MARK,
   type HttpListenConfig,
   type HttpServerHandle,
 } from "../src/gateway/http";
+import { emit, activeSubscriberCount } from "../src/gateway/events";
 
 let handle: HttpServerHandle | null = null;
 
@@ -223,4 +226,35 @@ test("console serves the markdown renderer module", async () => {
   expect(body).toContain("export function parseMarkdown");
   expect(body).toContain("export function sanitizeHref");
   expect(body).toContain("export function renderMarkdown");
+});
+
+test("SSE closes an unread (zombie) client and removes its listener on queue overflow (#199)", async () => {
+  const baseline = activeSubscriberCount();
+  // Build a stream but never read from it → zombie consumer. A fromId past
+  // every event avoids history replay pre-filling the queue.
+  const stream = buildEventsStream(Number.MAX_SAFE_INTEGER);
+  const reader = stream.getReader();
+  // let start() run and subscribe
+  await new Promise((r) => setTimeout(r, 10));
+  expect(activeSubscriberCount()).toBe(baseline + 1);
+
+  // overflow the per-connection cap (should stop enqueueing, not grow unbounded)
+  for (let i = 0; i < SSE_HIGH_WATER_MARK + 20; i++) emit(`over_${i}`, { n: i });
+
+  // the server actively closed the stream; the buffered amount stays bounded
+  let chunks = 0;
+  let closed = false;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) {
+      closed = true;
+      break;
+    }
+    if (value) chunks += 1;
+  }
+  expect(closed).toBe(true);
+  expect(chunks).toBeLessThanOrEqual(SSE_HIGH_WATER_MARK + 1);
+
+  // the zombie's listener was removed — no leak
+  expect(activeSubscriberCount()).toBe(baseline);
 });
