@@ -1,0 +1,73 @@
+import { join } from "node:path";
+import type { ToolDef } from "../tools/registry";
+import { listBots, type BotProfile } from "./profile";
+import {
+  formatInbox,
+  markRead,
+  sendMessage,
+  unreadMessages,
+} from "./inbox";
+import { ConfigError } from "../config/types";
+
+export function createSendMessageTool(deps: {
+  home: string;
+  fromBot: string;
+}): ToolDef {
+  return {
+    name: "send_message",
+    group: "write",
+    description:
+      "Send an async message to another bot's inbox. The recipient sees it on their next run. Treat this as inter-bot mail, not a live conversation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Target bot name" },
+        subject: { type: "string", description: "One-line summary" },
+        body: { type: "string", description: "Message content" },
+      },
+      required: ["to", "subject", "body"],
+    },
+    async handler(args, _ctx) {
+      const to = String(args.to ?? "").trim();
+      if (to === deps.fromBot) throw new Error("cannot send a message to yourself");
+      if (!listBots(deps.home).includes(to)) {
+        throw new Error(`unknown bot "${to}"`);
+      }
+      const msg = sendMessage(join(deps.home, "bots", to, "inbox"), {
+        from: deps.fromBot,
+        to,
+        subject: String(args.subject ?? ""),
+        body: String(args.body ?? ""),
+      });
+      return `Delivered to ${to} (id ${msg.id})`;
+    },
+  };
+}
+
+export function createCheckInboxTool(deps: { profile: BotProfile }): ToolDef {
+  return {
+    name: "check_inbox",
+    group: "read",
+    description:
+      "Check your inbox for messages from other bots. Returns unread messages and marks them read.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+    async handler(_args, _ctx) {
+      const unread = unreadMessages(deps.profile.inboxDir);
+      if (unread.length === 0) return "inbox empty";
+      markRead(
+        deps.profile.inboxDir,
+        unread.map((m) => m.id),
+      );
+      return formatInbox(unread);
+    },
+  };
+}
+
+export function assertBotExists(home: string, name: string): void {
+  if (!listBots(home).includes(name)) {
+    throw new ConfigError(`unknown bot "${name}"`);
+  }
+}

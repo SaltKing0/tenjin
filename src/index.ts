@@ -38,6 +38,8 @@ import {
   EXAMPLE_BOTS,
   type BotProfile,
 } from "./bots/profile";
+import { createSendMessageTool, createCheckInboxTool } from "./bots/tools";
+import { unreadMessages } from "./bots/inbox";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
@@ -147,6 +149,15 @@ async function main(): Promise<number> {
       }
     }
 
+    if (profile) {
+      const unread = unreadMessages(profile.inboxDir);
+      if (unread.length > 0) {
+        stdout.write(
+          `inbox: ${unread.length} unread from ${[...new Set(unread.map((m) => m.from))].join(", ")} — check_inbox to read\n`,
+        );
+      }
+    }
+
     const soul = profile
       ? { text: profile.soulText, source: "bot" as const }
       : loadSoul(home, cwd);
@@ -174,6 +185,10 @@ async function main(): Promise<number> {
     }
     tools.push(createUseSkillTool({ home, projectDir: cwd }));
     tools.push(createSaveSkillTool({ projectDir: cwd }));
+    if (profile) {
+      tools.push(createSendMessageTool({ home, fromBot: profile.name }));
+      tools.push(createCheckInboxTool({ profile }));
+    }
     const ctx: AppContext = { config, registry, defaultRef, cheapRef, system, tools, cwd };
 
     if (cli.print !== undefined) {
