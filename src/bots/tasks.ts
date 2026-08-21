@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Provider } from "../provider/types";
@@ -39,6 +39,12 @@ export interface BotTask {
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
+  /** #313: liveness heartbeat. Refreshed periodically while a task is alive in
+   * a process (e.g. while it waits on a dependency), so the orphan check bases
+   * itself on a persisted liveness field instead of the file mtime — a live
+   * `pending` task waiting near its timeout must never be swept as an orphan
+   * by a parallel process. */
+  heartbeatAt?: string;
   /** #128: this task only starts once the referenced task is `done`. */
   dependsOn?: string;
   /** #128: bot inbox notified on completion instead of only the caller. */
@@ -55,6 +61,10 @@ export interface BotTask {
 export const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
 /** Poll interval while a dependent task waits for its dependency. */
 const DEP_POLL_MS = 100;
+/** #313: how often a live task refreshes its persisted heartbeat while alive
+ * (e.g. while waiting on a dependency). Kept well under the minimum task
+ * timeout so a live task's heartbeat is always fresher than the orphan bound. */
+const TASK_HEARTBEAT_MS = 1000;
 /**
  * #176: cap on a dependency's result injected into a successor's opening
  * prompt. The Context-Guard cannot compress the opening user message, so an
@@ -130,15 +140,24 @@ export function readTaskForStatus(home: string, bot: string, taskId: string): Bo
   return readTask(home, bot, taskId);
 }
 
+/** #313: last known liveness of a task, from persisted fields (not file mtime).
+ * Prefers the heartbeat, then the run-start, then creation. A live `pending`
+ * task that is waiting on a dependency refreshes its heartbeat during the
+ * wait, so this stays fresh even though `startedAt`/mtime have not advanced. */
+function livenessMs(t: BotTask): number {
+  const ts = t.heartbeatAt ?? t.startedAt ?? t.createdAt;
+  return new Date(ts).getTime();
+}
+
 /**
  * #180: sweep every task dir for running/pending tasks whose owning process
  * is gone (gateway restart / REPL exit). A task's lifetime can never legally
  * exceed its own timeoutMs — the live promise either finishes or is aborted
  * by its timeout timer — so a task still stuck in running/pending for longer
- * than that bound (measured from the file's write time) must be an orphan of
- * a dead process. It is failed with "orphaned by restart"; a later dependent
- * that references it then fails fast instead of burning its full timeout.
- * Returns how many tasks were swept.
+ * than that bound (measured from its last persisted liveness, #313) must be
+ * an orphan of a dead process. It is failed with "orphaned by restart"; a
+ * later dependent that references it then fails fast instead of burning its
+ * full timeout. Returns how many tasks were swept.
  */
 export function reconcileOrphanedTasks(
   home: string,
@@ -160,8 +179,7 @@ export function reconcileOrphanedTasks(
       }
       if (t.status !== "running" && t.status !== "pending") continue;
       const maxLife = t.timeoutMs > 0 ? t.timeoutMs : DEFAULT_TASK_TIMEOUT_MS;
-      const mtimeMs = statSync(join(dir, file)).mtimeMs;
-      if (now - mtimeMs > maxLife + grace) {
+      if (now - livenessMs(t) > maxLife + grace) {
         t.status = "error";
         t.error = "orphaned by restart";
         t.finishedAt = new Date(now).toISOString();
@@ -173,32 +191,35 @@ export function reconcileOrphanedTasks(
   return swept;
 }
 
-/** #240: how long between lazy orphan sweeps per home (keeps hot lookups cheap). */
-const ORPHAN_SWEEP_THROTTLE_MS = 1000;
-const lastOrphanSweepAt = new Map<string, number>();
-
 /**
- * #240: lazily sweep orphaned tasks on the dependency-lookup hot path.
- * `reconcileOrphanedTasks` was only invoked at gateway/REPL boot, so a task
- * orphaned by a dead one-shot/CLI process lingered until a gateway started —
- * a later dependent in a fresh CLI process waited out its full timeout. Firing
- * it from `findTaskById` (throttled per home) makes any first dependency
- * lookup in any process clear orphans, so dependents fail fast everywhere.
+ * #313: targeted orphan check on a SINGLE task (the one a dependency lookup
+ * just found). This replaces the previous full-home `sweepOrphansLazily` on
+ * the hot 100ms dependency-poll path: checking only the referenced task is
+ * O(1) instead of scanning and parsing every bot's every task JSON. A full
+ * sweep still runs at gateway/REPL boot via `reconcileOrphanedTasks`.
  */
-function sweepOrphansLazily(home: string): void {
-  const now = Date.now();
-  const last = lastOrphanSweepAt.get(home) ?? 0;
-  if (now - last < ORPHAN_SWEEP_THROTTLE_MS) return;
-  lastOrphanSweepAt.set(home, now);
-  reconcileOrphanedTasks(home);
+function failIfStaleOrphan(home: string, bot: string, t: BotTask): void {
+  if (t.status !== "running" && t.status !== "pending") return;
+  const maxLife = t.timeoutMs > 0 ? t.timeoutMs : DEFAULT_TASK_TIMEOUT_MS;
+  if (Date.now() - livenessMs(t) <= maxLife) return;
+  t.status = "error";
+  t.error = "orphaned by restart";
+  t.finishedAt = new Date().toISOString();
+  writeTask(home, bot, t);
 }
 
 /** Task ids are globally unique (UUIDs); locate a task across every bot. */
 export function findTaskById(home: string, taskId: string): BotTask | null {
-  sweepOrphansLazily(home);
   for (const bot of listBots(home)) {
     const t = readTask(home, bot, taskId);
-    if (t) return t;
+    if (t) {
+      // #313: fail this specific task fast if it is a stale orphan, so a
+      // dependent in a fresh process does not wait out its timeout — without
+      // scanning the whole home on the hot path (#240 intent, O(1) now).
+      failIfStaleOrphan(home, bot, t);
+      // Re-read so the caller observes the terminal (swept) state.
+      return readTask(home, bot, taskId);
+    }
   }
   return null;
 }
@@ -277,14 +298,19 @@ function assertNoCycle(home: string, newId: string, dependsOnId: string): void {
 /**
  * Poll for a dependency until it reaches a terminal state. Resolves with the
  * dependency task, or null once `deadlineMs` passes or the signal aborts.
+ * `heartbeat` (optional) is invoked each poll so the WAITING task can refresh
+ * its persisted liveness (#313) and never be swept as an orphan by a parallel
+ * process while it legitimately waits.
  */
 async function waitForTask(
   home: string,
   depId: string,
   controller: AbortController,
   deadlineMs: number,
+  heartbeat?: () => void,
 ): Promise<BotTask | null> {
   while (Date.now() < deadlineMs && !controller.signal.aborted) {
+    heartbeat?.();
     const dep = findTaskById(home, depId);
     if (dep && (dep.status === "done" || dep.status === "error")) return dep;
     await new Promise((r) => setTimeout(r, DEP_POLL_MS));
@@ -362,6 +388,7 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
     status: "pending",
     timeoutMs,
     createdAt: now,
+    heartbeatAt: now,
     ...(dependsOnId ? { dependsOn: dependsOnId } : {}),
     ...(notifyBot ? { notifyBot } : {}),
   };
@@ -380,8 +407,19 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
       // #128: wait for the dependency before starting.
       let runMessage = message;
       if (dependsOnId) {
+        // #313: while this task waits (which can run up to its full timeout),
+        // refresh its persisted heartbeat so a parallel process's orphan sweep
+        // never mistakes a live waiting task for one orphaned by a restart.
+        let lastBeat = 0;
+        const heartbeat = () => {
+          const t = Date.now();
+          if (t - lastBeat < TASK_HEARTBEAT_MS) return;
+          lastBeat = t;
+          task.heartbeatAt = new Date(t).toISOString();
+          writeTask(deps.home, targetName, task);
+        };
         const deadline = Date.now() + duration;
-        const dep = await waitForTask(deps.home, dependsOnId, controller, deadline);
+        const dep = await waitForTask(deps.home, dependsOnId, controller, deadline, heartbeat);
         if (!dep || dep.status !== "done") {
           task.status = "error";
           task.error = controller.signal.aborted
