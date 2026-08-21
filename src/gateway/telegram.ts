@@ -14,6 +14,17 @@ export interface TelegramOptions {
   rateLimitWindowMs?: number;
   /** Max accepted inbound text length; longer messages are rejected politely. 0 disables. Default 4096. */
   maxMessageLength?: number;
+  /** Accept voice notes and transcribe them (#137). Off by default. */
+  voiceEnabled?: boolean;
+  /** Injected audio->text transcriber. When undefined, enabled voice messages get a hint. */
+  transcribe?: (audio: Blob, filename: string) => Promise<string>;
+  /** Called after a successful transcription (audit / cost trace). */
+  onTranscribed?: (info: {
+    userId: number;
+    chatId: number;
+    fileId: string;
+    text: string;
+  }) => void;
   /** Called for every rejected inbound message, with the reason. */
   onRejected?: (info: TelegramRejection) => void;
 }
@@ -36,6 +47,7 @@ export interface TgMessage {
   from?: TgUser;
   chat: { id: number; type: string };
   text?: string;
+  voice?: { file_id: string; duration?: number };
 }
 
 export interface TgUpdate {
@@ -203,7 +215,7 @@ export class TelegramChannel implements Channel {
     for (const update of updates) {
       this.offset = Math.max(this.offset, update.update_id + 1);
       const msg = update.message;
-      if (!msg?.text || !msg.from) continue;
+      if (!msg?.from) continue;
       const chatId = msg.chat.id;
       const userId = msg.from.id;
 
@@ -213,9 +225,20 @@ export class TelegramChannel implements Channel {
         continue;
       }
 
+      // Voice notes carry no `text`: download + transcribe, then treat the
+      // transcript as the message (#137). Returns null when the message was
+      // already answered with a hint or failed to transcribe.
+      let text = msg.text;
+      if (!text && msg.voice) {
+        const voiceText = await this.handleVoice(chatId, userId, msg.voice);
+        if (voiceText === null) continue;
+        text = voiceText;
+      }
+      if (!text) continue; // non-text, non-voice message (photo, sticker, …)
+
       const maxLen = this.opts.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH;
-      if (maxLen > 0 && msg.text.length > maxLen) {
-        this.log(`telegram: rejected ${msg.text.length}-char message from user ${userId} (max ${maxLen})`);
+      if (maxLen > 0 && text.length > maxLen) {
+        this.log(`telegram: rejected ${text.length}-char message from user ${userId} (max ${maxLen})`);
         this.opts.onRejected?.({ userId, chatId, reason: "too_long" });
         await this.send(chatId, `message too long (max ${maxLen} characters) — please shorten it.`).catch(
           () => {},
@@ -236,7 +259,7 @@ export class TelegramChannel implements Channel {
           chatId,
           userId,
           username: msg.from.username,
-          text: msg.text,
+          text,
         });
         if (reply) await this.send(chatId, reply);
       } catch (e) {
@@ -245,6 +268,68 @@ export class TelegramChannel implements Channel {
       }
     }
     return handled;
+  }
+
+  private voiceHint(chatId: number, text: string): Promise<void> {
+    return this.send(chatId, text).catch(() => {});
+  }
+
+  /**
+   * Voice-message pipeline (#137): enforces the on/off switch, falls back with
+   * a clear hint when no transcriber (audio model) is configured, and otherwise
+   * downloads the audio, transcribes it and returns the transcript. Returns
+   * null when the message should be dropped (hint already sent / failure).
+   */
+  private async handleVoice(
+    chatId: number,
+    userId: number,
+    voice: { file_id: string; duration?: number },
+  ): Promise<string | null> {
+    if (!this.opts.voiceEnabled) {
+      this.log(`telegram: voice message ignored (voice off) from user ${userId}`);
+      await this.voiceHint(
+        chatId,
+        "voice messages are disabled — enable gateway.telegram.voice to send audio notes.",
+      );
+      return null;
+    }
+    if (!this.opts.transcribe) {
+      this.log(`telegram: voice message from user ${userId} but no audio model configured`);
+      await this.voiceHint(
+        chatId,
+        "voice transcription is on, but an audio model / provider key is not configured — set gateway.telegram.voice.model and an OpenAI-compatible API key.",
+      );
+      return null;
+    }
+    try {
+      const audio = await this.downloadVoice(voice.file_id);
+      const text = await this.opts.transcribe(audio, `voice_${voice.file_id}.ogg`);
+      if (!text || !text.trim()) throw new Error("empty transcription");
+      this.opts.onTranscribed?.({ userId, chatId, fileId: voice.file_id, text });
+      return text.trim();
+    } catch (e) {
+      this.log(`telegram: transcription failed for user ${userId}: ${(e as Error).message}`);
+      await this.voiceHint(chatId, "could not transcribe that voice message — please try again.");
+      return null;
+    }
+  }
+
+  private async downloadVoice(fileId: string): Promise<Blob> {
+    const getFile = await fetch(
+      this.url(`getFile?file_id=${encodeURIComponent(fileId)}`),
+    );
+    if (!getFile.ok) {
+      throw new Error(`telegram getFile ${getFile.status}: ${(await getFile.text()).slice(0, 200)}`);
+    }
+    const data = (await getFile.json()) as { result?: { file_path?: string } };
+    const filePath = data.result?.file_path;
+    if (!filePath) throw new Error("telegram getFile returned no file_path");
+    const base = (this.opts.apiBase || DEFAULT_API_BASE).replace(/\/$/, "");
+    const fileRes = await fetch(`${base}/file/bot${this.opts.token}/${filePath}`);
+    if (!fileRes.ok) {
+      throw new Error(`telegram file download ${fileRes.status}`);
+    }
+    return await fileRes.blob();
   }
 
   async start(signal: AbortSignal): Promise<void> {

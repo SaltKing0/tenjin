@@ -398,3 +398,152 @@ describe("TelegramChannel implements Channel (#97)", () => {
     await channel.start(ac.signal);
   });
 });
+
+describe("TelegramChannel voice transcription (#137)", () => {
+  let apiBase: string;
+  let sentMessages: Array<{ chat_id: number; text: string }>;
+  let scriptedUpdates: TgUpdate[];
+  let server: ReturnType<typeof Bun.serve>;
+
+  beforeEach(() => {
+    sentMessages = [];
+    scriptedUpdates = [];
+    server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        if (url.pathname.endsWith("/getUpdates")) {
+          const out = scriptedUpdates;
+          scriptedUpdates = [];
+          return Response.json({ result: out });
+        }
+        if (url.pathname.endsWith("/sendMessage")) {
+          const body = (await req.json()) as { chat_id: number; text: string };
+          sentMessages.push(body);
+          return Response.json({ ok: true });
+        }
+        // Telegram Bot API audio file resolution + download (for voice notes).
+        if (url.pathname.endsWith("/getFile")) {
+          return Response.json({ ok: true, result: { file_path: "voice/note.ogg" } });
+        }
+        if (url.pathname.includes("/file/bot")) {
+          return new Response(new Uint8Array([1, 2, 3]), {
+            headers: { "content-type": "audio/ogg" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    apiBase = `http://localhost:${server.port}`;
+  });
+
+  afterEach(() => server.stop(true));
+
+  const makeChannel = (
+    opts: Partial<ConstructorParameters<typeof TelegramChannel>[0]> = {},
+    onMessage: (msg: { chatId: number; userId: number; text: string }) => Promise<string | null> = async () => null,
+  ) =>
+    new TelegramChannel(
+      {
+        token: "T0KEN",
+        apiBase,
+        defaultBot: "researcher",
+        allowedUsers: [42],
+        pollTimeoutSec: 0,
+        ...opts,
+      },
+      onMessage,
+      () => {},
+    );
+
+  const voiceUpdate = (id: number, userId: number, fileId = "VOICE1"): TgUpdate => ({
+    update_id: id,
+    message: {
+      message_id: id,
+      from: { id: userId, username: `user${userId}` },
+      chat: { id: 100 + userId, type: "private" },
+      voice: { file_id: fileId },
+    },
+  });
+
+  test("voice enabled with an injected transcriber routes the transcript to the handler", async () => {
+    scriptedUpdates = [voiceUpdate(1, 42)];
+    const transcribe = async (_audio: Blob, filename: string) => {
+      expect(filename).toContain("VOICE1");
+      return "transcribe this thought";
+    };
+    let got: string | undefined;
+    const channel = makeChannel({ voiceEnabled: true, transcribe }, async (msg) => {
+      got = msg.text;
+      return "got it";
+    });
+
+    const handled = await channel.pollOnce();
+    expect(handled).toBe(1);
+    expect(got).toBe("transcribe this thought");
+    expect(sentMessages).toEqual([{ chat_id: 142, text: "got it" }]);
+  });
+
+  test("voice off replies a hint and never calls the handler", async () => {
+    scriptedUpdates = [voiceUpdate(1, 42)];
+    let called = false;
+    const channel = makeChannel({ voiceEnabled: false }, async () => {
+      called = true;
+      return "nope";
+    });
+
+    const handled = await channel.pollOnce();
+    expect(handled).toBe(0);
+    expect(called).toBe(false);
+    expect(sentMessages.at(-1)?.text).toMatch(/voice messages are disabled/i);
+  });
+
+  test("voice on but no transcriber (no audio model) replies a hint", async () => {
+    scriptedUpdates = [voiceUpdate(1, 42)];
+    let called = false;
+    const channel = makeChannel({ voiceEnabled: true }, async () => {
+      called = true;
+      return "nope";
+    });
+
+    const handled = await channel.pollOnce();
+    expect(handled).toBe(0);
+    expect(called).toBe(false);
+    expect(sentMessages.at(-1)?.text).toMatch(/audio model|provider key/i);
+  });
+
+  test("onTranscribed hook fires with the transcript (audit / cost trace)", async () => {
+    scriptedUpdates = [voiceUpdate(1, 42)];
+    const transcribed: Array<{ userId: number; chatId: number; fileId: string; text: string }> = [];
+    const channel = makeChannel(
+      {
+        voiceEnabled: true,
+        transcribe: async () => "hello in text",
+        onTranscribed: (info) => transcribed.push(info),
+      },
+      async () => null,
+    );
+
+    await channel.pollOnce();
+    expect(transcribed).toEqual([
+      { userId: 42, chatId: 142, fileId: "VOICE1", text: "hello in text" },
+    ]);
+  });
+
+  test("a failed transcription replies an error and drops the message", async () => {
+    scriptedUpdates = [voiceUpdate(1, 42)];
+    const channel = makeChannel(
+      {
+        voiceEnabled: true,
+        transcribe: async () => {
+          throw new Error("stt backend down");
+        },
+      },
+      async () => null,
+    );
+
+    const handled = await channel.pollOnce();
+    expect(handled).toBe(0);
+    expect(sentMessages.at(-1)?.text).toMatch(/could not transcribe/i);
+  });
+});
