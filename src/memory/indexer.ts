@@ -66,15 +66,21 @@ export async function indexPendingSessions(opts: {
       if (texts.length === 0) continue;
       const vectors = await opts.embeddings.embed(texts.map((t) => t.text));
       const created = new Date().toISOString();
-      const chunks: VectorChunk[] = texts.map((t, i) => ({
-        id: `${log.id}:${t.eventIdx}`,
-        sessionId: log.id,
-        projectPath: opts.projectPath,
-        role: t.role,
-        text: t.text,
-        embedding: vectors[i] ?? [],
-        created,
-      }));
+      const embedModel = opts.embeddings.model;
+      const chunks: VectorChunk[] = texts.map((t, i) => {
+        const embedding = vectors[i] ?? [];
+        return {
+          id: `${log.id}:${t.eventIdx}`,
+          sessionId: log.id,
+          projectPath: opts.projectPath,
+          role: t.role,
+          text: t.text,
+          embedding,
+          created,
+          embedModel,
+          embedDim: embedding.length,
+        };
+      });
       appendChunks(vectorsFile, chunks);
       report.indexed.push(log.id);
       report.chunks += chunks.length;

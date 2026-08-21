@@ -84,7 +84,7 @@ describe("searchChunks", () => {
   ];
 
   test("ranks by similarity descending and respects topK", () => {
-    const hits = searchChunks(corpus, { query: [1, 0, 0], topK: 2 });
+    const { hits } = searchChunks(corpus, { query: [1, 0, 0], topK: 2 });
     expect(hits.map((h) => h.chunk.id)).toEqual(["other-proj", "auth-user"]);
     const first = hits[0];
     const second = hits[1];
@@ -93,12 +93,12 @@ describe("searchChunks", () => {
   });
 
   test("projectPath filter scopes results", () => {
-    const hits = searchChunks(corpus, { query: [1, 0, 0], topK: 10, projectPath: "/p" });
+    const { hits } = searchChunks(corpus, { query: [1, 0, 0], topK: 10, projectPath: "/p" });
     expect(hits.map((h) => h.chunk.id)).not.toContain("other-proj");
   });
 
   test("minScore drops weak matches", () => {
-    const hits = searchChunks(corpus, { query: [1, 0, 0], topK: 10, minScore: 0.95 });
+    const { hits } = searchChunks(corpus, { query: [1, 0, 0], topK: 10, minScore: 0.95 });
     expect(hits.map((h) => h.chunk.id)).toEqual([
       "other-proj",
       "auth-user",
@@ -107,7 +107,46 @@ describe("searchChunks", () => {
   });
 
   test("empty corpus returns nothing", () => {
-    expect(searchChunks([], { query: [1, 0, 0] })).toEqual([]);
+    const { hits } = searchChunks([], { query: [1, 0, 0] });
+    expect(hits).toEqual([]);
+  });
+
+  test("skips chunks with mismatched dimension and reports counter", () => {
+    const { hits, skipped } = searchChunks(
+      [
+        chunk({ id: "match", embedding: [1, 0, 0] }),
+        chunk({ id: "dirty-3072", embedding: new Array(3072).fill(0.01) }),
+        chunk({ id: "dirty-1536", embedding: new Array(1536).fill(0.01) }),
+      ],
+      { query: [1, 0, 0] },
+    );
+    expect(hits.map((h) => h.chunk.id)).toEqual(["match"]);
+    expect(skipped).toBe(2);
+  });
+
+  test("skips chunks with a different embedModel and reports counter", () => {
+    const { hits, skipped } = searchChunks(
+      [
+        chunk({ id: "same-model", embedModel: "text-embedding-3-small" }),
+        chunk({ id: "other-model", embedModel: "text-embedding-3-large" }),
+        chunk({ id: "legacy", embedModel: undefined }),
+      ],
+      { query: [1, 0, 0], embedModel: "text-embedding-3-small" },
+    );
+    // legacy chunk without embedModel metadata is still searched
+    expect(hits.map((h) => h.chunk.id)).toContain("same-model");
+    expect(hits.map((h) => h.chunk.id)).toContain("legacy");
+    expect(hits.map((h) => h.chunk.id)).not.toContain("other-model");
+    expect(skipped).toBe(1);
+  });
+
+  test("skipping does not throw even when every chunk mismatches", () => {
+    const { hits, skipped } = searchChunks(
+      [chunk({ id: "old", embedding: new Array(1536).fill(0.5) })],
+      { query: new Array(3072).fill(0.5) },
+    );
+    expect(hits).toEqual([]);
+    expect(skipped).toBe(1);
   });
 });
 

@@ -8,6 +8,10 @@ export interface VectorChunk {
   text: string;
   embedding: number[];
   created: string;
+  /** Embedding model used to produce `embedding` (optional; legacy chunks may lack it). */
+  embedModel?: string;
+  /** Dimension of `embedding` (optional; derived from `embedding.length` when absent). */
+  embedDim?: number;
 }
 
 export function appendChunks(path: string, chunks: VectorChunk[]): void {
@@ -60,6 +64,8 @@ export interface SearchOptions {
   topK?: number;
   projectPath?: string;
   minScore?: number;
+  /** Expected embedding model; chunks whose stored `embedModel` differs are skipped. */
+  embedModel?: string;
 }
 
 export interface SearchHit {
@@ -67,18 +73,31 @@ export interface SearchHit {
   score: number;
 }
 
-export function searchChunks(chunks: VectorChunk[], opts: SearchOptions): SearchHit[] {
+export interface SearchResult {
+  hits: SearchHit[];
+  /** Number of chunks skipped because their embedding model/dimension mismatched the query. */
+  skipped: number;
+}
+
+export function searchChunks(chunks: VectorChunk[], opts: SearchOptions): SearchResult {
   const topK = opts.topK ?? 5;
   const minScore = opts.minScore ?? 0;
+  const queryDim = opts.query.length;
   const hits: SearchHit[] = [];
+  let skipped = 0;
   for (const chunk of chunks) {
     if (opts.projectPath && chunk.projectPath !== opts.projectPath) continue;
+    const chunkDim = chunk.embedDim ?? chunk.embedding.length;
+    if (chunkDim !== queryDim || (opts.embedModel && chunk.embedModel && chunk.embedModel !== opts.embedModel)) {
+      skipped++;
+      continue;
+    }
     const score = cosineSimilarity(opts.query, chunk.embedding);
     if (score < minScore) continue;
     hits.push({ chunk, score });
   }
   hits.sort((a, b) => b.score - a.score);
-  return hits.slice(0, topK);
+  return { hits: hits.slice(0, topK), skipped };
 }
 
 export function indexedSessionIds(chunks: VectorChunk[]): Set<string> {
