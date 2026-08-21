@@ -24,20 +24,56 @@ export interface GlobalBudgetCheck {
   reason?: string;
 }
 
+/** Injected for deterministic expiry in tests. */
+export const GLOBAL_BUDGET_CACHE_TTL_MS = 20_000;
+
+interface BudgetCacheEntry {
+  home: string;
+  day: string;
+  month: string;
+  computedAtMs: number;
+  totals: GlobalSpend;
+}
+
+// #214: the global-budget gate is consulted before EVERY provider call; a full
+// rescan of every session log on each call is the hottest path in the harness.
+// Cache the aggregated totals for a short window (TTL ~20s) so hot calls hit
+// memory, and document that budget exhaustion is detected at most TTL late.
+let budgetCache: BudgetCacheEntry | null = null;
+
+/** Clear the in-process cache (mainly for tests). */
+export function resetGlobalBudgetCache(): void {
+  budgetCache = null;
+}
+
 /** `now` defaults to the current time; injected for deterministic tests. */
 export function aggregateGlobalSpend(
   home: string,
   now: Date = new Date(),
 ): GlobalSpend {
-  const rows = aggregateSpend(home);
-  const today = now.toISOString().slice(0, 10);
-  const month = today.slice(0, 7);
+  const day = now.toISOString().slice(0, 10);
+  const month = day.slice(0, 7);
+  const fresh =
+    budgetCache !== null &&
+    budgetCache.home === home &&
+    budgetCache.day === day &&
+    budgetCache.month === month &&
+    now.getTime() - budgetCache.computedAtMs < GLOBAL_BUDGET_CACHE_TTL_MS;
+  if (fresh) return budgetCache!.totals;
 
+  const totals = computeGlobalSpend(home, day, month);
+  budgetCache = { home, day, month, computedAtMs: now.getTime(), totals };
+  return totals;
+}
+
+/** Un-cached scan of the session logs (used on cache miss). */
+function computeGlobalSpend(home: string, day: string, month: string): GlobalSpend {
+  const rows = aggregateSpend(home);
   let todayUSD = 0;
   let monthUSD = 0;
   for (const row of rows) {
     if (row.day.startsWith(month)) monthUSD += row.costUSD;
-    if (row.day === today) todayUSD += row.costUSD;
+    if (row.day === day) todayUSD += row.costUSD;
   }
   return { todayUSD, monthUSD };
 }

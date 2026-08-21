@@ -2,12 +2,13 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { aggregateGlobalSpend, checkGlobalBudget } from "../src/audit/global-budget";
+import { aggregateGlobalSpend, checkGlobalBudget, resetGlobalBudgetCache, GLOBAL_BUDGET_CACHE_TTL_MS } from "../src/audit/global-budget";
 
 let home: string;
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "tj-global-budget-"));
+  resetGlobalBudgetCache();
 });
 
 afterEach(() => rmSync(home, { recursive: true, force: true }));
@@ -157,4 +158,55 @@ test("checkGlobalBudget blocks when the monthly limit is exceeded", () => {
 test("checkGlobalBudget with no limits always allows", () => {
   const res = checkGlobalBudget(home, {}, new Date());
   expect(res.allowed).toBe(true);
+});
+
+describe("global budget cache (#214)", () => {
+  const t0 = new Date("2026-08-21T12:00:00Z");
+  const withinTtl = new Date(t0.getTime() + GLOBAL_BUDGET_CACHE_TTL_MS - 1);
+  const pastTtl = new Date(t0.getTime() + GLOBAL_BUDGET_CACHE_TTL_MS + 1);
+
+  test("caches: repeated calls within TTL do not rescan the session logs", () => {
+    seedSession(join(home, "sessions"), "s1", "a", "m", "2026-08-21T09:00:00Z", [
+      { inputTokens: 1, outputTokens: 1, costUSD: 0.01 },
+    ]);
+    const first = aggregateGlobalSpend(home, t0);
+    expect(first.todayUSD).toBeCloseTo(0.01);
+
+    // New spend lands after the first aggregation, but within the TTL window
+    // the cached totals must be returned (no full rescan of the logs).
+    seedSession(join(home, "sessions"), "s2", "a", "m", "2026-08-21T10:00:00Z", [
+      { inputTokens: 1, outputTokens: 1, costUSD: 0.5 },
+    ]);
+    const cached = aggregateGlobalSpend(home, withinTtl);
+    expect(cached.todayUSD).toBeCloseTo(0.01); // stale-by-design within TTL
+  });
+
+  test("cache expires after TTL and picks up new spend", () => {
+    seedSession(join(home, "sessions"), "s1", "a", "m", "2026-08-21T09:00:00Z", [
+      { inputTokens: 1, outputTokens: 1, costUSD: 0.01 },
+    ]);
+    aggregateGlobalSpend(home, t0);
+
+    seedSession(join(home, "sessions"), "s2", "a", "m", "2026-08-21T10:00:00Z", [
+      { inputTokens: 1, outputTokens: 1, costUSD: 0.5 },
+    ]);
+    const expired = aggregateGlobalSpend(home, pastTtl);
+    expect(expired.todayUSD).toBeCloseTo(0.51);
+  });
+
+  test("cache is keyed by home and resets on a new calendar day", () => {
+    seedSession(join(home, "sessions"), "s1", "a", "m", "2026-08-21T09:00:00Z", [
+      { inputTokens: 1, outputTokens: 1, costUSD: 0.5 },
+    ]);
+    // Day 1 (21st) cached.
+    expect(aggregateGlobalSpend(home, t0).todayUSD).toBeCloseTo(0.5);
+    // Still the 21st but day boundary check uses the calendar day: a later same-
+    // day query within TTL stays cached (covered above). For a NEW day the cache
+    // must not leak yesterday's todayUSD.
+    const nextDay = new Date("2026-08-22T00:00:00Z");
+    const d2 = aggregateGlobalSpend(home, nextDay);
+    // The session is dated the 21st, so it counts toward month but not the 22nd.
+    expect(d2.todayUSD).toBeCloseTo(0);
+    expect(d2.monthUSD).toBeCloseTo(0.5);
+  });
 });
