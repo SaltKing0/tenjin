@@ -79,6 +79,7 @@ import { createMessageHandler, chatStreamResponse, type HandleContext } from "./
 import { startHttpServer } from "./gateway/http";
 import { createConsoleApi } from "./gateway/console-api";
 import { attachWebhooks, parseWebhooks } from "./gateway/webhooks";
+import { attachNtfy, parseNtfy } from "./gateway/ntfy";
 import {
   createRequest,
   resolveRequest,
@@ -919,6 +920,12 @@ async function gatewayCommand(args: string[]): Promise<number> {
     if (webhookTargets.length > 0) {
       attachWebhooks(webhookTargets);
       log(`webhooks: ${webhookTargets.length} target(s) subscribed`);
+    }
+    // #149: ntfy push notifications from events.ntfy config.
+    const ntfyConfig = parseNtfy(config.events?.ntfy);
+    if (ntfyConfig) {
+      attachNtfy(ntfyConfig);
+      log(`ntfy: pushing to ${ntfyConfig.topicUrl}`);
     }
 
     // Hot-reload job changes (made via `tenjin job add/rm`) on SIGHUP, without

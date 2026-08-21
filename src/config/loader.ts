@@ -161,6 +161,7 @@ const SCHEMA: Record<string, FieldDef> = {
     types: ["mapping"],
     children: {
       webhooks: { types: ["list"] },
+      ntfy: { types: ["mapping"] },
     },
   },
   // `inbox` from #64 (yaml TTL/max config); added here so schema-validate
@@ -327,6 +328,17 @@ memory:
 # globalBudget:                # global spend caps (USD) across solo + ALL bots
 #   dailyUSD: 2.0              # max total spend per UTC day across all scopes; 0 = unlimited
 #   monthlyUSD: 20.0           # max total spend per UTC month across all scopes; 0 = unlimited
+# events:                      # outbound notifications on gateway events
+#   ntfy:                      # ntfy push (mobile) — zero-auth: the topic URL is the credential
+#     topicUrl: https://ntfy.sh/mytopic
+#     priority: default        # min | low | default | high | urgent (base priority)
+#     priorities:              # per-event override, e.g. failures louder than rest
+#       job.failed: urgent
+#   webhooks:                  # signed HTTP callbacks (see docs/architecture.md)
+#     - url: https://example.com/hook
+#       secret: change-me
+#       events: [job.failed]   # approval.created | approval.resolved | job.failed | budget.exceeded | task.done
+#       retries: 3
 # context:                     # context-window guard (chars/4 estimate)
 #   enabled: true              # compress old tool results once the estimate nears the limit
 #   thresholdRatio: 0.8        # compress when estimate > 80% of the model's context window
