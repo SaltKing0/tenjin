@@ -149,7 +149,10 @@ async function apiJson(path, opts = {}) {
 const eventTabs = Object.create(null);
 let lastEventId = 0;
 let sseStarted = false;
-let sseConnected = false;
+// #280: tri-state SSE connection ("connecting" | "online" | "offline") so the
+// banner never shows as offline before the first stream opens on a healthy
+// server, and flips online the moment the stream opens (not after a message).
+let sseState = "connecting";
 let sseAbort = null;
 let sseIndicator = null;
 let offlineBanner = null;
@@ -157,7 +160,7 @@ let offlineBanner = null;
 // #256: reflect the live SSE connection in the top bar (pure view from
 // topbar-state.js); clicking the indicator forces an immediate reconnect.
 function setSseUi() {
-  const { label, tone, banner } = connectionView(sseConnected);
+  const { label, tone, banner } = connectionView(sseState);
   if (sseIndicator) {
     sseIndicator.textContent = label;
     sseIndicator.className = `topbar-sse ${tone}`;
@@ -168,7 +171,7 @@ function setSseUi() {
   }
 }
 function reconnectSse() {
-  sseConnected = false;
+  sseState = "offline";
   setSseUi();
   if (sseAbort) sseAbort.abort();
 }
@@ -191,18 +194,18 @@ async function connectEvents() {
       const headers = lastEventId > 0 ? { "Last-Event-ID": String(lastEventId) } : {};
       res = await api("/api/events", { headers, signal: sseAbort.signal });
     } catch {
-      sseConnected = false;
+      sseState = "offline";
       setSseUi();
       await new Promise((r) => setTimeout(r, 1000));
       continue;
     }
     if (!res.ok || !res.body) {
-      sseConnected = false;
+      sseState = "offline";
       setSseUi();
       await new Promise((r) => setTimeout(r, 1000));
       continue;
     }
-    sseConnected = true;
+    sseState = "online";
     setSseUi();
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -243,7 +246,7 @@ async function connectEvents() {
         reader.releaseLock();
       } catch {}
     }
-    sseConnected = false;
+    sseState = "offline";
     setSseUi();
     await new Promise((r) => setTimeout(r, 1000));
   }
