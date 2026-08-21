@@ -1,9 +1,12 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  DEFAULT_INBOX_MAX_MESSAGES,
+  DEFAULT_INBOX_TTL_MS,
   formatInbox,
+  inboxFile,
   listMessages,
   markRead,
   sendMessage,
@@ -126,4 +129,100 @@ test("formatInbox handles empty and long bodies", () => {
   ]);
   expect(formatted).toContain("[2026-08-21 10:00] from w: s");
   expect(formatted).toContain("…");
+});
+
+describe("inbox hygiene", () => {
+  function backdate(dir: string, id: string, days: number): void {
+    const path = inboxFile(dir, id);
+    const msg = JSON.parse(readFileSync(path, "utf8")) as { ts: string };
+    msg.ts = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
+    writeFileSync(path, JSON.stringify(msg, null, 2));
+  }
+
+  test("defaults: 30-day TTL and 500-message cap", () => {
+    expect(DEFAULT_INBOX_TTL_MS).toBe(30 * 24 * 60 * 60 * 1000);
+    expect(DEFAULT_INBOX_MAX_MESSAGES).toBe(500);
+  });
+
+  test("expired messages are purged on read (TTL)", () => {
+    const dir = join(home, "inbox");
+    sendMessage(dir, { from: "a", to: "b", subject: "fresh", body: "new" });
+    const stale = sendMessage(dir, { from: "a", to: "b", subject: "stale", body: "old" });
+    backdate(dir, stale.id, 40);
+
+    const all = listMessages(dir, { ttlMs: 30 * 24 * 3600 * 1000 });
+    expect(all.map((m) => m.subject)).toEqual(["fresh"]);
+  });
+
+  test("sendMessage purges expired messages (TTL on write)", () => {
+    const dir = join(home, "inbox");
+    const stale = sendMessage(dir, { from: "a", to: "b", subject: "stale", body: "old" });
+    backdate(dir, stale.id, 40);
+
+    sendMessage(dir, { from: "a", to: "b", subject: "fresh", body: "new" }, { ttlMs: 30 * 24 * 3600 * 1000 });
+    expect(listMessages(dir).map((m) => m.subject)).toEqual(["fresh"]);
+  });
+
+  test("default TTL applies without an explicit policy", () => {
+    const dir = join(home, "inbox");
+    const stale = sendMessage(dir, { from: "a", to: "b", subject: "stale", body: "old" });
+    backdate(dir, stale.id, 40);
+
+    expect(listMessages(dir).map((m) => m.subject)).toEqual([]);
+  });
+
+  test("maxMessages drops oldest read messages before unread ones", () => {
+    const dir = join(home, "inbox");
+    const r1 = sendMessage(dir, { from: "a", to: "b", subject: "r1", body: "x" });
+    const r2 = sendMessage(dir, { from: "a", to: "b", subject: "r2", body: "x" });
+    sendMessage(dir, { from: "a", to: "b", subject: "u1", body: "x" });
+    sendMessage(dir, { from: "a", to: "b", subject: "u2", body: "x" });
+    markRead(dir, [r1.id, r2.id]);
+
+    sendMessage(dir, { from: "a", to: "b", subject: "u3", body: "x" }, { maxMessages: 2 });
+    expect(listMessages(dir).map((m) => m.subject)).toEqual(["u2", "u3"]);
+  });
+
+  test("maxMessages with only unread messages drops the oldest", () => {
+    const dir = join(home, "inbox");
+    sendMessage(dir, { from: "a", to: "b", subject: "s1", body: "x" });
+    sendMessage(dir, { from: "a", to: "b", subject: "s2", body: "x" });
+    sendMessage(dir, { from: "a", to: "b", subject: "s3", body: "x" });
+
+    sendMessage(dir, { from: "a", to: "b", subject: "s4", body: "x" }, { maxMessages: 2 });
+    expect(listMessages(dir).map((m) => m.subject)).toEqual(["s3", "s4"]);
+  });
+
+  test("parallel markRead loses no messages and leaves valid files", async () => {
+    const dir = join(home, "inbox");
+    const msgs = Array.from({ length: 20 }, (_, i) =>
+      sendMessage(dir, { from: "a", to: "b", subject: `s${i}`, body: `b${i}` }),
+    );
+    const ids = msgs.map((m) => m.id);
+
+    await Promise.all([
+      markRead(dir, ids.slice(0, 15)),
+      markRead(dir, ids.slice(10)),
+      markRead(dir, ids),
+      listMessages(dir),
+    ]);
+
+    const all = listMessages(dir);
+    expect(all).toHaveLength(20);
+    expect(all.every((m) => m.read)).toBe(true);
+    for (const m of all) {
+      expect(() => JSON.parse(readFileSync(inboxFile(dir, m.id), "utf8"))).not.toThrow();
+    }
+    expect(readdirSync(dir).filter((f) => f.endsWith(".json"))).toHaveLength(20);
+    expect(readdirSync(dir).filter((f) => f.includes(".tmp-"))).toEqual([]);
+  });
+
+  test("orphan tmp files are removed during cleanup", () => {
+    const dir = join(home, "inbox");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "deadbeef.tmp-12345678"), "{}");
+
+    expect(listMessages(dir)).toEqual([]);
+    expect(readdirSync(dir).filter((f) => f.includes(".tmp-"))).toEqual([]);
+  });
 });
