@@ -297,7 +297,7 @@ export class TelegramChannel implements Channel {
       this.log(`telegram: voice message from user ${userId} but no audio model configured`);
       await this.voiceHint(
         chatId,
-        "voice transcription is on, but no audio model is configured — set gateway.telegram.voice.model.",
+        "voice transcription is on, but an audio model / provider key is not configured — set gateway.telegram.voice.model and an OpenAI-compatible API key.",
       );
       return null;
     }

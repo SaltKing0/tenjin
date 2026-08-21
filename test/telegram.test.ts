@@ -509,7 +509,7 @@ describe("TelegramChannel voice transcription (#137)", () => {
     const handled = await channel.pollOnce();
     expect(handled).toBe(0);
     expect(called).toBe(false);
-    expect(sentMessages.at(-1)?.text).toMatch(/no audio model/i);
+    expect(sentMessages.at(-1)?.text).toMatch(/audio model|provider key/i);
   });
 
   test("onTranscribed hook fires with the transcript (audit / cost trace)", async () => {

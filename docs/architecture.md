@@ -276,6 +276,9 @@ gateway:
     adminChatId: 123456789
     allowWrites: true
     approvalTimeoutMs: 120000
+    voice:                    # voice-note transcription (#137); off by default
+      enabled: true           # require an OpenAI-compatible API key too
+      model: whisper-1        # or gpt-4o-transcribe (reports token usage)
   slack:
     enabled: true
     defaultBot: researcher
