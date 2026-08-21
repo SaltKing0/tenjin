@@ -55,6 +55,79 @@ async function apiJson(path, opts = {}) {
   return res.json();
 }
 
+// Live gateway events over SSE. Panels subscribe per type via onEvent(); the
+// stream reconnects with the last seen event id so no event is lost.
+const eventTabs = Object.create(null);
+let lastEventId = 0;
+let sseStarted = false;
+
+function onEvent(type, fn) {
+  (eventTabs[type] ||= new Set()).add(fn);
+  return () => eventTabs[type]?.delete(fn);
+}
+
+function dispatchEvent(ev) {
+  const set = eventTabs[ev.type];
+  if (set) for (const fn of [...set]) fn(ev.payload);
+}
+
+async function connectEvents() {
+  while (true) {
+    let res;
+    try {
+      const headers = lastEventId > 0 ? { "Last-Event-ID": String(lastEventId) } : {};
+      res = await api("/api/events", { headers });
+    } catch {
+      await new Promise((r) => setTimeout(r, 1000));
+      continue;
+    }
+    if (!res.ok || !res.body) {
+      await new Promise((r) => setTimeout(r, 1000));
+      continue;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let sep;
+        while ((sep = buffer.indexOf("\n\n")) !== -1) {
+          const block = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          let id = null;
+          let data = "";
+          for (const line of block.split("\n")) {
+            if (line.startsWith("id: ")) id = line.slice(4).trim();
+            else if (line.startsWith("data: ")) data += line.slice(6);
+          }
+          if (!data) continue;
+          let ev;
+          try {
+            ev = JSON.parse(data);
+          } catch {
+            continue;
+          }
+          if (id !== null) {
+            const n = Number(id);
+            if (Number.isFinite(n) && n > lastEventId) lastEventId = n;
+          }
+          dispatchEvent(ev);
+        }
+      }
+    } catch {
+      // dropped connection — fall through to reconnect
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {}
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
 function fmtUptime(ms) {
   const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600);
@@ -659,10 +732,13 @@ async function panelApprovals(main) {
     }
   }
   await refresh();
-  const timer = setInterval(refresh, 4000);
+  const offs = [
+    onEvent("approval.new", refresh),
+    onEvent("approval.resolved", refresh),
+  ];
   const observer = new MutationObserver(() => {
     if (!document.body.contains(container)) {
-      clearInterval(timer);
+      for (const off of offs) off();
       observer.disconnect();
     }
   });
@@ -751,6 +827,14 @@ async function panelJobs(main) {
   }
 
   await refresh();
+  const off = onEvent("job.status", refresh);
+  const observer = new MutationObserver(() => {
+    if (!document.body.contains(list)) {
+      off();
+      observer.disconnect();
+    }
+  });
+  observer.observe($app, { childList: true, subtree: true });
 }
 
 async function panelMemory(main) {
@@ -857,6 +941,10 @@ async function render() {
 
   const main = el("div", { class: "main" });
   $app.replaceChildren(sidebar, main);
+  if (!sseStarted) {
+    sseStarted = true;
+    connectEvents();
+  }
   try {
     await panel[2](main);
   } catch (e) {

@@ -176,8 +176,10 @@ export function startHttpServer(deps: HttpDeps): HttpServerHandle {
         return streamed ?? Response.json({ error: "not found" }, { status: 404 });
       }
       if (req.method === "GET" && url.pathname === "/api/events") {
-        const lastId = Number(req.headers.get("last-event-id")) || 0;
-        return eventsStream(lastId);
+        const header = req.headers.get("last-event-id");
+        const fromId =
+          header && header.trim() !== "" ? Number(header) || 0 : Number.MAX_SAFE_INTEGER;
+        return eventsStream(fromId);
       }
       if (url.pathname.startsWith("/api/")) {
         if (deps.api) {
