@@ -87,6 +87,20 @@ describe("parseArgs", () => {
     expect(a.resume).toBe("abc123");
   });
 
+  test("value flags without a value throw", () => {
+    for (const flag of ["--model", "--provider", "--resume", "--bot"]) {
+      expect(() => parseArgs([flag])).toThrow(ConfigError);
+    }
+    expect(() => parseArgs(["--model"])).toThrow(/requires a value/);
+  });
+
+  test("--budget requires a finite number", () => {
+    expect(() => parseArgs(["--budget"])).toThrow(/requires a value/);
+    expect(() => parseArgs(["--budget", "abc"])).toThrow(/must be a number/);
+    expect(() => parseArgs(["--budget", "NaN"])).toThrow(/must be a number/);
+    expect(parseArgs(["--budget", "2.5"]).budget).toBe(2.5);
+  });
+
   test("unknown argument throws with help text", () => {
     try {
       parseArgs(["--wat"]);
