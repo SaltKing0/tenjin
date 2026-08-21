@@ -19,6 +19,7 @@ export interface HeadlessOptions {
   capUSD: number;
   policy?: ToolPolicy;
   agentsMd?: string | null;
+  extraTools?: ToolDef[];
 }
 
 export interface HeadlessResult {
@@ -48,7 +49,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     provider: opts.provider,
     model: opts.model,
     system,
-    tools: toolsForPolicy(policy),
+    tools: [...toolsForPolicy(policy), ...(opts.extraTools ?? [])],
     messages: [{ role: "user", content: opts.message }],
     budget: new Budget(opts.capUSD),
     maxTokens: opts.maxTokens,

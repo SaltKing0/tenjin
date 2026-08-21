@@ -42,6 +42,7 @@ import {
 import { createSendMessageTool, createCheckInboxTool } from "./bots/tools";
 import { createAskBotTool } from "./bots/delegate";
 import { Gateway } from "./gateway/gateway";
+import { TelegramChannel, routeText } from "./gateway/telegram";
 import { unreadMessages } from "./bots/inbox";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
@@ -297,17 +298,60 @@ async function gatewayCommand(args: string[]): Promise<number> {
     const { config } = loadConfig(cwd, home, { skipModelCheck: dryRun });
     if (!dryRun) validateConfig(config);
     const registry = new ProviderRegistry(config.providers?.openai?.baseUrl);
-    const gateway = new Gateway({ home, cwd, config, registry, log: (l) => stdout.write(`${l}\n`) });
+    const controller = new AbortController();
+    process.on("SIGINT", () => controller.abort());
+    process.on("SIGTERM", () => controller.abort());
+    const log = (l: string) => stdout.write(`${l}\n`);
+    const gateway = new Gateway({ home, cwd, config, registry, log });
+
+    const channels: Record<string, (text: string) => Promise<void>> = {};
+    let telegramRun: Promise<void> | null = null;
+    const tg = gateway.settings.telegram;
+    if (tg?.enabled) {
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      if (!token) throw new ConfigError("gateway.telegram enabled but TELEGRAM_BOT_TOKEN is not set");
+      const defaultBot = tg.defaultBot as string;
+      const available = listBots(home);
+      if (!available.includes(defaultBot)) {
+        throw new ConfigError(`telegram defaultBot "${defaultBot}" does not exist`);
+      }
+      const channel = new TelegramChannel(
+        { token, defaultBot, allowedUsers: tg.allowedUsers },
+        async (msg) => {
+          const { bot: botName, rest } = routeText(msg.text, defaultBot, available);
+          const profile = resolveBot(home, botName);
+          const ref = botModelRef(profile, config);
+          const result = await runHeadless({
+            provider: registry.get(ref.provider),
+            model: ref.model,
+            soulText: profile.soulText,
+            cwd,
+            message: rest,
+            maxTokens: config.maxTokens,
+            capUSD: botBudgetUSD(profile, config.budgetUSD),
+            policy: "read-only",
+            agentsMd: loadAgentsMd(cwd),
+          });
+          log(`telegram: handled for ${botName} (${formatUSD(result.costUSD)})`);
+          return result.text || null;
+        },
+        log,
+      );
+      channels["telegram"] = async (text) => {
+        if (!tg.adminChatId) throw new ConfigError("postTo telegram requires gateway.telegram.adminChatId");
+        await channel.send(tg.adminChatId, text);
+      };
+      telegramRun = channel.run(controller.signal);
+    }
+
     if (dryRun) {
       stdout.write("gateway dry-run:\n");
       for (const line of gateway.describe()) stdout.write(`  ${line}\n`);
       return 0;
     }
-    const controller = new AbortController();
-    process.on("SIGINT", () => controller.abort());
-    process.on("SIGTERM", () => controller.abort());
+
     stdout.write(`gateway running — Ctrl-C to stop\n`);
-    await gateway.run(controller.signal);
+    await Promise.all([gateway.run(controller.signal), ...(telegramRun ? [telegramRun] : [])]);
     return 0;
   } catch (e) {
     if (e instanceof ConfigError) {

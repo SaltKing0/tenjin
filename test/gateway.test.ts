@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,8 +8,10 @@ import {
   dueJobs,
   msUntilNextJob,
 } from "../src/gateway/gateway";
-import { parseGatewaySettings } from "../src/gateway/config";
+
 import type { HarnessConfig } from "../src/config/types";
+import { parseGatewaySettings as pgs } from "../src/gateway/config";
+const parseGatewaySettings = pgs;
 import type { ChatRequest, ChatResponse, Provider } from "../src/provider/types";
 import { createBot } from "../src/bots/profile";
 
@@ -46,8 +48,8 @@ function mockProvider(reply = "job output"): Provider {
 
 describe("parseGatewaySettings", () => {
   test("empty/missing → defaults", () => {
-    expect(parseGatewaySettings(undefined)).toEqual({ jobs: [], telegram: null });
-    expect(parseGatewaySettings(null)).toEqual({ jobs: [], telegram: null });
+    expect(parseGatewaySettings(undefined)).toEqual({ jobs: [], telegram: null, heartbeat: null });
+    expect(parseGatewaySettings(null)).toEqual({ jobs: [], telegram: null, heartbeat: null });
   });
 
   test("valid job parses with schedule validation", () => {
@@ -80,9 +82,12 @@ describe("parseGatewaySettings", () => {
       /allowlist/,
     );
     const ok = parseGatewaySettings({
-      telegram: { enabled: true, allowedUsers: [42] },
+      telegram: { enabled: true, allowedUsers: [42], defaultBot: "researcher" },
     });
     expect(ok.telegram?.allowedUsers).toEqual([42]);
+    expect(() =>
+      parseGatewaySettings({ telegram: { enabled: true, allowedUsers: [42] } }),
+    ).toThrow(/defaultBot/);
   });
 });
 
@@ -185,5 +190,72 @@ describe("Gateway execution", () => {
     expect(lines).toContain("job standup");
     expect(lines).toContain("bot=worker");
     expect(lines).toContain("→ telegram");
+  });
+});
+
+describe("heartbeat", () => {
+  function makeGateway(reply: string, capture: { req?: ChatRequest }) {
+    return new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: {
+          heartbeat: { enabled: true, bot: "worker", every: "30m" },
+        },
+      }),
+      registry: {
+        get: () => ({
+          name: "mock",
+          async chat(req: ChatRequest): Promise<ChatResponse> {
+            capture.req = req;
+            return {
+              stopReason: "end_turn",
+              content: [{ type: "text", text: reply }],
+              usage: { inputTokens: 10, outputTokens: 5 },
+            };
+          },
+        }),
+      } as never,
+    });
+  }
+
+  test("heartbeat job is synthesized and fires with inbox state", async () => {
+    const capture: { req?: ChatRequest } = {};
+    const gw = makeGateway("ok", capture);
+    const hb = gw.jobs.find((j) => j.kind === "heartbeat");
+    expect(hb?.botName).toBe("worker");
+
+    // seed an unread message in worker's inbox
+    mkdirSync(join(home, "bots", "worker", "inbox"), { recursive: true });
+    writeFileSync(
+      join(home, "bots", "worker", "inbox", "m1.json"),
+      JSON.stringify({ id: "m1", from: "other", to: "worker", subject: "look here", body: "body text", ts: "t", read: false }),
+    );
+
+    await gw.fireDue(Date.now() + 60 * 60_000);
+    await Bun.sleep(30);
+
+    const message = String(capture.req?.messages[0]?.content);
+    expect(message).toContain("Heartbeat check");
+    expect(message).toContain("1 unread message(s)");
+    expect(message).toContain("look here");
+    const toolNames = (capture.req?.tools ?? []).map((t: any) => t.name);
+    expect(toolNames).toContain("check_inbox");
+  });
+
+  test("disabled heartbeat produces no job", () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({ gateway: { heartbeat: { enabled: false, bot: "worker" } } }),
+      registry: { get: () => mockProvider() } as never,
+    });
+    expect(gw.jobs.find((j) => j.kind === "heartbeat")).toBeUndefined();
+  });
+
+  test("heartbeat without bot rejected", () => {
+    expect(() =>
+      parseGatewaySettings({ heartbeat: { enabled: true } }),
+    ).toThrow(/requires a `bot`/);
   });
 });

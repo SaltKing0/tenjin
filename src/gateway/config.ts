@@ -1,5 +1,5 @@
 import { ConfigError } from "../config/types";
-import { parseSchedule } from "./schedule";
+import { parseSchedule, parseEvery } from "./schedule";
 
 export interface JobConfig {
   name: string;
@@ -13,11 +13,18 @@ export interface TelegramChannelConfig {
   enabled: boolean;
   defaultBot?: string;
   allowedUsers: number[];
+  adminChatId?: number;
+}
+
+export interface HeartbeatConfig {
+  bot: string;
+  intervalMs: number;
 }
 
 export interface GatewaySettings {
   jobs: JobConfig[];
   telegram: TelegramChannelConfig | null;
+  heartbeat: HeartbeatConfig | null;
 }
 
 interface RawJob {
@@ -31,13 +38,13 @@ interface RawJob {
 
 export function parseGatewaySettings(raw: unknown): GatewaySettings {
   if (raw === null || raw === undefined) {
-    return { jobs: [], telegram: null };
+    return { jobs: [], telegram: null, heartbeat: null };
   }
   if (typeof raw !== "object") {
     throw new ConfigError("gateway config must be a mapping");
   }
   const gw = raw as Record<string, unknown>;
-  const settings: GatewaySettings = { jobs: [], telegram: null };
+  const settings: GatewaySettings = { jobs: [], telegram: null, heartbeat: null };
 
   const rawJobs = gw.jobs;
   if (rawJobs !== undefined && rawJobs !== null) {
@@ -83,11 +90,26 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
         "gateway.telegram.enabled requires a non-empty allowedUsers allowlist (security)",
       );
     }
+    if (enabled && (typeof tg.defaultBot !== "string" || !tg.defaultBot.trim())) {
+      throw new ConfigError("gateway.telegram.enabled requires a defaultBot");
+    }
     settings.telegram = {
       enabled,
       defaultBot: typeof tg.defaultBot === "string" ? tg.defaultBot : undefined,
       allowedUsers,
+      adminChatId: typeof tg.adminChatId === "number" ? tg.adminChatId : undefined,
     };
+  }
+
+  const rawHb = gw.heartbeat;
+  if (rawHb !== undefined && rawHb !== null) {
+    if (typeof rawHb !== "object") throw new ConfigError("gateway.heartbeat must be a mapping");
+    const hb = rawHb as Record<string, unknown>;
+    if (hb.enabled !== true) return settings;
+    const bot = typeof hb.bot === "string" ? hb.bot.trim() : "";
+    if (!bot) throw new ConfigError("gateway.heartbeat.enabled requires a `bot`");
+    const every = typeof hb.every === "string" ? hb.every : "30m";
+    settings.heartbeat = { bot, intervalMs: parseEvery(every) };
   }
 
   return settings;
