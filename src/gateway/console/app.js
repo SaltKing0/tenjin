@@ -2,6 +2,7 @@
 "use strict";
 
 import { renderMarkdown } from "./markdown.js";
+import { emptyStateFor } from "./empty-state.js";
 
 const $app = document.getElementById("app");
 
@@ -29,6 +30,17 @@ function el(tag, attrs = {}, ...children) {
     node.append(child);
   }
   return node;
+}
+
+// #254: build an empty-state guidance card from the pure empty-state module.
+// CTAs are anchors that drive the existing hashchange router.
+function emptyStateCard(panel) {
+  const def = emptyStateFor(panel);
+  if (!def) return null;
+  const parts = [el("div", { class: "empty-title" }, def.title)];
+  if (def.caption) parts.push(el("div", { class: "dim" }, def.caption));
+  if (def.cta && def.hash) parts.push(el("a", { class: "primary", href: def.hash }, def.cta));
+  return el("div", { class: "card empty-state" }, ...parts);
 }
 
 async function api(path, opts = {}) {
@@ -348,7 +360,13 @@ async function panelSessions(main) {
     const count = data.sessions.length;
     list.replaceChildren();
     if (count === 0) {
-      list.append(el("div", { class: "dim" }, "no sessions in this scope yet"));
+      // #254: guide a first-time user; keep the plain line during a filtered
+      // or paginated view so the CTA isn't misleading.
+      list.append(
+        !q && offset === 0
+          ? emptyStateCard("sessions")
+          : el("div", { class: "dim" }, "no sessions in this scope yet"),
+      );
     }
     for (const session of data.sessions) {
       const when = new Date(session.mtimeMs).toLocaleString();
@@ -637,12 +655,15 @@ async function panelChat(main) {
   const input = el("input", { placeholder: "message your bot…", autofocus: true });
   const sendBtn = el("button", { class: "primary" }, "send");
   main.append(log, el("div", { class: "chat-input" }, input, sendBtn));
+  // #254: with no bots yet, guide the user (dismissed on the first message)
+  if (bots.length === 0) log.append(emptyStateCard("chat"));
 
   async function send() {
     const text = input.value.trim();
     if (!text) return;
     input.value = "";
     sendBtn.disabled = true;
+    log.querySelector(".empty-state")?.remove();
     log.append(el("div", { class: "msg you" }, text));
     const replyMsg = el("div", { class: "msg bot" }, "…");
     log.append(replyMsg);
@@ -768,7 +789,7 @@ async function panelApprovals(main) {
     const data = await apiJson("/api/approvals");
     container.replaceChildren();
     if (data.pending.length === 0) {
-      container.append(el("div", { class: "dim" }, "no pending approvals"));
+      container.append(emptyStateCard("approvals") ?? el("div", { class: "dim" }, "no pending approvals"));
       return;
     }
     for (const req of data.pending) {
@@ -831,7 +852,7 @@ async function panelJobs(main) {
     const jobs = data.jobs || [];
     list.replaceChildren();
     if (jobs.length === 0) {
-      list.append(el("div", { class: "dim" }, "no jobs configured"));
+      list.append(emptyStateCard("jobs") ?? el("div", { class: "dim" }, "no jobs configured"));
       return;
     }
     for (const job of jobs) {
@@ -922,6 +943,11 @@ async function panelMemory(main) {
   } catch (e) {
     box.append(el("div", { class: "err" }, `no memory for ${currentBot}: ${e.message}`));
     return;
+  }
+
+  // #254: guide a first-time user when nothing has been persisted in this scope
+  if (data.summaries.length === 0 && !data.facts) {
+    box.append(emptyStateCard("memory"));
   }
 
   // facts

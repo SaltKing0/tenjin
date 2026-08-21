@@ -38,6 +38,7 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   "/console": { file: "index.html", type: "text/html; charset=utf-8" },
   "/console/app.js": { file: "app.js", type: "application/javascript; charset=utf-8" },
   "/console/markdown.js": { file: "markdown.js", type: "application/javascript; charset=utf-8" },
+  "/console/empty-state.js": { file: "empty-state.js", type: "application/javascript; charset=utf-8" },
   "/console/style.css": { file: "style.css", type: "text/css; charset=utf-8" },
 };
 
