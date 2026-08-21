@@ -1,5 +1,6 @@
 import { ConfigError } from "../config/types";
 import { parseSchedule, parseEvery } from "./schedule";
+import { knownChannel } from "./channel";
 
 export interface JobConfig {
   name: string;
@@ -49,6 +50,7 @@ export interface CatchUpConfig {
 export interface GatewaySettings {
   jobs: JobConfig[];
   telegram: TelegramChannelConfig | null;
+  channels: string[];
   heartbeat: HeartbeatConfig | null;
   listen: ListenConfig | null;
   allowWrites: boolean;
@@ -86,6 +88,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     return {
       jobs: [],
       telegram: null,
+      channels: [],
       heartbeat: null,
       listen: null,
       allowWrites: false,
@@ -99,6 +102,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
   const settings: GatewaySettings = {
     jobs: [],
     telegram: null,
+    channels: [],
     heartbeat: null,
     listen: null,
     allowWrites: gw.allowWrites === true || undefined,
@@ -197,6 +201,27 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
       maxMessageLength:
         typeof tg.maxMessageLength === "number" ? tg.maxMessageLength : undefined,
     };
+  }
+
+  const rawChannels = gw.channels;
+  if (rawChannels !== undefined && rawChannels !== null) {
+    if (!Array.isArray(rawChannels)) {
+      throw new ConfigError("gateway.channels must be a list");
+    }
+    const list: string[] = [];
+    for (const c of rawChannels as unknown[]) {
+      if (typeof c !== "string" || !c.trim()) {
+        throw new ConfigError("gateway.channels entries must be non-empty strings");
+      }
+      const name = c.trim();
+      if (!knownChannel(name)) {
+        throw new ConfigError(`gateway.channels: unknown channel "${name}"`);
+      }
+      list.push(name);
+    }
+    settings.channels = list;
+  } else {
+    settings.channels = settings.telegram?.enabled ? ["telegram"] : [];
   }
 
   const rawHb = gw.heartbeat;

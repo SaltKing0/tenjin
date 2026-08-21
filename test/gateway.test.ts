@@ -52,6 +52,7 @@ describe("parseGatewaySettings", () => {
     expect(parseGatewaySettings(undefined)).toEqual({
       jobs: [],
       telegram: null,
+      channels: [],
       heartbeat: null,
       listen: null,
       allowWrites: false,
@@ -60,6 +61,7 @@ describe("parseGatewaySettings", () => {
     expect(parseGatewaySettings(null)).toEqual({
       jobs: [],
       telegram: null,
+      channels: [],
       heartbeat: null,
       listen: null,
       allowWrites: false,
@@ -169,6 +171,20 @@ describe("parseGatewaySettings", () => {
     expect(s.telegram?.rateLimitMax).toBe(5);
     expect(s.telegram?.rateLimitWindowMs).toBe(10_000);
     expect(s.telegram?.maxMessageLength).toBe(512);
+  });
+
+  test("channels list defaults from telegram and validates kinds (#97)", () => {
+    expect(parseGatewaySettings({}).channels).toEqual([]);
+    expect(
+      parseGatewaySettings({
+        telegram: { enabled: true, allowedUsers: [42], defaultBot: "researcher" },
+      }).channels,
+    ).toEqual(["telegram"]);
+    const explicit = parseGatewaySettings({ channels: ["telegram"] });
+    expect(explicit.channels).toEqual(["telegram"]);
+    expect(() => parseGatewaySettings({ channels: "notalist" })).toThrow(/must be a list/);
+    expect(() => parseGatewaySettings({ channels: ["slack"] })).toThrow(/unknown channel/);
+    expect(() => parseGatewaySettings({ channels: [3] })).toThrow(/strings/);
   });
 });
 

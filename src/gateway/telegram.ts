@@ -1,4 +1,5 @@
 import { ConfigError } from "../config/types";
+import type { Channel, ChannelInbound } from "./channel";
 
 export interface TelegramOptions {
   token: string;
@@ -6,6 +7,7 @@ export interface TelegramOptions {
   defaultBot: string;
   allowedUsers: number[];
   pollTimeoutSec?: number;
+  adminChatId?: number;
   /** Max inbound messages per chat id per sliding window. 0 disables the limit. Default 20. */
   rateLimitMax?: number;
   /** Sliding-window length for `rateLimitMax`, in ms. Default 60_000. */
@@ -119,17 +121,25 @@ export function routeBoundText(
   return { ok: true, bot: routed.bot, rest: routed.rest };
 }
 
-export class TelegramChannel {
+export class TelegramChannel implements Channel {
+  readonly name = "telegram" as const;
   private offset = 0;
   private rateHits = new Map<number, number[]>();
+  private handler?: (msg: InboundMessage) => Promise<string | null>;
+  private own = new AbortController();
 
   constructor(
     private opts: TelegramOptions,
-    private onMessage: (msg: InboundMessage) => Promise<string | null>,
-    private log: (line: string) => void,
+    onMessage?: (msg: ChannelInbound) => Promise<string | null>,
+    private log: (line: string) => void = () => {},
   ) {
     if (!opts.token) throw new ConfigError("telegram token is empty");
     if (!opts.defaultBot) throw new ConfigError("telegram defaultBot is not set");
+    if (onMessage) this.handler = onMessage;
+  }
+
+  onMessage(handler: (msg: ChannelInbound) => Promise<string | null>): void {
+    this.handler = handler;
   }
 
   private url(method: string): string {
@@ -137,7 +147,20 @@ export class TelegramChannel {
     return `${base}/bot${this.opts.token}/${method}`;
   }
 
-  async send(chatId: number, text: string): Promise<void> {
+  send(chatId: number, text: string): Promise<void>;
+  send(text: string): Promise<void>;
+  async send(chatIdOrText: number | string, maybeText?: string): Promise<void> {
+    if (typeof chatIdOrText === "number") {
+      await this.postMessage(chatIdOrText, maybeText as string);
+      return;
+    }
+    if (this.opts.adminChatId === undefined) {
+      throw new ConfigError("telegram channel needs adminChatId to send()");
+    }
+    await this.postMessage(this.opts.adminChatId, chatIdOrText);
+  }
+
+  private async postMessage(chatId: number, text: string): Promise<void> {
     const res = await fetch(this.url("sendMessage"), {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -209,7 +232,7 @@ export class TelegramChannel {
 
       handled++;
       try {
-        const reply = await this.onMessage({
+        const reply = await this.handler?.({
           chatId,
           userId,
           username: msg.from.username,
@@ -222,6 +245,21 @@ export class TelegramChannel {
       }
     }
     return handled;
+  }
+
+  async start(signal: AbortSignal): Promise<void> {
+    const onAbort = () => this.own.abort();
+    if (signal.aborted) this.own.abort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      await this.run(this.own.signal);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  stop(): void {
+    this.own.abort();
   }
 
   async run(signal: AbortSignal): Promise<void> {
