@@ -222,6 +222,7 @@ gateway:
   catchUp:                    # re-run jobs missed while the gateway was down
     enabled: true             # default true
     max: 50                   # max runs caught up per boot
+  channels: [telegram]        # active channel kinds; default [telegram] when telegram.enabled
   telegram:
     enabled: true
     defaultBot: researcher
@@ -258,6 +259,9 @@ gateway:
   while it was down (default `enabled: true`, `max: 50` runs per boot). A job is
   caught up when the next scheduled run after its last run is already in the
   past; the last run of each job is persisted in `~/.tenjin/gateway-state.json`.
+- **`channels`** — the list of channel kinds the gateway starts. Each name must
+  be a registered channel (an unknown name is a config error). Defaults to
+  `[telegram]` when `telegram.enabled` is true, else empty.
 - **`telegram`** — requires a non-empty `allowedUsers` allowlist and a
   `TELEGRAM_BOT_TOKEN` env var.
 - **`jobs`** — scheduled prompts to a bot on a cron or `every` schedule
