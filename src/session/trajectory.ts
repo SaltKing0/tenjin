@@ -3,6 +3,9 @@ import type { SessionEvent } from "./events";
 export interface TrajectoryOptions {
   maxLine?: number;
   maxArgs?: number;
+  /** Render with no truncation (#136). Used for machine-consumed summaries so
+   * the model sees complete events; the human console keeps the capped view. */
+  full?: boolean;
 }
 
 export function renderTrajectory(
@@ -11,6 +14,7 @@ export function renderTrajectory(
 ): string[] {
   const maxLine = opts.maxLine ?? 160;
   const maxArgs = opts.maxArgs ?? 80;
+  const full = opts.full === true;
   const lines: string[] = [];
   const callNames = new Map<string, string>();
   let sawContent = false;
@@ -29,7 +33,8 @@ export function renderTrajectory(
       case "message": {
         if (e.role === "user") {
           if (typeof e.content !== "string") continue;
-          lines.push(`you> ${truncate(e.content.replace(/\s+/g, " "), maxLine)}`);
+          const line = e.content.replace(/\s+/g, " ");
+          lines.push(`you> ${full ? line : truncate(line, maxLine)}`);
         } else {
           const blocks =
             typeof e.content === "string"
@@ -40,14 +45,15 @@ export function renderTrajectory(
             .join(" ")
             .replace(/\s+/g, " ")
             .trim();
-          if (text) lines.push(`tenjin> ${truncate(text, maxLine)}`);
+          if (text) lines.push(`tenjin> ${full ? text : truncate(text, maxLine)}`);
         }
         sawContent = true;
         break;
       }
       case "tool_call": {
         callNames.set(e.id, e.name);
-        lines.push(`  -> ${e.name} ${truncate(JSON.stringify(e.input ?? {}), maxArgs)}`);
+        const input = JSON.stringify(e.input ?? {});
+        lines.push(`  -> ${e.name} ${full ? input : truncate(input, maxArgs)}`);
         sawContent = true;
         break;
       }
@@ -57,7 +63,8 @@ export function renderTrajectory(
         if (e.ok) {
           lines.push(`  <- ${label}ok (${formatSize(e.output.length)})`);
         } else {
-          lines.push(`  <- ${label}ERR: ${truncate(firstLine(e.output), maxLine)}`);
+          const out = firstLine(e.output);
+          lines.push(`  <- ${label}ERR: ${full ? out : truncate(out, maxLine)}`);
         }
         sawContent = true;
         break;
@@ -70,7 +77,8 @@ export function renderTrajectory(
         break;
       }
       case "error": {
-        lines.push(`! error: ${truncate(firstLine(e.message), maxLine)}`);
+        const msg = firstLine(e.message);
+        lines.push(`! error: ${full ? msg : truncate(msg, maxLine)}`);
         sawContent = true;
         break;
       }
@@ -86,6 +94,13 @@ export function renderTrajectory(
 
   if (!sawContent) lines.push("(empty session)");
   return lines;
+}
+
+/**
+ * Full, untruncated trajectory rendering for machine-consumed summaries (#136).
+ */
+export function renderFullTrajectory(events: SessionEvent[]): string[] {
+  return renderTrajectory(events, { full: true });
 }
 
 function truncate(text: string, max: number): string {

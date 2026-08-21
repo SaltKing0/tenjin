@@ -340,3 +340,99 @@ describe("summarizeLatestSession (#37 gateway path)", () => {
     }
   });
 });
+
+describe("summary full trajectory + map-reduce (#136)", () => {
+  function seedManyMessages(n: number, per: number): SessionLog {
+    const log = SessionLog.create(home);
+    log.append({
+      t: "session_start",
+      id: log.id,
+      ts: "t",
+      provider: "anthropic",
+      model: "test-model",
+    });
+    for (let i = 0; i < n; i++) {
+      log.append({ t: "message", role: "user", content: `fact ${i} ` + "z".repeat(per), ts: "t" });
+    }
+    return log;
+  }
+
+  test("summary prompt uses complete events, not 160-char truncated lines", async () => {
+    const longUser = "head " + "x".repeat(180) + " KEYFACT_BEYOND_160";
+    const log = seedSession(longUser);
+    const provider = mockProvider("ok");
+    await generateSummary(log, {
+      provider,
+      model: "m",
+      maxTokens: 512,
+      projectPath: project,
+      memoryDirPath: home,
+    });
+
+    const prompt = String(provider.requests[0]?.messages[0]?.content);
+    expect(prompt).toContain("KEYFACT_BEYOND_160");
+    // The fact sits beyond the 160th char, where the old truncating render cut it.
+    expect(prompt.indexOf("KEYFACT_BEYOND_160")).toBeGreaterThan(160);
+  });
+
+  test("long session map-reduces: chunk summaries then a fusion call", async () => {
+    // ~6×150 chars of user text + header ≈ 900+ chars of trajectory.
+    const log = seedManyMessages(6, 150);
+    const provider = mockProvider("fused");
+    const text = await generateSummary(log, {
+      provider,
+      model: "m",
+      maxTokens: 512,
+      projectPath: project,
+      memoryDirPath: home,
+      promptBudgetTokens: 50, // 200 input chars/call → forces multiple chunks
+    });
+
+    const prompts = provider.requests.map((r) => String(r.messages?.[0]?.content ?? ""));
+    // multiple chunk calls + one fusion call
+    expect(prompts.length).toBeGreaterThan(2);
+    // every intermediate call is a per-chunk summary …
+    for (let i = 0; i < prompts.length - 1; i++) {
+      expect(prompts[i] ?? "").toContain("Summarize this portion");
+    }
+    // … and the final call is the fusion.
+    expect(prompts[prompts.length - 1] ?? "").toContain("Partial summaries");
+
+    // The input budget is respected: no single chunk call carries the whole
+    // ~900-char trajectory.
+    const inputBudget = 50 * 4 + 300; // tokens→chars + fixed prompt overhead
+    for (let i = 0; i < prompts.length - 1; i++) {
+      expect((prompts[i] ?? "").length).toBeLessThan(inputBudget);
+    }
+
+    // The fused summary is what gets written.
+    const entry = readSummary(summaryPath(home, log.id));
+    expect(entry?.text).toBe("fused");
+  });
+
+  test("map-reduce folds an existing summary into the fusion", async () => {
+    const log = seedSession("alpha work");
+    const provider = mockProvider("first");
+    const opts = {
+      provider,
+      model: "m",
+      maxTokens: 512,
+      projectPath: project,
+      memoryDirPath: home,
+    };
+    await generateSummary(log, opts);
+    expect(provider.requests).toHaveLength(1);
+
+    // A burst of new activity makes the incremental pass overflow the budget.
+    for (let i = 0; i < 6; i++) {
+      log.append({ t: "message", role: "user", content: `new fact ${i} ` + "y".repeat(150), ts: "t" });
+    }
+    await generateSummary(log, { ...opts, promptBudgetTokens: 50 });
+
+    const prompts = provider.requests.map((r) => String(r.messages?.[0]?.content ?? ""));
+    const last = prompts[prompts.length - 1] ?? "";
+    expect(prompts.length).toBeGreaterThan(2);
+    expect(last).toContain("Existing summary");
+    expect(last).toContain("first"); // prior summary carried into the fusion
+  });
+});
