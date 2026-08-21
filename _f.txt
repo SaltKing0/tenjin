@@ -1,0 +1,10 @@
+blocked", async () => {
+        ^
+error: Cannot call test() inside a test. Call it inside describe() instead.
+      at <anonymous> (/home/ubuntu/stealth/test/loop.test.ts:238:3)
+(fail) runAgentTurn > context guard disabled emits no compression [0.65ms]
+
+ 7 pass
+ 1 fail
+ 28 expect() calls
+Ran 8 tests across 1 file. [24.00ms]

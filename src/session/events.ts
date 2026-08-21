@@ -27,7 +27,14 @@ export type SessionEvent =
       spentUSD: number;
       ts: string;
     }
-  | { t: "error"; message: string; ts: string };
+  | { t: "error"; message: string; ts: string }
+  | {
+      t: "compression";
+      beforeTokens: number;
+      afterTokens: number;
+      elidedTokens: number;
+      ts: string;
+    };
 
 export interface EventLogger {
   append(event: SessionEvent): void;

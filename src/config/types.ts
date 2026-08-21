@@ -46,6 +46,7 @@ export interface HarnessConfig {
   retry?: RetryConfig;
   /** Global spend limits (USD) across all scopes — see audit/global-budget.ts. */
   globalBudget?: GlobalBudgetConfig;
+  context?: ContextConfig;
 }
 
 /** `globalBudget` in config.yaml — global spend caps across solo + all bots. */
@@ -74,4 +75,16 @@ export interface RetryConfig {
   maxDelayMs?: number;
   /** HTTP statuses that trigger a retry (429 or 5xx by default). */
   retryableStatuses?: number[];
+}
+
+/** `context` in config.yaml — context-window guard (#101). */
+export interface ContextConfig {
+  /** Master switch; on by default. */
+  enabled?: boolean;
+  /** Compress when the estimate exceeds this fraction of the window. Default 0.8. */
+  thresholdRatio?: number;
+  /** Context window (tokens) for models not in the built-in table or `windows`. */
+  defaultWindow?: number;
+  /** Per-model context-window override (tokens). */
+  windows?: Record<string, number>;
 }

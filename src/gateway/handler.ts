@@ -201,6 +201,7 @@ export function createMessageHandler(deps: HandlerDeps) {
         onTextDelta: ctx.onDelta,
         onToolActivity: ctx.onTool,
         redactor: Redactor.fromConfig(deps.config.security),
+        context: deps.config.context,
       });
     } catch (e) {
       throw annotateChatError(e, ref);

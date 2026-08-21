@@ -395,6 +395,7 @@ export class Gateway {
           this.deps.guard?.onBlock,
         ),
         redactor: Redactor.fromConfig(this.deps.config.security),
+        context: this.deps.config.context,
       });
       // #19: a per-job timeout releases a hung provider call so it can't pin
       // the job slot forever. The loser is detached (may settle later in the

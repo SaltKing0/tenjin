@@ -74,6 +74,13 @@ export function renderTrajectory(
         sawContent = true;
         break;
       }
+      case "compression": {
+        lines.push(
+          `~ context: ${formatTokens(e.beforeTokens)} -> ${formatTokens(e.afterTokens)} (elided ${formatTokens(e.elidedTokens)})`,
+        );
+        sawContent = true;
+        break;
+      }
     }
   }
 

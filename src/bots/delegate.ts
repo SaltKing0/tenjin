@@ -85,6 +85,7 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
         audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
         sessionLogDir: profile.sessionsDir,
         sessionBot: profile.name,
+        context: deps.globalConfig.context,
       });
 
       const text = result.text;

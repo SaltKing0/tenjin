@@ -6,6 +6,7 @@ import { resolveModelRef } from "./models";
 import {
   ConfigError,
   type ApprovalMode,
+  type ContextConfig,
   type GlobalBudgetConfig,
   type HarnessConfig,
   type InboxConfig,
@@ -16,7 +17,7 @@ import {
 } from "./types";
 
 export { ConfigError };
-export type { ApprovalMode, GlobalBudgetConfig, HarnessConfig, PricingConfig, PricingOverride, ProviderName };
+export type { ApprovalMode, ContextConfig, GlobalBudgetConfig, HarnessConfig, PricingConfig, PricingOverride, ProviderName };
 
 const DEFAULTS: HarnessConfig = {
   provider: "anthropic",
@@ -129,6 +130,16 @@ const SCHEMA: Record<string, FieldDef> = {
     children: {
       dailyUSD: { types: ["number"] },
       monthlyUSD: { types: ["number"] },
+    },
+  },
+  // `context` from #101 (context-window guard).
+  context: {
+    types: ["mapping"],
+    children: {
+      enabled: { types: ["boolean"] },
+      thresholdRatio: { types: ["number"] },
+      defaultWindow: { types: ["number"] },
+      windows: { types: ["mapping"], valueType: "number" },
     },
   },
 };
@@ -254,6 +265,12 @@ memory:
 # globalBudget:                # global spend caps (USD) across solo + ALL bots
 #   dailyUSD: 2.0              # max total spend per UTC day across all scopes; 0 = unlimited
 #   monthlyUSD: 20.0           # max total spend per UTC month across all scopes; 0 = unlimited
+# context:                     # context-window guard (chars/4 estimate)
+#   enabled: true              # compress old tool results once the estimate nears the limit
+#   thresholdRatio: 0.8        # compress when estimate > 80% of the model's context window
+#   # defaultWindow: 128000    # context window (tokens) for unknown models
+#   # windows:                 # per-model context-window override
+#   #   my-model: 32000
 `;
 
 const SOUL_TEMPLATE = `# SOUL
@@ -477,6 +494,7 @@ function validate(cfg: HarnessConfig, globalPath: string, skipModelCheck: boolea
   validateInbox(cfg.inbox);
   validateRetry(cfg.retry);
   validateGlobalBudget(cfg.globalBudget);
+  validateContext(cfg.context);
 }
 
 function validateRatePair(pair: unknown, label: string): void {
@@ -550,6 +568,37 @@ function validateGlobalBudget(budget: GlobalBudgetConfig | undefined): void {
   }
   if (budget.monthlyUSD !== undefined && (typeof budget.monthlyUSD !== "number" || budget.monthlyUSD < 0)) {
     throw new ConfigError(`globalBudget.monthlyUSD must be a number >= 0 (0 = unlimited)`);
+  }
+}
+
+function validateContext(context: ContextConfig | undefined): void {
+  if (context === undefined) return;
+  if (typeof context !== "object" || context === null) {
+    throw new ConfigError(`context must be a mapping`);
+  }
+  if (
+    context.thresholdRatio !== undefined &&
+    (typeof context.thresholdRatio !== "number" ||
+      context.thresholdRatio <= 0 ||
+      context.thresholdRatio > 1)
+  ) {
+    throw new ConfigError(`context.thresholdRatio must be a number in (0, 1]`);
+  }
+  if (
+    context.defaultWindow !== undefined &&
+    (typeof context.defaultWindow !== "number" || context.defaultWindow < 1)
+  ) {
+    throw new ConfigError(`context.defaultWindow must be a number >= 1`);
+  }
+  if (context.windows !== undefined) {
+    if (typeof context.windows !== "object" || context.windows === null) {
+      throw new ConfigError(`context.windows must be a mapping of model -> window tokens`);
+    }
+    for (const [model, tokens] of Object.entries(context.windows)) {
+      if (typeof tokens !== "number" || tokens < 1) {
+        throw new ConfigError(`context.windows.${model} must be a number >= 1`);
+      }
+    }
   }
 }
 

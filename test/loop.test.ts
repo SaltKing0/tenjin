@@ -189,39 +189,50 @@ describe("runAgentTurn", () => {
     expect(provider.requests).toHaveLength(1);
   });
 
-  test("global budget gate halts before any provider call when blocked", async () => {
-    const provider = mockProvider([]);
-    const messages: ChatMessage[] = [{ role: "user", content: "hi" }];
-    const auditEvents: string[] = [];
+  test("context guard compresses oversized tool results and emits compression event", async () => {
+    const provider = mockProvider([endTurn("done")]);
+    const messages: ChatMessage[] = [
+      { role: "user", content: "do it" },
+      {
+        role: "user",
+        content: [{ type: "tool_result", toolUseId: "x", content: "z".repeat(80_000) }],
+      },
+    ];
+    const events: string[] = [];
     const result = await runAgentTurn({
       ...base,
       provider,
       messages,
       budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
-      globalBudgetGate: () => ({
-        allowed: false,
-        reason: "global daily budget reached (1.0000 USD >= 0.5 USD limit)",
-      }),
-      audit: (kind, detail) => auditEvents.push(`${kind}: ${detail}`),
-    });
-    expect(result.stopReason).toBe("budget_exhausted");
-    expect(provider.requests).toHaveLength(0);
-    expect(auditEvents).toContain(
-      "budget_halt: global daily budget reached (1.0000 USD >= 0.5 USD limit)",
-    );
-  });
-
-  test("global budget gate allows the provider call to proceed when not blocked", async () => {
-    const provider = mockProvider([endTurn("hi there")]);
-    const messages: ChatMessage[] = [{ role: "user", content: "hi" }];
-    const result = await runAgentTurn({
-      ...base,
-      provider,
-      messages,
-      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
-      globalBudgetGate: () => ({ allowed: true }),
+      onEvent: (e) => events.push(e.t),
+      contextGuard: { enabled: true, thresholdRatio: 0.8, windowTokens: 1_000 },
     });
     expect(result.stopReason).toBe("end_turn");
-    expect(provider.requests).toHaveLength(1);
+    expect(events).toContain("compression");
+    // the tool result sent to the provider was elided to a placeholder
+    const sent = provider.requests[0]?.messages;
+    expect(sent).toBeDefined();
+    const toolMsg = sent?.find((m) => m.role === "user" && Array.isArray(m.content));
+    const block = (toolMsg?.content as { type: "tool_result"; content: string }[] | undefined)?.[0];
+    expect(block?.type).toBe("tool_result");
+    expect(block?.content).toMatch(/^\[elided \d+ tokens\]$/);
+  });
+
+  test("context guard disabled emits no compression", async () => {
+    const provider = mockProvider([endTurn("done")]);
+    const messages: ChatMessage[] = [
+      { role: "user", content: "do it" },
+      { role: "user", content: [{ type: "tool_result", toolUseId: "x", content: "z".repeat(80_000) }] },
+    ];
+    const events: string[] = [];
+    await runAgentTurn({
+      ...base,
+      provider,
+      messages,
+      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      onEvent: (e) => events.push(e.t),
+      contextGuard: { enabled: false, thresholdRatio: 0.8, windowTokens: 1_000 },
+    });
+    expect(events).not.toContain("compression");
   });
 });

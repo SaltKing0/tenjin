@@ -702,6 +702,7 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     audit: (kind, detail, correlationId) =>
       new AuditLog(auditPath(ctx.home)).append(kind, "user", detail, undefined, correlationId),
     redactor: Redactor.fromConfig(ctx.config.security),
+    context: ctx.config.context,
   });
   stdout.write(`${result.text}\n`);
   stdout.write(

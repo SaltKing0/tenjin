@@ -14,6 +14,7 @@ import type { EventLogger, SessionEvent } from "../session/events";
 import { rebuildMessages, sumUsage } from "../session/events";
 import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
+import { resolveContextGuard } from "../session/context";
 import { buildSkillsSection, summarizeSkills } from "../skills/activate";
 import { createAskBotTool } from "../bots/delegate";
 import { listBots, resolveBot } from "../bots/profile";
@@ -151,6 +152,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           onTextDelta: (d) => stdout.write(d),
           onEvent: (e) => forwardEvent(e, state.logger, state.budget),
           signal: controller.signal,
+          contextGuard: resolveContextGuard(state.active.model, opts.config.context),
         });
         stdout.write("\n");
         if (result.stopReason === "budget_exhausted") {
@@ -516,6 +518,15 @@ function forwardEvent(e: TurnEvent, logger?: EventLogger, budget?: Budget): void
         outputTokens: e.usage.outputTokens,
         costUSD: e.costUSD,
         spentUSD: budget?.spentUSD ?? -1,
+        ts: now(),
+      });
+      break;
+    case "compression":
+      logger.append({
+        t: "compression",
+        beforeTokens: e.beforeTokens,
+        afterTokens: e.afterTokens,
+        elidedTokens: e.elidedTokens,
         ts: now(),
       });
       break;
