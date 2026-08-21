@@ -99,4 +99,39 @@ describe("buildSystemPrompt", () => {
     const prompt = buildSystemPrompt({ ...base, soulText: "a", cwd: "/" });
     expect(prompt).toContain("a\n\n# Environment");
   });
+
+  test("facts section renders right after soul", () => {
+    const prompt = buildSystemPrompt({
+      ...base,
+      soulText: "soul here",
+      cwd: "/",
+      facts: "- [2026-08-21] prefers bun",
+    });
+    expect(prompt).toContain("# Facts\n- [2026-08-21] prefers bun");
+    const soulIdx = prompt.indexOf("soul here");
+    const factsIdx = prompt.indexOf("# Facts");
+    const envIdx = prompt.indexOf("# Environment");
+    expect(soulIdx).toBeLessThan(factsIdx);
+    expect(factsIdx).toBeLessThan(envIdx);
+  });
+
+  test("full assembly orders soul, facts, environment, style, agents, memory", () => {
+    const prompt = buildSystemPrompt({
+      soulText: "SOUL",
+      cwd: "/c",
+      facts: "F1",
+      agentsMd: "AGENTS",
+      memorySection: "# Memory — recent sessions in this project\nMEM",
+    });
+    const order = [
+      prompt.indexOf("SOUL"),
+      prompt.indexOf("# Facts"),
+      prompt.indexOf("# Environment"),
+      prompt.indexOf("# Working style"),
+      prompt.indexOf("# Project context"),
+      prompt.indexOf("# Memory —"),
+    ];
+    expect(order.every((i) => i > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
 });

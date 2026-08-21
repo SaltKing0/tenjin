@@ -7,6 +7,8 @@ import {
   ensureGlobalDir,
   ConfigError,
   tenjinHome,
+  memoryEnabled,
+  vectorEnabled,
 } from "../src/config/loader";
 
 let home: string;
@@ -120,4 +122,29 @@ test("tenjinHome respects TENJIN_HOME env", () => {
   expect(tenjinHome()).toBe("/tmp/xyz-home");
   if (prev === undefined) delete process.env.TENJIN_HOME;
   else process.env.TENJIN_HOME = prev;
+});
+
+describe("memory flags", () => {
+  const cfg = (over: any) => ({
+    provider: "anthropic",
+    model: "m",
+    maxTokens: 8192,
+    budgetUSD: 5,
+    approval: {},
+    ...over,
+  });
+
+  test("memory enabled by default, disabled explicitly", () => {
+    expect(memoryEnabled(cfg({}))).toBe(true);
+    expect(memoryEnabled(cfg({ memory: { enabled: false } }))).toBe(false);
+  });
+
+  test("vector follows memory master switch and its own flag", () => {
+    expect(vectorEnabled(cfg({}))).toBe(true);
+    expect(vectorEnabled(cfg({ memory: { enabled: false } }))).toBe(false);
+    expect(vectorEnabled(cfg({ memory: { enabled: true, vector: { enabled: false } } }))).toBe(
+      false,
+    );
+    expect(vectorEnabled(cfg({ memory: { vector: { enabled: true } } }))).toBe(true);
+  });
 });

@@ -72,7 +72,13 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
 
   try {
     while (true) {
-      const line = (await rl.question(bold("you> "))).trim();
+      let raw: string | null;
+      try {
+        raw = await rl.question(bold("you> "));
+      } catch {
+        break;
+      }
+      const line = raw.trim();
       if (!line) continue;
 
       if (line.startsWith("/")) {
