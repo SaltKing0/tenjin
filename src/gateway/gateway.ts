@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { HarnessConfig } from "../config/types";
 import { ConfigError } from "../config/types";
 import { ProviderRegistry } from "../provider/registry";
@@ -41,6 +43,7 @@ export interface JobView {
   running: boolean;
   kind: "job" | "heartbeat";
   postTo?: string;
+  timeoutMs?: number;
 }
 
 export type JobRunResult =
@@ -57,6 +60,8 @@ export interface ScheduledJob {
   running: boolean;
   kind: "job" | "heartbeat";
   lastRun: JobLastRun | null;
+  /** Optional hard cap on a single run (ms). A hung run is released after this. */
+  timeoutMs?: number;
 }
 
 export interface GatewayDeps {
@@ -84,6 +89,7 @@ export function buildJobs(settings: GatewaySettings, fromMs: number): ScheduledJ
     running: false,
     kind: "job" as const,
     lastRun: null,
+    ...(j.timeoutMs !== undefined ? { timeoutMs: j.timeoutMs } : {}),
   }));
   if (settings.heartbeat) {
     const hb = settings.heartbeat;
@@ -124,6 +130,7 @@ export function jobView(job: ScheduledJob): JobView {
     running: job.running,
     kind: job.kind,
     ...(job.postTo ? { postTo: job.postTo } : {}),
+    ...(job.timeoutMs !== undefined ? { timeoutMs: job.timeoutMs } : {}),
   };
 }
 
@@ -143,13 +150,75 @@ export function msUntilNextJob(jobs: ScheduledJob[], nowMs: number): number {
   return Math.max(0, Math.min(earliest - nowMs, 30_000));
 }
 
+/**
+ * Persisted gateway state so a restart can tell which scheduled runs have
+ * already happened. Kept deliberately tiny: just the last run per job.
+ */
+interface GatewayStateFile {
+  version: 1;
+  jobs: Record<string, { lastRun: JobLastRun | null }>;
+}
+
+function statePath(home: string): string {
+  return join(home, "gateway-state.json");
+}
+
+export function loadGatewayState(home: string): GatewayStateFile {
+  const empty: GatewayStateFile = { version: 1, jobs: {} };
+  const path = statePath(home);
+  if (!existsSync(path)) return empty;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as GatewayStateFile;
+    if (
+      parsed &&
+      parsed.version === 1 &&
+      parsed.jobs &&
+      typeof parsed.jobs === "object"
+    ) {
+      return parsed;
+    }
+    return empty;
+  } catch {
+    return empty;
+  }
+}
+
+export function saveGatewayState(home: string, state: GatewayStateFile): void {
+  writeFileSync(statePath(home), JSON.stringify(state, null, 2));
+}
+
+/** Settle `p` within `ms`; a timeout rejects with `msg`. The loser is detached. */
+function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(msg)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 export class Gateway {
   readonly settings: GatewaySettings;
   readonly jobs: ScheduledJob[];
+  private state: GatewayStateFile;
 
   constructor(private deps: GatewayDeps) {
     this.settings = parseGatewaySettings(deps.config.gateway);
     this.jobs = buildJobs(this.settings, Date.now());
+    // #19: hydrate the last run of each job from persisted state so a restart
+    // knows which scheduled runs have already happened (enables catch-up).
+    this.state = loadGatewayState(deps.home);
+    for (const job of this.jobs) {
+      const saved = this.state.jobs[job.name]?.lastRun;
+      if (saved) job.lastRun = saved;
+    }
   }
 
   private log(line: string): void {
@@ -178,6 +247,51 @@ export class Gateway {
 
   listJobs(): JobView[] {
     return this.jobs.map(jobView);
+  }
+
+  /** Persist a job's last run so catch-up works across restarts. */
+  private persistJob(job: ScheduledJob): void {
+    this.state.jobs[job.name] = { lastRun: job.lastRun };
+    try {
+      saveGatewayState(this.deps.home, this.state);
+    } catch {
+      // Best-effort: state persistence must never fail a job run.
+    }
+  }
+
+  /**
+   * #19: whether `job` has a scheduled run that came due after its last run and
+   * was therefore skipped while the gateway was down. No persisted history yet
+   * (first ever boot) → nothing to catch up.
+   */
+  isOverdue(job: ScheduledJob, nowMs = Date.now()): boolean {
+    if (!job.lastRun) return false;
+    if (job.running) return false;
+    return nextRun(job.schedule, job.lastRun.atMs) <= nowMs;
+  }
+
+  /**
+   * #19: fire the jobs whose scheduled runs were missed during downtime, at
+   * most `catchUp.max` per boot. Each runs once now, then resumes its normal
+   * cadence. Returns how many runs were fired.
+   */
+  async catchUpOverdue(nowMs = Date.now()): Promise<number> {
+    if (!this.settings.catchUp.enabled) return 0;
+    const candidates = this.jobs.filter((j) => this.isOverdue(j, nowMs));
+    const toFire = candidates.slice(0, this.settings.catchUp.max);
+    for (const job of toFire) {
+      this.log(`job ${job.name} catch-up: missed run(s) during downtime, firing`);
+      job.running = true;
+      try {
+        await this.execute(job);
+      } catch (e) {
+        this.log(`job ${job.name} catch-up error: ${(e as Error).message}`);
+      } finally {
+        job.running = false;
+      }
+      job.nextDueMs = nextRun(job.schedule, nowMs);
+    }
+    return toFire.length;
   }
 
   /**
@@ -257,7 +371,7 @@ export class Gateway {
           group === "read" || tools.some((t) => t.name === name);
       }
 
-      const result = await runHeadless({
+      const headless = runHeadless({
         provider: this.deps.registry.get(ref.provider),
         model: ref.model,
         soulText: profile.soulText,
@@ -281,11 +395,22 @@ export class Gateway {
         ),
         redactor: Redactor.fromConfig(this.deps.config.security),
       });
+      // #19: a per-job timeout releases a hung provider call so it can't pin
+      // the job slot forever. The loser is detached (may settle later in the
+      // background) — freeing the slot is what matters.
+      const result = job.timeoutMs
+        ? await withTimeout(
+            headless,
+            job.timeoutMs,
+            `job ${job.name} timed out after ${job.timeoutMs}ms`,
+          )
+        : await headless;
       job.lastRun = {
         atMs: Date.now(),
         stopReason: result.stopReason,
         costUSD: result.costUSD,
       };
+      this.persistJob(job);
       this.log(
         `job ${job.name} done (${result.stopReason}, ${formatUSD(result.costUSD)})`,
       );
@@ -317,6 +442,7 @@ export class Gateway {
           costUSD: 0,
           error: (e as Error).message,
         };
+        this.persistJob(job);
       }
       throw e;
     }
@@ -353,6 +479,9 @@ export class Gateway {
 
   async run(signal: AbortSignal): Promise<void> {
     for (const line of this.describe()) this.log(line);
+    // #19: fire scheduled runs that fell due while the gateway was down before
+    // the main loop starts polling future cadences.
+    await this.catchUpOverdue();
     while (!signal.aborted) {
       const now = Date.now();
       await this.fireDue(now);

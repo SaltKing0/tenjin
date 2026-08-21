@@ -6,6 +6,8 @@ export interface JobConfig {
   bot: string;
   prompt: string;
   postTo?: string;
+  /** Optional hard cap on a single run (ms). A hung run is released after this. */
+  timeoutMs?: number;
   scheduleSpec: { every?: string; cron?: string; tz?: string };
 }
 
@@ -36,12 +38,21 @@ export interface ListenConfig {
   rateLimitWindowMs?: number;
 }
 
+/** Catch-up of scheduled runs missed while the gateway was down. */
+export interface CatchUpConfig {
+  /** Master switch; catch-up is on by default. */
+  enabled: boolean;
+  /** Max runs caught up per boot. */
+  max: number;
+}
+
 export interface GatewaySettings {
   jobs: JobConfig[];
   telegram: TelegramChannelConfig | null;
   heartbeat: HeartbeatConfig | null;
   listen: ListenConfig | null;
   allowWrites: boolean;
+  catchUp: CatchUpConfig;
 }
 
 interface RawJob {
@@ -52,11 +63,34 @@ interface RawJob {
   every?: unknown;
   cron?: unknown;
   tz?: unknown;
+  timeoutMs?: unknown;
+}
+
+const DEFAULT_CATCH_UP: CatchUpConfig = { enabled: true, max: 50 };
+
+function parseCatchUp(cfg: unknown): CatchUpConfig {
+  const c = cfg && typeof cfg === "object" ? (cfg as Record<string, unknown>) : {};
+  const enabled = c.enabled === undefined ? true : c.enabled === true;
+  let max = DEFAULT_CATCH_UP.max;
+  if (c.max !== undefined && c.max !== null) {
+    if (typeof c.max !== "number" || !Number.isInteger(c.max) || c.max < 1) {
+      throw new ConfigError("gateway.catchUp.max must be a positive integer");
+    }
+    max = c.max;
+  }
+  return { enabled, max };
 }
 
 export function parseGatewaySettings(raw: unknown): GatewaySettings {
   if (raw === null || raw === undefined) {
-    return { jobs: [], telegram: null, heartbeat: null, listen: null, allowWrites: false };
+    return {
+      jobs: [],
+      telegram: null,
+      heartbeat: null,
+      listen: null,
+      allowWrites: false,
+      catchUp: { ...DEFAULT_CATCH_UP },
+    };
   }
   if (typeof raw !== "object") {
     throw new ConfigError("gateway config must be a mapping");
@@ -68,6 +102,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     heartbeat: null,
     listen: null,
     allowWrites: gw.allowWrites === true || undefined,
+    catchUp: parseCatchUp(gw.catchUp),
   } as GatewaySettings;
 
   const rawJobs = gw.jobs;
@@ -94,11 +129,22 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
         tz,
       };
       parseSchedule(scheduleSpec);
+      let timeoutMs: number | undefined;
+      if (entry.timeoutMs !== undefined && entry.timeoutMs !== null) {
+        const t = entry.timeoutMs;
+        if (typeof t !== "number" || !Number.isInteger(t) || t < 1) {
+          throw new ConfigError(
+            `gateway job "${name}" timeoutMs must be a positive integer (ms)`,
+          );
+        }
+        timeoutMs = t;
+      }
       settings.jobs.push({
         name,
         bot,
         prompt,
         postTo: typeof entry.postTo === "string" ? entry.postTo : undefined,
+        timeoutMs,
         scheduleSpec,
       });
     }

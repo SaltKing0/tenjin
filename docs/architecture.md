@@ -211,6 +211,9 @@ The `gateway:` block is validated separately in
 ```yaml
 gateway:
   allowWrites: false          # gate write/edit/bash behind approvals
+  catchUp:                    # re-run jobs missed while the gateway was down
+    enabled: true             # default true
+    max: 50                   # max runs caught up per boot
   telegram:
     enabled: true
     defaultBot: researcher
@@ -231,6 +234,7 @@ gateway:
       cron: "0 9 * * *"       # or every: "4h"
       tz: Europe/Berlin       # optional IANA zone; default is server local time
       postTo: telegram
+      timeoutMs: 300000       # optional hard cap (ms); release a hung run
   listen:
     port: 8787
     host: 127.0.0.1
@@ -242,11 +246,17 @@ gateway:
 - **`allowWrites`** — when false, the gateway runs bots read-only; when true it
   is the master switch, with Telegram's own `allowWrites` able to override per
   channel.
+- **`catchUp`** — on boot the gateway re-runs scheduled jobs whose slot came due
+  while it was down (default `enabled: true`, `max: 50` runs per boot). A job is
+  caught up when the next scheduled run after its last run is already in the
+  past; the last run of each job is persisted in `~/.tenjin/gateway-state.json`.
 - **`telegram`** — requires a non-empty `allowedUsers` allowlist and a
   `TELEGRAM_BOT_TOKEN` env var.
 - **`jobs`** — scheduled prompts to a bot on a cron or `every` schedule
   (`postTo` routes the result to a channel). Optional `tz` (IANA name) interprets
   cron fields in that zone, including across DST; omitted `tz` keeps server local time.
+  Optional per-job `timeoutMs` (ms) sets a hard cap on a single run — a hung
+  provider call is released after this so it can't pin the job slot forever.
 - **`heartbeat`** — a recurring prompt to a bot at a fixed interval.
 - **`listen`** — enables the web console; `token` is mandatory.
 
@@ -261,6 +271,7 @@ gateway:
 ├── memory/                     # summaries, facts, vector store
 ├── approvals/                  # out-of-band approval requests (*.json)
 ├── audit.jsonl                 # audit event trail
+├── gateway-state.json          # last run per scheduled job (catch-up bookkeeping)
 └── bots/<name>/
     ├── SOUL.md                 # bot personality
     ├── config.yaml             # per-bot model / budget / security / telegram allowlist (optional)
