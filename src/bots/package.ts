@@ -3,6 +3,8 @@ import { join, basename, dirname, isAbsolute } from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { ConfigError } from "../config/types";
 import { botDir, listBots, resolveBot } from "./profile";
+import { DEFAULT_BLOCKED_PATTERNS } from "../security/guard";
+import { YAML } from "bun";
 
 /**
  * Portable bot packages, zero runtime deps.
@@ -212,6 +214,10 @@ export interface ImportResult {
   name: string;
   dir: string;
   files: string[];
+  /** Non-null when the package declares a config that disables or weakens the
+   * security guard (security.disabled or blockedPatterns dropping defaults) —
+   * surfaced so the importer can warn the user (#205). */
+  securityNote?: string;
 }
 
 function sanitizeImportName(raw: string): string {
@@ -228,6 +234,42 @@ function uniqueBotName(home: string, name: string): string {
   let i = 2;
   while (existing.has(`${name}-${i}`)) i++;
   return `${name}-${i}`;
+}
+
+/**
+ * Inspect an imported bot's config.yaml for a security posture that disables or
+ * weakens the guard: `security.disabled: true`, or a `security.blockedPatterns`
+ * list that drops one or more of the default guard globs. Returns a
+ * human-readable warning, or null when the package is not unguarded (#205).
+ */
+export function detectUnguardedSecurity(home: string, botName: string): string | null {
+  const cfgPath = join(botDir(home, botName), "config.yaml");
+  if (!existsSync(cfgPath)) return null;
+  let raw: unknown;
+  try {
+    raw = YAML.parse(readFileSync(cfgPath, "utf8"));
+  } catch {
+    return null; // already validated by resolveBot; nothing extra to warn about
+  }
+  if (!raw || typeof raw !== "object") return null;
+  const sec = (raw as Record<string, unknown>).security;
+  if (!sec || typeof sec !== "object") return null;
+  const s = sec as Record<string, unknown>;
+  if (s.disabled === true) {
+    return (
+      "this package DISABLES the security guard (security.disabled: true) — " +
+      "the bot will run without path/command policy enforcement"
+    );
+  }
+  if (Array.isArray(s.blockedPatterns)) {
+    const dropped = DEFAULT_BLOCKED_PATTERNS.filter(
+      (p) => !(s.blockedPatterns as unknown[]).includes(p),
+    );
+    if (dropped.length > 0) {
+      return `this package WEAKENS security.blockedPatterns (drops default guard globs: ${dropped.join(", ")})`;
+    }
+  }
+  return null;
 }
 
 export function importBot(home: string, archivePath: string): ImportResult {
@@ -286,6 +328,7 @@ export function installPortableFiles(home: string, files: PkgFile[]): ImportResu
     relFiles.push(e.rel);
   }
 
+  let securityNote: string | undefined;
   try {
     mkdirSync(root, { recursive: true });
     for (const e of files) {
@@ -297,11 +340,12 @@ export function installPortableFiles(home: string, files: PkgFile[]): ImportResu
     // validate the imported bot the same way resolveBot does (model/budget/yaml/security)
     // — throws ConfigError on bad config
     resolveBot(home, botName);
+    securityNote = detectUnguardedSecurity(home, botName) ?? undefined;
   } catch (err) {
     // roll back a half-created bot so a failed import leaves nothing behind
     rmSync(root, { recursive: true, force: true });
     throw err;
   }
 
-  return { name: botName, dir: root, files: relFiles };
+  return { name: botName, dir: root, files: relFiles, securityNote };
 }

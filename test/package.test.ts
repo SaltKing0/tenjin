@@ -152,3 +152,51 @@ describe("bot import", () => {
     expect(() => importBot(home, bad)).toThrow();
   });
 });
+
+// Build a bot whose config.yaml is exactly `configYaml`, then export a package.
+function buildBotWithConfig(name: string, configYaml: string): void {
+  createBot(home, name);
+  writeFileSync(join(botsDir(home), name, "config.yaml"), configYaml);
+}
+
+describe("bot import security warnings (#205)", () => {
+  const validModel = 'model: "openai:gpt-4o-mini"\n';
+
+  test("a package that disables the security guard surfaces a warning", () => {
+    buildBotWithConfig("frank", validModel + "security:\n  disabled: true\n");
+    const { file } = exportBot(home, "frank", { cwd });
+    const home2 = mkdtempSync(join(tmpdir(), "tj-pkg-sec-"));
+    try {
+      const res = importBot(home2, file);
+      expect(res.securityNote).toBeTruthy();
+      expect(res.securityNote).toMatch(/DISABLES.*security guard/i);
+    } finally {
+      rmSync(home2, { recursive: true, force: true });
+    }
+  });
+
+  test("a package that drops default guard globs from blockedPatterns surfaces a warning", () => {
+    buildBotWithConfig("frank", validModel + "security:\n  blockedPatterns:\n    - .env\n");
+    const { file } = exportBot(home, "frank", { cwd });
+    const home2 = mkdtempSync(join(tmpdir(), "tj-pkg-sec2-"));
+    try {
+      const res = importBot(home2, file);
+      expect(res.securityNote).toBeTruthy();
+      expect(res.securityNote).toMatch(/blockedPatterns/i);
+    } finally {
+      rmSync(home2, { recursive: true, force: true });
+    }
+  });
+
+  test("a normal package carries no security warning", () => {
+    buildBotWithConfig("safe", validModel);
+    const { file } = exportBot(home, "safe", { cwd });
+    const home2 = mkdtempSync(join(tmpdir(), "tj-pkg-sec3-"));
+    try {
+      const res = importBot(home2, file);
+      expect(res.securityNote).toBeUndefined();
+    } finally {
+      rmSync(home2, { recursive: true, force: true });
+    }
+  });
+});

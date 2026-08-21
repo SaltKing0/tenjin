@@ -176,6 +176,10 @@ state around by hand:
   the same name already exists, the imported bot gets a numeric suffix
   (`name-2`) instead of overwriting. The imported configuration is validated
   like any other bot before the bot is left behind.
+- A package whose `config.yaml` declares `security.disabled: true`, or a
+  `security.blockedPatterns` list that drops default guard globs, is flagged
+  with a **WARNING** in the import/install summary ("this package disables the
+  security guard …") so an unguarded bot is never installed silently.
 
 ## Git catalog (marketplace-lite)
 
