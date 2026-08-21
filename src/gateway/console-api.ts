@@ -11,9 +11,11 @@ import {
   createBot,
   readBotSoul,
   writeBotSoul,
+  writeBotModel,
   renameBot,
   deleteBot,
 } from "../bots/profile";
+import { templateSoul, ROLE_TEMPLATES } from "../bots/templates";
 import { sanitizeSkillName } from "../skills/loader";
 import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
 import { SessionLog, sessionLineage } from "../session/log";
@@ -282,8 +284,33 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
 
     const botSingleMatch = /^\/api\/bots\/([a-zA-Z0-9_-]+)$/.exec(path);
 
+    if (path === "/api/bots/templates" && req.method === "GET") {
+      // #253: role templates for the "new bot" dialog — id + label + a short
+      // description. The full SOUL is generated server-side on request.
+      return json({
+        templates: ROLE_TEMPLATES.map((t) => ({ id: t.id, label: t.label, desc: t.desc })),
+      });
+    }
+
+    if (path === "/api/bots/soul-preview" && req.method === "POST") {
+      let body: { role?: unknown; name?: unknown };
+      try {
+        body = (await req.json()) as typeof body;
+      } catch {
+        return json({ error: "invalid json" }, 400);
+      }
+      const role = typeof body.role === "string" ? body.role : "";
+      const name = typeof body.name === "string" ? body.name : "";
+      if (!name.trim()) return json({ error: "name is required" }, 400);
+      try {
+        return json({ soul: templateSoul(role, name), role });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 400);
+      }
+    }
+
     if (path === "/api/bots" && req.method === "POST") {
-      let body: { name?: unknown; soul?: unknown };
+      let body: { name?: unknown; soul?: unknown; role?: unknown; model?: unknown };
       try {
         body = (await req.json()) as typeof body;
       } catch {
@@ -291,10 +318,23 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
       }
       const rawName = typeof body.name === "string" ? body.name : "";
       if (!rawName.trim()) return json({ error: "name is required" }, 400);
+      // #253: an explicit soul wins over a role template; otherwise a role
+      // generates a SOUL.md draft for the new bot.
       const soul = typeof body.soul === "string" ? body.soul : undefined;
+      const role = typeof body.role === "string" ? body.role : undefined;
+      const model = typeof body.model === "string" ? body.model : undefined;
       try {
-        createBot(deps.home, rawName, soul !== undefined ? { soul } : {});
+        let effectiveSoul = soul;
+        if (effectiveSoul === undefined && role) {
+          effectiveSoul = templateSoul(role, rawName);
+        }
+        createBot(
+          deps.home,
+          rawName,
+          effectiveSoul !== undefined ? { soul: effectiveSoul } : {},
+        );
         const name = sanitizeSkillName(rawName);
+        if (model) writeBotModel(deps.home, name, model);
         return json({ ok: true, ...botDetailView(deps.home, name, deps.config) }, 201);
       } catch (e) {
         return botErrorResponse(e);
