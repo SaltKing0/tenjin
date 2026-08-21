@@ -154,3 +154,89 @@ test("invalid bot security.policy is rejected", () => {
   writeFileSync(join(botsDir(home), "badpol", "config.yaml"), "security:\n  policy: write-all\n");
   expect(() => resolveBot(home, "badpol")).toThrow(/policy/);
 });
+
+test("bot config.yaml parses routines and per-bot heartbeat (#102)", () => {
+  createBot(home, "night");
+  writeFileSync(
+    join(botsDir(home), "night", "config.yaml"),
+    [
+      "routines:",
+      "  - name: digest",
+      "    prompt: Summarize overnight activity.",
+      "    cron: \"0 2 * * *\"",
+      "    policy: full",
+      "    timeoutMs: 120000",
+      "  - name: ping",
+      "    prompt: Ping.",
+      "    every: 30m",
+      "heartbeat:",
+      "  every: 15m",
+      "",
+    ].join("\n"),
+  );
+  const profile = resolveBot(home, "night");
+  expect(profile.config.routines).toHaveLength(2);
+  expect(profile.config.routines?.[0]).toMatchObject({
+    name: "digest",
+    prompt: "Summarize overnight activity.",
+    policy: "full",
+    timeoutMs: 120000,
+    scheduleSpec: { cron: "0 2 * * *" },
+  });
+  expect(profile.config.routines?.[1]?.scheduleSpec.every).toBe("30m");
+  expect(profile.config.heartbeat).toEqual({ every: "15m" });
+});
+
+test("bot routine requires exactly one of every|cron", () => {
+  createBot(home, "noop");
+  writeFileSync(
+    join(botsDir(home), "noop", "config.yaml"),
+    "routines:\n  - name: x\n    prompt: p\n",
+  );
+  expect(() => resolveBot(home, "noop")).toThrow(/exactly one of `every` or `cron`/);
+});
+
+test("bot routine rejects invalid schedule", () => {
+  createBot(home, "badsched");
+  writeFileSync(
+    join(botsDir(home), "badsched", "config.yaml"),
+    "routines:\n  - name: x\n    prompt: p\n    every: nope\n",
+  );
+  expect(() => resolveBot(home, "badsched")).toThrow(/invalid interval/);
+});
+
+test("bot routine rejects a non-policy value", () => {
+  createBot(home, "badpol2");
+  writeFileSync(
+    join(botsDir(home), "badpol2", "config.yaml"),
+    "routines:\n  - name: x\n    prompt: p\n    every: 1m\n    policy: admin\n",
+  );
+  expect(() => resolveBot(home, "badpol2")).toThrow(/policy/);
+});
+
+test("bot routine rejects duplicate names within one bot", () => {
+  createBot(home, "dup");
+  writeFileSync(
+    join(botsDir(home), "dup", "config.yaml"),
+    [
+      "routines:",
+      "  - name: x",
+      "    prompt: p",
+      "    every: 1m",
+      "  - name: x",
+      "    prompt: p2",
+      "    every: 2m",
+      "",
+    ].join("\n"),
+  );
+  expect(() => resolveBot(home, "dup")).toThrow(/duplicate routine/);
+});
+
+test("per-bot heartbeat requires an interval", () => {
+  createBot(home, "nohb");
+  writeFileSync(
+    join(botsDir(home), "nohb", "config.yaml"),
+    "heartbeat:\n  bot: x\n",
+  );
+  expect(() => resolveBot(home, "nohb")).toThrow(/heartbeat.*every/);
+});
