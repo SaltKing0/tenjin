@@ -43,6 +43,7 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   "/console/tables.js": { file: "tables.js", type: "application/javascript; charset=utf-8" },
 
   "/console/topbar-state.js": { file: "topbar-state.js", type: "application/javascript; charset=utf-8" },
+  "/console/first-run.js": { file: "first-run.js", type: "application/javascript; charset=utf-8" },
   "/console/style.css": { file: "style.css", type: "text/css; charset=utf-8" },
 };
 
