@@ -120,7 +120,20 @@ describe("saveSkill", () => {
     saveSkill(project, { name: "dup", description: "d", content: "c" });
     expect(() =>
       saveSkill(project, { name: "dup", description: "d2", content: "c2" }),
-    ).toThrow(/already exists/);
+    ).toThrow(/already exists.*overwrite: true/);
+  });
+
+  test("overwrite updates existing skill and reloads new version", () => {
+    saveSkill(project, { name: "flow", description: "v1", content: "old body" });
+    saveSkill(project, {
+      name: "flow",
+      description: "v2",
+      content: "new body",
+      overwrite: true,
+    });
+    const skill = getSkill(home, project, "flow");
+    expect(skill?.description).toBe("v2");
+    expect(skill?.content).toBe("new body");
   });
 
   test("saved ids survive YAML round-trip (digit-heavy names)", () => {
@@ -229,6 +242,27 @@ describe("save_skill tool", () => {
     );
     expect(r.ok).toBe(false);
     expect(r.output).toContain("already exists");
+    expect(r.output).toContain("overwrite: true");
+  });
+
+  test("overwrite: true updates content and reloads new version", async () => {
+    await dispatch(
+      [makeTool()],
+      "save_skill",
+      { name: "dup", description: "d", content: "c" },
+      { cwd: project },
+    );
+    const r = await dispatch(
+      [makeTool()],
+      "save_skill",
+      { name: "dup", description: "d2", content: "c2", overwrite: true },
+      { cwd: project },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("Saved skill to");
+    const skill = getSkill(home, project, "dup");
+    expect(skill?.description).toBe("d2");
+    expect(skill?.content).toBe("c2");
   });
 
   test("invalid name surfaces as error result", async () => {
