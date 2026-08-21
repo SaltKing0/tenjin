@@ -154,13 +154,24 @@ export class SessionLog {
   }
 
   private updateMeta(event: SessionEvent): void {
+    // Only a first user message (preview) or a forked session_start (parentId)
+    // can change the sidecar meta. Everything else (assistant/tool/usage
+    // events) touches nothing, so skip the read/stat/write disk I/O entirely
+    // instead of doing 4+ sync ops per appended event (#317).
+    const mayChange =
+      (event.t === "message" && event.role === "user") ||
+      (event.t === "session_start" && event.parent !== undefined);
+    if (!mayChange) return;
+
     const meta = readMeta(this.metaPath) ?? {
       id: this.id,
       preview: DEFAULT_PREVIEW,
       mtimeMs: 0,
     };
+    let changed = false;
     if (event.t === "session_start" && event.parent && meta.parentId === undefined) {
       meta.parentId = event.parent.id;
+      changed = true;
     }
     if (
       event.t === "message" &&
@@ -169,7 +180,10 @@ export class SessionLog {
     ) {
       const text = typeof event.content === "string" ? event.content : "[blocks]";
       meta.preview = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+      changed = true;
     }
+    // Nothing changed → no stat, no write.
+    if (!changed) return;
     try {
       meta.mtimeMs = statSync(this.path).mtimeMs;
     } catch {

@@ -40,6 +40,28 @@ test("create appends and reads back events", () => {
   expect(events[1]?.t).toBe("error");
 });
 
+test("meta sidecar is only written when preview/parent changes (#317)", () => {
+  const log = SessionLog.create(dir);
+  const metaPath = `${log.path.replace(/\.jsonl$/, "")}.meta.json`;
+
+  // Non-preview events (assistant/error) must not create or rewrite the meta —
+  // previously every append did a read+stat+write (4+ sync disk ops).
+  log.append({ t: "message", role: "assistant", content: "hi", ts: "t" });
+  log.append({ t: "error", message: "boom", ts: "t" });
+  expect(existsSync(metaPath)).toBe(false);
+
+  // The first user message sets the preview → meta is written once.
+  log.append({ t: "message", role: "user", content: "hello world", ts: "t" });
+  expect(existsSync(metaPath)).toBe(true);
+  const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+  expect(meta.preview).toBe("hello world");
+
+  // A later user message (preview already set) does not rewrite the meta.
+  log.append({ t: "message", role: "user", content: "second", ts: "t" });
+  const meta2 = JSON.parse(readFileSync(metaPath, "utf8"));
+  expect(meta2.preview).toBe("hello world");
+});
+
 test("open and resolve by prefix", () => {
   const log = SessionLog.create(dir);
   log.append(userMsg("x"));

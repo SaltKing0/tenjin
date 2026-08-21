@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { sanitizeSkillName } from "./loader";
 
@@ -30,10 +30,33 @@ export function usagePathFor(projectDir: string, skill: string): string {
   return join(usageDir(projectDir), `${sanitizeSkillName(skill)}.ndjson`);
 }
 
+/** Max bytes in a skill's active usage file before it rolls over to `.1` (#317). */
+export const MAX_USAGE_FILE_BYTES = 512 * 1024;
+
+/**
+ * When a skill's usage ndjson has grown past {@link MAX_USAGE_FILE_BYTES}, roll
+ * it over to `<name>.ndjson.1` (replacing any previous backup) so the active
+ * file and every `readUsage`/`analyzeUsage` scan stay bounded instead of growing
+ * unboundedly over a long-running install.
+ */
+function rolloverIfOversized(active: string): void {
+  let size = 0;
+  try {
+    size = statSync(active).size;
+  } catch {
+    return; // no active file yet
+  }
+  if (size <= MAX_USAGE_FILE_BYTES) return;
+  // rename replaces any previous `.1` atomically.
+  renameSync(active, `${active}.1`);
+}
+
 /** Append one usage record (strictly append-only, never rewrites history). */
 export function recordUsage(projectDir: string, entry: SkillUsage): void {
   mkdirSync(usageDir(projectDir), { recursive: true });
-  appendFileSync(usagePathFor(projectDir, entry.skill), JSON.stringify(entry) + "\n");
+  const active = usagePathFor(projectDir, entry.skill);
+  rolloverIfOversized(active);
+  appendFileSync(active, JSON.stringify(entry) + "\n");
 }
 
 /** Read every recorded usage line for a skill (oldest first). Skips corrupt lines. */

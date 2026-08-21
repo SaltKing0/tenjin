@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveSkill, listSkills, projectSkillsDir } from "../src/skills/loader";
 import { createUseSkillTool, createRefineSkillTool } from "../src/skills/activate";
-import { recordUsage, readUsage, usageStats, analyzeUsage, usagePathFor } from "../src/skills/usage";
+import { recordUsage, readUsage, usageStats, analyzeUsage, usagePathFor, MAX_USAGE_FILE_BYTES } from "../src/skills/usage";
 import {
   proposeRefine,
   activateRefine,
@@ -79,6 +79,23 @@ describe("use_skill usage tracking (#133)", () => {
       existsSync(join(project, ".tenjin", "skills", "usage", "evil.ndjson")),
     ).toBe(true);
   });
+});
+
+test("usage file rolls over past the retention cap instead of growing unbounded (#317)", () => {
+  recordUsage(project, { skill: "big", ts: "t0", ok: true, durationMs: 0 }); // creates dir + active file
+  const active = usagePathFor(project, "big");
+  // Grow the active file past the cap.
+  writeFileSync(
+    active,
+    JSON.stringify({ skill: "big", ts: "t0", ok: true, durationMs: 0, pad: "x".repeat(MAX_USAGE_FILE_BYTES) }) +
+      "\n",
+  );
+  // The next record rolls the oversized file over to `.1` and starts a fresh active file.
+  recordUsage(project, { skill: "big", ts: "t1", ok: true, durationMs: 1 });
+  expect(existsSync(`${active}.1`)).toBe(true);
+  const usage = readUsage(project, "big");
+  expect(usage).toHaveLength(1);
+  expect(usage[0]?.ts).toBe("t1");
 });
 
 describe("usage analysis (#133)", () => {

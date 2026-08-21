@@ -45,6 +45,27 @@ test("tail returns last N", () => {
   expect(tail.map((e) => e.detail)).toEqual(["msg 7", "msg 8", "msg 9"]);
 });
 
+test("tail reads from the file end across chunk boundaries (#317)", () => {
+  const log = new AuditLog(auditPath(home));
+  // ~430 bytes/line × 300 ≈ 129 KiB, well past the 64 KiB tail chunk.
+  for (let i = 0; i < 300; i++) {
+    log.append("gateway_msg", "u1", `event-${i}-` + "y".repeat(400));
+  }
+  const tail = log.query({ tail: 4 });
+  expect(tail).toHaveLength(4);
+  expect(tail[0]?.detail.startsWith("event-296-")).toBe(true);
+  expect(tail[3]?.detail.startsWith("event-299-")).toBe(true);
+});
+
+test("tail with a filter still returns the last N matching events", () => {
+  const log = new AuditLog(auditPath(home));
+  for (let i = 0; i < 10; i++) {
+    log.append(i % 2 === 0 ? "approval" : "gateway_msg", "u1", `m${i}`);
+  }
+  const tail = log.query({ tail: 2, kind: "approval" });
+  expect(tail.map((e) => e.detail)).toEqual(["m6", "m8"]);
+});
+
 test("missing file queries empty; corrupted lines skipped", () => {
   expect(new AuditLog(auditPath(home)).query()).toEqual([]);
   const { appendFileSync } = require("node:fs") as typeof import("node:fs");
