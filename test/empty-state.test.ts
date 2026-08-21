@@ -29,4 +29,12 @@ describe("console empty-states (#254)", () => {
     expect(emptyStateFor("chat")).toBe(EMPTY_STATES.chat!);
     expect(emptyStateFor("nope")).toBeNull();
   });
+
+  test("memory_nobots guides the user to create a bot (#274)", () => {
+    const def = EMPTY_STATES.memory_nobots!;
+    expect(def.title).toBeTruthy();
+    expect(def.cta).toBe("Create a bot");
+    expect(def.hash).toBe("#status");
+    expect(ROUTES).toContain(def.hash!);
+  });
 });
