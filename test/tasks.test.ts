@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createBot, botDir } from "../src/bots/profile";
@@ -790,16 +790,18 @@ describe("task orphan reconciliation (#180)", () => {
     expect(Date.now() - startedAt).toBeLessThan(2000);
   });
 
-  test("a dependent in a fresh CLI process fails fast via a lazy, throttled lookup sweep (#240)", async () => {
-    writeTask(home, "researcher", staleTask("ORPH_LAZY", "running"));
-    // make it genuinely stale under the real clock that the lazy path uses
-    const p = join(botDir(home, "researcher"), "tasks", "ORPH_LAZY.json");
-    const past = new Date(Date.now() - 2000);
-    utimesSync(p, past, past);
+  test("a dependent in a fresh CLI process fails fast via a targeted lookup check (#240/#313)", async () => {
+    // fabricate a genuinely stale task: its persisted liveness is in the past
+    const past = new Date(Date.now() - 2000).toISOString();
+    writeTask(home, "researcher", {
+      ...staleTask("ORPH_LAZY", "running"),
+      heartbeatAt: past,
+      startedAt: past,
+    });
 
     // No explicit boot sweep: this is a fresh CLI/one-shot process that only
-    // looks up its dependency. The first findTaskById must sweep the orphan
-    // lazily so the dependent fails fast instead of waiting out its timeout.
+    // looks up its dependency. The first findTaskById must fail the orphan
+    // fast so the dependent fails instead of waiting out its timeout.
     const startedAt = Date.now();
     const chain = startAsyncTask(deps(delayedProvider(0, "SHOULD NOT RUN")), {
       targetBot: "researcher",
@@ -811,7 +813,51 @@ describe("task orphan reconciliation (#180)", () => {
     expect(final.status).toBe("error");
     expect(final.error).toMatch(/dependency/);
     expect(Date.now() - startedAt).toBeLessThan(2000);
-    // the orphan itself was swept to error by the lazy dependency lookup
+    // the orphan itself was failed by the targeted dependency lookup
     expect(readTaskForStatus(home, "researcher", "ORPH_LAZY")?.error).toContain("orphaned");
+  });
+
+  test("#313: a live waiting pending task (fresh heartbeat) survives a parallel sweep", async () => {
+    // The task's file metadata is old (created 10s ago; the old mtime-based
+    // check would sweep it because 10s > its 1s timeout), but it is genuinely
+    // alive: it is waiting on a dependency and refreshing its heartbeat, so
+    // its persisted liveness is fresh. A parallel process's sweep must NOT
+    // orphan it.
+    const oldCreated = new Date(Date.now() - 10_000).toISOString();
+    const freshBeat = new Date(Date.now() - 300).toISOString();
+    writeTask(home, "researcher", {
+      id: "WAIT_LIVE",
+      bot: "researcher",
+      message: "waiting on dep",
+      status: "pending",
+      timeoutMs: 1000, // under the real clock its old metadata looks stale
+      createdAt: oldCreated,
+      heartbeatAt: freshBeat,
+      dependsOn: "SOME_DEP",
+    });
+
+    const swept = reconcileOrphanedTasks(home);
+    expect(swept).toBe(0);
+    expect(readTaskForStatus(home, "researcher", "WAIT_LIVE")?.status).toBe("pending");
+  });
+
+  test("#313: the targeted lookup check spares a live pending task that the boot sweep would see as stale", async () => {
+    // Simulate a parallel process doing a dependency lookup against a task
+    // whose OWNER is alive and heartbeating (fresh heartbeat) but whose file
+    // metadata is old. findTaskById must not fail it.
+    const oldCreated = new Date(Date.now() - 10_000).toISOString();
+    const freshBeat = new Date(Date.now() - 300).toISOString();
+    writeTask(home, "researcher", {
+      id: "LIVE_DEP",
+      bot: "researcher",
+      message: "m",
+      status: "running",
+      timeoutMs: 1000,
+      createdAt: oldCreated,
+      heartbeatAt: freshBeat,
+    });
+    const found = findTaskById(home, "LIVE_DEP");
+    expect(found?.status).toBe("running");
+    expect(found?.error).toBeUndefined();
   });
 });
