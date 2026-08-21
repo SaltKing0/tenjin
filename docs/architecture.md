@@ -51,6 +51,10 @@ CLI, loads config, builds an `AppContext`, and dispatches to one of:
 
 - **Interactive / one-shot / resume / fork** — the agent turn loop.
 - **`bot`** — bot lifecycle: `new`, `list`, `export`, `import`, `init-examples`.
+- **`onboard`** — guided first start: validates a provider key, picks a default
+  model (with model detection and OpenRouter `:free` support), and creates a
+  first bot from a role template. Non-interactive via `--provider --key --model
+  --bot-name` flags; idempotent on re-run. Writes `providers.yaml`.
 - **`gateway`** — the always-on process (below).
 - **`audit` / `spend`** — CLI views over the event trail and spend records.
 - **`job`** — manage scheduled gateway jobs from the headless CLI: `list`,
