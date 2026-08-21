@@ -7,7 +7,7 @@ import { resolveModelRef, formatModelRef, type ModelRef } from "../config/models
 import { ConfigError } from "../config/types";
 import type { ToolDef } from "../tools/registry";
 import type { HarnessConfig } from "../config/loader";
-import { Budget, formatUSD } from "../agent/budget";
+import { Budget, createBudget, formatUSD } from "../agent/budget";
 import { runAgentTurn, type TurnEvent } from "../agent/loop";
 import type { EventLogger, SessionEvent } from "../session/events";
 import { rebuildMessages, sumUsage } from "../session/events";
@@ -54,7 +54,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   const audit = new AuditLog(auditPath(opts.home));
   const state = {
     messages: [...(opts.initialMessages ?? [])],
-    budget: new Budget(opts.config.budgetUSD, opts.config.pricing),
+    budget: createBudget(opts.config.budgetUSD, opts.config.pricing),
     logger: opts.logger,
     sessionId: opts.sessionId,
     active: opts.defaultRef,

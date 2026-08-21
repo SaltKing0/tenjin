@@ -20,7 +20,7 @@ import { createProvider } from "./provider/factory";
 import { ProviderRegistry } from "./provider/registry";
 import { defaultModelRef, cheapModelRef, resolveModelRef, type ModelRef } from "./config/models";
 import { loadSoul, loadAgentsMd, buildSystemPrompt } from "./agent/prompt";
-import { Budget, formatUSD, pricingFor } from "./agent/budget";
+import { formatUSD } from "./agent/budget";
 import { runAgentTurn } from "./agent/loop";
 import { runHeadless } from "./agent/headless";
 import { startRepl } from "./ui/repl";
@@ -576,6 +576,7 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     message: prompt,
     maxTokens: ctx.config.maxTokens,
     capUSD: ctx.config.budgetUSD,
+    pricing: ctx.config.pricing,
     policy: "read-only",
     agentsMd: loadAgentsMd(ctx.cwd),
     guard: ctx.guard,
