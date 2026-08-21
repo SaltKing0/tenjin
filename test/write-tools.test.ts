@@ -1,11 +1,22 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dispatch } from "../src/tools/registry";
+import { atomicWrite } from "../src/tools/atomic";
 import { writeTool } from "../src/tools/write";
 import { editTool } from "../src/tools/edit";
 import { bashTool } from "../src/tools/bash";
+import { SecurityGuard, DEFAULT_BLOCKED_PATTERNS } from "../src/security/guard";
 
 const tools = [writeTool, editTool, bashTool];
 
@@ -34,6 +45,47 @@ describe("write_file", () => {
     writeFileSync(join(dir, "f.txt"), "old");
     await dispatch(tools, "write_file", { path: "f.txt", content: "new" }, { cwd: dir });
     expect(readFileSync(join(dir, "f.txt"), "utf8")).toBe("new");
+  });
+});
+
+// #315: writes go through a same-dir temp file + atomic rename — a crash or
+// partial write must never corrupt the destination, and the temp is cleaned up.
+describe("atomic writes", () => {
+  test("write_file and edit_file leave no temp residue", async () => {
+    await dispatch(tools, "write_file", { path: "a.txt", content: "hello" }, { cwd: dir });
+    await dispatch(
+      tools,
+      "edit_file",
+      { path: "a.txt", oldString: "hello", newString: "world" },
+      { cwd: dir },
+    );
+    expect(readFileSync(join(dir, "a.txt"), "utf8")).toBe("world");
+    expect(readdirSync(dir).filter((e) => e.endsWith(".tmp"))).toEqual([]);
+  });
+
+  // The TOCTOU re-check is what matters: dispatch validates the requested path
+  // up front, but a symlink swapped in between that check and the write must not
+  // redirect the write outside the workspace. atomicWrite re-resolves the real
+  // path immediately before writing and re-checks containment.
+  test("write_file blocked when a symlink escapes the workspace (#315)", async () => {
+    const ws = mkdtempSync(join(tmpdir(), "tenjin-ws-"));
+    const outside = mkdtempSync(join(tmpdir(), "tenjin-out-"));
+    const outsideFile = join(outside, "data.txt");
+    writeFileSync(outsideFile, "original");
+    const link = join(ws, "link.txt");
+    symlinkSync(outsideFile, link);
+    const guard = new SecurityGuard([...DEFAULT_BLOCKED_PATTERNS], undefined, {
+      workspaceRoot: ws,
+    });
+    try {
+      await expect(
+        atomicWrite(link, "pwned", { guard, toolName: "write_file", cwd: ws }),
+      ).rejects.toThrow(/outside the workspace/);
+      expect(readFileSync(outsideFile, "utf8")).toBe("original");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 
