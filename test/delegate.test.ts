@@ -8,6 +8,8 @@ import { dispatch } from "../src/tools/registry";
 import { Budget } from "../src/agent/budget";
 import { SessionLog } from "../src/session/log";
 import { aggregateSpend } from "../src/audit/spend";
+import { AuditLog, auditPath } from "../src/audit/log";
+import { runHeadless } from "../src/agent/headless";
 import type { ChatRequest, ChatResponse, Provider } from "../src/provider/types";
 import type { HarnessConfig, ProviderName } from "../src/config/types";
 
@@ -257,5 +259,86 @@ describe("ask_bot", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.scope).toBe("researcher");
     expect(rows[0]?.costUSD).toBeGreaterThan(0);
+  });
+
+  test("delegation writes a correlated audit chain (delegation + child budget_halt)", async () => {
+    writeFileSync(join(home, "bots", "researcher", "config.yaml"), "budgetUSD: 0.005\n");
+    const log = new AuditLog(auditPath(home));
+    const audit = (
+      kind: "delegation" | "write_exec" | "budget_halt",
+      detail: string,
+      correlationId?: string,
+    ) => log.append(kind, "user", detail, undefined, correlationId);
+    const provider = scriptProvider([
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "t1", name: "read_file", input: { path: "x" } }],
+        usage: { inputTokens: 10_000_000, outputTokens: 0 },
+      },
+    ]);
+    const tool = createAskBotTool({
+      home,
+      fromBot: "writer",
+      cwd: home,
+      getProvider: () => provider,
+      globalConfig: globalConfig(),
+      audit,
+    });
+    const r = await ask(tool, { bot: "researcher", message: "big job" });
+    expect(r.output).toContain("budget_exhausted");
+
+    const delegation = log.query({ kind: "delegation" });
+    expect(delegation).toHaveLength(1);
+    const corr = delegation[0]?.correlationId;
+    expect(corr).toBeTruthy();
+
+    const budgetHalt = log.query({ kind: "budget_halt" });
+    expect(budgetHalt).toHaveLength(1);
+    expect(budgetHalt[0]?.correlationId).toBe(corr);
+
+    // The child run's audit events ride the same correlation id as the delegation.
+    const chain = log.query({ correlationId: corr });
+    expect(chain.map((e) => e.kind)).toContain("delegation");
+    expect(chain.map((e) => e.kind)).toContain("budget_halt");
+  });
+
+  test("correlated headless run links delegation, approval and tool-exec events", async () => {
+    const log = new AuditLog(auditPath(home));
+    const corr = "deleg-abc";
+    log.append("delegation", "writer", "ask_bot -> researcher", "writer", corr);
+    const provider = scriptProvider([
+      {
+        stopReason: "tool_use",
+        content: [
+          { type: "tool_use", id: "t1", name: "write_file", input: { path: "out.txt", content: "hello" } },
+        ],
+        usage: { inputTokens: 10, outputTokens: 10 },
+      },
+      { stopReason: "end_turn", content: [{ type: "text", text: "ok" }], usage: { inputTokens: 10, outputTokens: 10 } },
+    ]);
+    await runHeadless({
+      provider,
+      model: "m",
+      soulText: "be terse",
+      cwd: home,
+      message: "write a file",
+      maxTokens: 1024,
+      capUSD: 5,
+      policy: "full",
+      home,
+      correlationId: corr,
+      audit: (kind, detail) => log.append(kind, "user", detail, undefined, corr),
+      approve: async (name) => {
+        log.append("approval", "user", `${name} approved`, undefined, corr);
+        return true;
+      },
+    });
+
+    const chain = log.query({ correlationId: corr });
+    const kinds = chain.map((e) => e.kind);
+    expect(kinds).toContain("delegation");
+    expect(kinds).toContain("approval");
+    expect(kinds).toContain("write_exec");
+    expect(chain.every((e) => e.correlationId === corr)).toBe(true);
   });
 });
