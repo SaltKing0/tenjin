@@ -484,6 +484,9 @@ async function botCommand(args: string[]): Promise<number> {
         const res = importBot(home, name);
         stdout.write(`imported bot as "${res.name}" → ${res.dir}\n`);
         stdout.write(`  will create (${res.files.length}): ${res.files.join(", ") || "(nothing)"}\n`);
+        if (res.securityNote) {
+          stdout.write(`  WARNING: ${res.securityNote}\n`);
+        }
         return 0;
       }
       case "search": {
@@ -546,6 +549,9 @@ async function botCommand(args: string[]): Promise<number> {
           }
           const res = installCatalogPackage(home, repoDir, ref.name, cleanup);
           stdout.write(`installed bot as "${res.name}" → ${res.dir}\n`);
+          if (res.securityNote) {
+            stdout.write(`  WARNING: ${res.securityNote}\n`);
+          }
           return 0;
         } catch (e) {
           cleanup();
