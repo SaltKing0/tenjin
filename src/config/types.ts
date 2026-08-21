@@ -48,9 +48,10 @@ export interface HarnessConfig {
     vector?: { enabled?: boolean; model?: string };
     summaries?: { onSessionEnd?: boolean };
   };
-  /** Outbound event webhooks (#148): `events.webhooks` list. */
+  /** Outbound event webhooks (#148): `events.webhooks` list; ntfy (#149): `events.ntfy`. */
   events?: {
     webhooks?: unknown;
+    ntfy?: unknown;
   };
   inbox?: InboxConfig;
   retry?: RetryConfig;

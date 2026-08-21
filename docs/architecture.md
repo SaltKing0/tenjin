@@ -101,6 +101,15 @@ of starting fresh work. `ask_bot_async` accepts a per-task `maxTreeIterations`
 and reports the consumed tree share on the task (`treeUsedIterations` /
 `treeMaxIterations` / …) via `bot_task_status`.
 
+**Outbound notifications.** On gateway events (`approval.created`,
+`approval.resolved`, `job.failed`, `budget.exceeded`, `task.done`) Tenjin can
+push outward: **ntfy** (`events.ntfy`, #149) posts a compact message to an ntfy
+topic (`{ topicUrl, priority?, priorities? }`) — a zero-auth mobile push — and
+**webhooks** (`events.webhooks`, #148) POST an HMAC-SHA256-signed JSON payload
+to configured URLs with retry/backoff. ntfy priority is configurable per event
+type (`priority` base, `priorities.<type>` override, e.g.
+`priorities: { "job.failed": urgent }`).
+
 ## Gateway
 
 [`src/gateway/gateway.ts`](../src/gateway/gateway.ts) (`Gateway`) is the always-on
