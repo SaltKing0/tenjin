@@ -133,3 +133,69 @@ describe("runArena", () => {
     expect(r.totalCostUSD).toBeCloseTo((500_000 * 5) / 1_000_000 + (100 * 5 + 10 * 15) / 1_000_000);
   });
 });
+
+describe("arena judge (#152)", () => {
+  const judgeText =
+    "1. Output 2\n2. Output 1\nJUSTIFICATION: Output 2 is more complete and correct.";
+
+  function judgeProvider(reply = judgeText): Provider & { requests: ChatRequest[] } {
+    return scriptProvider("judge", [
+      endTurn(reply, { inputTokens: 100, outputTokens: 20 }),
+    ]);
+  }
+
+  test("ranked outputs are anonymized (no model names) and parsed best-first", async () => {
+    const judge = judgeProvider();
+    const r = await runArena(
+      optsFor({ judge: { provider: judge, model: "judge-1", capUSD: 5 } }),
+    );
+
+    expect(r.judge).toBeDefined();
+    expect(r.judge?.model).toBe("judge-1");
+    expect(r.judge?.error).toBeUndefined();
+    // rankings in the order listed: Output 2 best, then Output 1
+    expect(r.judge?.ranking).toEqual([2, 1]);
+
+    const prompt = String(judge.requests[0]?.messages[0]?.content ?? "");
+    // judge sees the anonymized outputs, keyed by index only
+    expect(prompt).toContain("[Output 1]");
+    expect(prompt).toContain("[Output 2]");
+    expect(prompt).toContain("answer one");
+    expect(prompt).toContain("answer two");
+    // no model refs leak into the judge
+    expect(prompt).not.toContain("claude-x");
+    expect(prompt).not.toContain("gpt-x");
+  });
+
+  test("judge respects its spend cap and falls back to manual selection", async () => {
+    // expensive judge usage vs a tiny cap → budget.exhausted after the call
+    const judge = scriptProvider("judge", [
+      { stopReason: "end_turn", content: [{ type: "text", text: judgeText }], usage: { inputTokens: 5_000_000, outputTokens: 0 } },
+    ]);
+    const r = await runArena(
+      optsFor({ judge: { provider: judge, model: "judge-1", capUSD: 0.001 } }),
+    );
+
+    expect(r.judge?.error).toBe("budget exceeded");
+    expect(r.judge?.ranking).toEqual([]);
+    expect(r.judge?.justification).toContain("budget cap");
+    // arena itself still returns all candidates (manual selection stays possible)
+    expect(r.candidates).toHaveLength(2);
+  });
+
+  test("a judge that throws falls back to manual selection without failing", async () => {
+    const throwing: Provider = {
+      name: "broken-judge",
+      async chat() {
+        throw new Error("judge api down");
+      },
+    };
+    const r = await runArena(
+      optsFor({ judge: { provider: throwing, model: "judge-1", capUSD: 5 } }),
+    );
+
+    expect(r.judge?.error).toContain("judge api down");
+    expect(r.judge?.ranking).toEqual([]);
+    expect(r.candidates).toHaveLength(2);
+  });
+});

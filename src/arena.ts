@@ -32,6 +32,23 @@ export interface ArenaOptions {
   policy?: HeadlessOptions["policy"];
   /** 1-based index of the entry to mark as winner. */
   winnerIndex?: number;
+  /** Optional separate judge model that ranks the outputs after the race (#152). */
+  judge?: ArenaJudgeOptions;
+}
+
+export interface ArenaJudgeOptions {
+  provider: Provider;
+  model: string;
+  /** Spend cap for the judge call; 0 = unlimited. Exceeding it → judge skipped (fallback). */
+  capUSD: number;
+}
+
+export interface ArenaJudge {
+  /** 1-based candidate indices, ranked best-first by the judge model. */
+  ranking: number[];
+  justification: string;
+  model: string;
+  error?: string;
 }
 
 export interface ArenaResult {
@@ -39,7 +56,17 @@ export interface ArenaResult {
   totalCostUSD: number;
   /** 1-based index into candidates, when a winner was requested. */
   winner?: number;
+  /** Present only when a judge was requested (#152). */
+  judge?: ArenaJudge;
 }
+
+/** Judge system prompt: anonymized outputs, ranked best-first by fixed criteria. */
+const JUDGE_SYSTEM =
+  "You are a strict, fair arena judge. Rank the outputs below best-first by " +
+  "correctness, completeness, and style. Respond with exactly one ranking line " +
+  "per output — '<rank>. Output <N>' — best first, then a short JUSTIFICATION paragraph.";
+
+const JUDGE_RANK_LINE = /^\s*(\d+)\s*\.\s*Output\s+(\d+)\b/i;
 
 /**
  * Race the same prompt through several models in parallel (one headless run per
@@ -98,7 +125,96 @@ export async function runArena(opts: ArenaOptions): Promise<ArenaResult> {
     opts.winnerIndex <= candidates.length
       ? opts.winnerIndex
       : undefined;
-  return { candidates, totalCostUSD, ...(winner ? { winner } : {}) };
+  const judge = opts.judge
+    ? await judgeOutputs(opts.judge, { candidates, prompt: opts.message, pricing: opts.pricing })
+    : undefined;
+  return { candidates, totalCostUSD, ...(winner ? { winner } : {}), ...(judge ? { judge } : {}) };
+}
+
+/**
+ * Have a separate model rank the (anonymised) race outputs best-first. Outputs
+ * are labeled "Output N" by their 1-based candidate index, with no model names,
+ * to cut bias. Errors — including exceeding the judge's spend cap — collapse to
+ * `error` so the arena degrades to manual selection instead of failing.
+ */
+async function judgeOutputs(
+  judge: ArenaJudgeOptions,
+  args: { candidates: ArenaCandidate[]; prompt: string; pricing?: PricingConfig },
+): Promise<ArenaJudge> {
+  const runnable = args.candidates
+    .map((c, i) => ({ idx: i + 1, text: c.text }))
+    .filter((c) => c.text.length > 0);
+  if (runnable.length === 0) {
+    return {
+      ranking: [],
+      justification: "no runnable outputs to judge",
+      model: judge.model,
+      error: "no runnable outputs",
+    };
+  }
+
+  const body = runnable
+    .map((c) => `[Output ${c.idx}]\n${c.text}`)
+    .join("\n\n");
+  const prompt =
+    `Task: ${args.prompt}\n\n${body}\n\n` +
+    `Rank best-first by correctness, completeness, and style. ` +
+    `One ranked line per output ('<rank>. Output <N>'), then a short JUSTIFICATION paragraph.`;
+
+  const budget = createBudget(judge.capUSD, args.pricing);
+  try {
+    const response = await judge.provider.chat({
+      model: judge.model,
+      system: JUDGE_SYSTEM,
+      messages: [{ role: "user", content: prompt }],
+      tools: [],
+      maxTokens: 1024,
+    });
+    budget.add(response.usage ?? { inputTokens: 0, outputTokens: 0 }, judge.model);
+    if (budget.exhausted) {
+      return {
+        ranking: [],
+        justification: `judge call exceeded budget cap ($${judge.capUSD})`,
+        model: judge.model,
+        error: "budget exceeded",
+      };
+    }
+    const text = response.content
+      .map((b) => (b.type === "text" ? b.text : ""))
+      .join("")
+      .trim();
+    if (!text) {
+      return {
+        ranking: [],
+        justification: "judge returned empty output",
+        model: judge.model,
+        error: "empty output",
+      };
+    }
+
+    const runnableIdx = new Set(runnable.map((r) => r.idx));
+    const lines = text.split("\n");
+    const ranking: number[] = [];
+    for (const line of lines) {
+      const m = JUDGE_RANK_LINE.exec(line);
+      if (m) {
+        const idx = parseInt(m[2] ?? "", 10);
+        if (runnableIdx.has(idx)) ranking.push(idx);
+      }
+    }
+    const justification = lines
+      .filter((l) => !JUDGE_RANK_LINE.test(l))
+      .join(" ")
+      .trim();
+    return { ranking, justification, model: judge.model };
+  } catch (e) {
+    return {
+      ranking: [],
+      justification: (e as Error).message,
+      model: judge.model,
+      error: (e as Error).message,
+    };
+  }
 }
 
 /** Plain-text arena report: one block per model with a compact summary line. */
@@ -121,5 +237,18 @@ export function renderArena(result: ArenaResult, prompt: string): string {
     lines.push("");
   });
   lines.push(`Total cost: $${result.totalCostUSD.toFixed(4)}`);
+  if (result.judge) {
+    lines.push("");
+    lines.push(`Judge (${result.judge.model}) — outputs anonymised:`);
+    if (result.judge.error) {
+      lines.push(`  ✗ judge unavailable: ${result.judge.error}`);
+      lines.push(`  → pick a winner manually with --winner <N>`);
+    } else if (result.judge.ranking.length > 0) {
+      lines.push(`  Ranking: ${result.judge.ranking.map((i) => `Output ${i}`).join(" > ")}`);
+      if (result.judge.justification) lines.push(`  ${result.judge.justification}`);
+    } else {
+      lines.push(`  (no ranking parsed — ${result.judge.justification || "see justification"})`);
+    }
+  }
   return lines.join("\n");
 }
