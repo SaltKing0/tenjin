@@ -224,7 +224,9 @@ async function judgeOutputs(
       .join(" ")
       .trim();
 
-    const ranking = ranked.map((r) => r.idx);
+    // Sort by the parsed rank (not the line order) so a judge that lists
+    // outputs out of order still yields a correct best-first ranking (#311).
+    const ranking = ranked.sort((a, b) => a.rank - b.rank).map((r) => r.idx);
     const uniqueIdx = new Set(ranking);
     const ranks = ranked.map((r) => r.rank).sort((a, b) => a - b);
     const ranksAreSequential = ranks.every((v, i) => v === i + 1);
