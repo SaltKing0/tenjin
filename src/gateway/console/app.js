@@ -3,6 +3,7 @@
 
 import { renderMarkdown } from "./markdown.js";
 import { emptyStateFor } from "./empty-state.js";
+import { connectionView } from "./topbar-state.js";
 
 const $app = document.getElementById("app");
 
@@ -72,6 +73,29 @@ async function apiJson(path, opts = {}) {
 const eventTabs = Object.create(null);
 let lastEventId = 0;
 let sseStarted = false;
+let sseConnected = false;
+let sseAbort = null;
+let sseIndicator = null;
+let offlineBanner = null;
+
+// #256: reflect the live SSE connection in the top bar (pure view from
+// topbar-state.js); clicking the indicator forces an immediate reconnect.
+function setSseUi() {
+  const { label, tone, banner } = connectionView(sseConnected);
+  if (sseIndicator) {
+    sseIndicator.textContent = label;
+    sseIndicator.className = `topbar-sse ${tone}`;
+  }
+  if (offlineBanner) {
+    offlineBanner.style.display = banner ? "block" : "none";
+    offlineBanner.textContent = banner || "";
+  }
+}
+function reconnectSse() {
+  sseConnected = false;
+  setSseUi();
+  if (sseAbort) sseAbort.abort();
+}
 
 function onEvent(type, fn) {
   (eventTabs[type] ||= new Set()).add(fn);
@@ -85,18 +109,25 @@ function dispatchEvent(ev) {
 
 async function connectEvents() {
   while (true) {
+    sseAbort = new AbortController();
     let res;
     try {
       const headers = lastEventId > 0 ? { "Last-Event-ID": String(lastEventId) } : {};
-      res = await api("/api/events", { headers });
+      res = await api("/api/events", { headers, signal: sseAbort.signal });
     } catch {
+      sseConnected = false;
+      setSseUi();
       await new Promise((r) => setTimeout(r, 1000));
       continue;
     }
     if (!res.ok || !res.body) {
+      sseConnected = false;
+      setSseUi();
       await new Promise((r) => setTimeout(r, 1000));
       continue;
     }
+    sseConnected = true;
+    setSseUi();
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -136,6 +167,8 @@ async function connectEvents() {
         reader.releaseLock();
       } catch {}
     }
+    sseConnected = false;
+    setSseUi();
     await new Promise((r) => setTimeout(r, 1000));
   }
 }
@@ -993,6 +1026,37 @@ async function panelMemory(main) {
   );
 }
 
+const DOCS_URL = "https://github.com/SaltKing0/Stealth/tree/main/docs";
+
+// #256: slim persistent top bar above every panel — SSE state (click to
+// reconnect), active bot switcher, budget spent today, docs link.
+function buildTopBar() {
+  sseIndicator = el("button", { class: "topbar-sse", title: "reconnect", onclick: reconnectSse }, "…");
+  offlineBanner = el("div", { class: "offline-banner", style: "display:none" });
+  const botSel = el("select", {
+    onchange: (e) => {
+      currentBot = e.target.value;
+      localStorage.setItem("tenjin_bot", currentBot);
+      render();
+    },
+  });
+  botSel.append(el("option", { value: "solo" }, "solo"));
+  for (const b of bots) botSel.append(el("option", { value: b.name }, b.name));
+  botSel.value = currentBot;
+  const budget = el("span", { class: "topbar-budget", title: "spend today" }, "…");
+  apiJson("/api/health")
+    .then((h) => {
+      budget.textContent = `$${fmtUsd(h.budgetSpentTodayUSD ?? 0)} today`;
+    })
+    .catch(() => {
+      budget.textContent = "budget n/a";
+    });
+  const docs = el("a", { class: "topbar-docs", href: DOCS_URL, target: "_blank", rel: "noopener" }, "docs");
+  const bar = el("div", { class: "topbar" }, sseIndicator, botSel, budget, docs);
+  setSseUi();
+  return bar;
+}
+
 const PANELS = [
   ["chat", "Chat", panelChat],
   ["settings", "Settings", panelSettings],
@@ -1027,8 +1091,9 @@ async function render() {
     ),
   );
 
+  const topbar = buildTopBar();
   const main = el("div", { class: "main" });
-  $app.replaceChildren(sidebar, main);
+  $app.replaceChildren(topbar, offlineBanner, sidebar, main);
   if (!sseStarted) {
     sseStarted = true;
     connectEvents();

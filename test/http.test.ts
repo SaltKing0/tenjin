@@ -240,6 +240,18 @@ test("console serves the empty-state module (#254)", async () => {
   expect(body).toContain("export function emptyStateFor");
 });
 
+test("console serves the topbar-state module (#256)", async () => {
+  const base = start({
+    consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
+  });
+  const res = await fetch(`${base}/console/topbar-state.js`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("application/javascript");
+  const body = await res.text();
+  expect(body).toContain("OFFLINE_BANNER");
+  expect(body).toContain("export function connectionView");
+});
+
 test("SSE closes an unread (zombie) client and removes its listener on queue overflow (#199)", async () => {
   const baseline = activeSubscriberCount();
   // Build a stream but never read from it → zombie consumer. A fromId past
