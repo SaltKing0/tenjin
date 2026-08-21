@@ -50,6 +50,7 @@ import {
 import { createSendMessageTool, createCheckInboxTool } from "./bots/tools";
 import { createAskBotTool } from "./bots/delegate";
 import { Gateway } from "./gateway/gateway";
+import { registerChannel, channelFactory, type Channel } from "./gateway/channel";
 import {
   SecurityGuard,
   announceGuardDisabled,
@@ -472,15 +473,13 @@ async function gatewayCommand(args: string[]): Promise<number> {
     );
     const gateway = new Gateway({ home, cwd, config, registry, log, guard });
 
-    const channels: Record<string, (text: string) => Promise<void>> = {};
-    let telegramRun: Promise<void> | null = null;
+    const tg = gateway.settings.telegram;
     let telegramHandle:
       | ((
           text: string,
           opts?: { onDelta?: (d: string) => void },
         ) => Promise<string | null>)
       | null = null;
-    const tg = gateway.settings.telegram;
     if (tg?.enabled || gateway.settings.listen) {
       const available = listBots(home);
       const defaultBot = tg?.defaultBot ?? available[0];
@@ -506,7 +505,9 @@ async function gatewayCommand(args: string[]): Promise<number> {
       telegramHandle = (text, opts) =>
         handleMessage(text, { actor: "http", source: "http", onDelta: opts?.onDelta });
     }
-    if (tg?.enabled) {
+
+    registerChannel("telegram", () => {
+      if (!tg?.enabled) throw new ConfigError("gateway.telegram is not enabled");
       const token = process.env.TELEGRAM_BOT_TOKEN;
       if (!token) throw new ConfigError("gateway.telegram enabled but TELEGRAM_BOT_TOKEN is not set");
       const defaultBot = tg.defaultBot as string;
@@ -539,6 +540,7 @@ async function gatewayCommand(args: string[]): Promise<number> {
           defaultBot,
           allowedUsers: tg.allowedUsers,
           apiBase: process.env.TELEGRAM_API_BASE,
+          adminChatId: tg.adminChatId,
           rateLimitMax: tg.rateLimitMax,
           rateLimitWindowMs: tg.rateLimitWindowMs,
           maxMessageLength: tg.maxMessageLength,
@@ -558,11 +560,19 @@ async function gatewayCommand(args: string[]): Promise<number> {
           }),
         log,
       );
-      channels["telegram"] = async (text) => {
-        if (!tg.adminChatId) throw new ConfigError("postTo telegram requires gateway.telegram.adminChatId");
-        await channel.send(tg.adminChatId, text);
-      };
-      telegramRun = channel.run(controller.signal);
+      return channel;
+    });
+
+    const channels: Record<string, (text: string) => Promise<void>> = {};
+    const builtChannels: Channel[] = [];
+    for (const kind of gateway.settings.channels) {
+      const factory = channelFactory(kind);
+      if (!factory) {
+        throw new ConfigError(`gateway.channels: no factory for channel "${kind}"`);
+      }
+      const ch = factory({});
+      builtChannels.push(ch);
+      channels[kind] = (text) => ch.send(text);
     }
 
     if (dryRun) {
@@ -572,7 +582,7 @@ async function gatewayCommand(args: string[]): Promise<number> {
     }
 
     const runners: Promise<void>[] = [gateway.run(controller.signal)];
-    if (telegramRun) runners.push(telegramRun);
+    for (const ch of builtChannels) runners.push(ch.start(controller.signal));
 
     if (gateway.settings.listen) {
       const listen = gateway.settings.listen;
