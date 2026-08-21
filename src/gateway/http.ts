@@ -220,43 +220,72 @@ export function startHttpServer(deps: HttpDeps): HttpServerHandle {
   return { port, stop: () => server.stop(true) };
 }
 
-function eventsStream(fromId: number): Response {
+/**
+ * SSE per-connection queue cap. Past this a client that isn't draining the
+ * stream is treated as dead or too slow and is actively closed (#199) instead
+ * of letting the internal queue grow unbounded.
+ */
+export const SSE_HIGH_WATER_MARK = 64;
+const SSE_HEARTBEAT_MS = 3000;
+
+/**
+ * Build the SSE event stream. The subscriber, heartbeat and backpressure live
+ * here so the zombie-client behaviour is testable without a real socket.
+ */
+export function buildEventsStream(fromId: number): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
-  let unsub: (() => void) | null = null;
   let cleanup: (() => void) | null = null;
-  const stream = new ReadableStream<Uint8Array>({
-    start(c) {
-      let closed = false;
-      const send = (e: GatewayEvent) => {
-        if (closed) return;
-        try {
-          c.enqueue(encoder.encode(formatEvent(e)));
-        } catch {
-          /* stream already cancelled */
-        }
-      };
-      for (const e of historySince(fromId)) send(e);
-      unsub = subscribe(send);
-      const hb = setInterval(() => {
-        if (closed) return;
-        try {
-          c.enqueue(encoder.encode(": ping\n\n"));
-        } catch {
-          /* ignore */
-        }
-      }, 3000);
-      cleanup = () => {
-        closed = true;
-        unsub?.();
-        unsub = null;
-        clearInterval(hb);
-      };
+  return new ReadableStream<Uint8Array>(
+    {
+      start(c) {
+        let closed = false;
+        let unsub: (() => void) | null = null;
+        let hb: ReturnType<typeof setInterval> | null = null;
+        cleanup = () => {
+          if (closed) return;
+          closed = true;
+          unsub?.();
+          unsub = null;
+          if (hb) clearInterval(hb);
+          hb = null;
+        };
+        const enqueueOrClose = (payload: string): void => {
+          if (closed) return;
+          // #199: backpressure — a consumer that isn't draining the queue is
+          // dead or too slow; close it instead of letting the buffer grow
+          // unbounded (the active close also drops the subscriber).
+          if (c.desiredSize != null && c.desiredSize <= 0) {
+            cleanup?.();
+            try {
+              c.close();
+            } catch {
+              /* stream already closed */
+            }
+            return;
+          }
+          try {
+            c.enqueue(encoder.encode(payload));
+          } catch {
+            // Non-cancel enqueue failure — don't swallow it and leak the
+            // subscriber/interval; clean up.
+            cleanup?.();
+          }
+        };
+        const send = (e: GatewayEvent) => enqueueOrClose(formatEvent(e));
+        for (const e of historySince(fromId)) send(e);
+        unsub = subscribe(send);
+        hb = setInterval(() => enqueueOrClose(": ping\n\n"), SSE_HEARTBEAT_MS);
+      },
+      cancel() {
+        cleanup?.();
+      },
     },
-    cancel() {
-      cleanup?.();
-    },
-  });
-  return new Response(stream, {
+    { highWaterMark: SSE_HIGH_WATER_MARK },
+  );
+}
+
+function eventsStream(fromId: number): Response {
+  return new Response(buildEventsStream(fromId), {
     headers: {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",

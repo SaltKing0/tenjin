@@ -30,6 +30,11 @@ export function emit(type: string, payload: unknown): GatewayEvent {
   return ev;
 }
 
+/** @internal — number of live SSE subscribers (for leak/backpressure tests). */
+export function activeSubscriberCount(): number {
+  return listeners.size;
+}
+
 export function historySince(afterId: number): GatewayEvent[] {
   const out: GatewayEvent[] = [];
   for (const e of history) if (e.id > afterId) out.push(e);
