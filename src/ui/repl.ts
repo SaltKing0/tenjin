@@ -15,9 +15,9 @@ import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { buildSkillsSection, summarizeSkills } from "../skills/activate";
 import { createAskBotTool } from "../bots/delegate";
-import { listBots } from "../bots/profile";
+import { listBots, resolveBot } from "../bots/profile";
 import { AuditLog, formatAudit, auditPath } from "../audit/log";
-import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
+import { inboxPolicyFromConfig, leaveUserMessage, unreadMessages } from "../bots/inbox";
 import { getSkill, listSkills, scaffoldSkill } from "../skills/loader";
 import { listSummaries, sessionsWithoutSummary } from "../memory/summaries";
 import { loadChunks, indexedSessionIds } from "../memory/vector-store";
@@ -213,6 +213,7 @@ async function handleCommand(
           "/memory          memory layer status",
           "/whoami          current identity and model",
           "/bots            list bots and unread inbox counts",
+          "/tell <bot> text leave a user message in a bot's inbox",
           "/audit [n]       recent security-relevant events",
           "/skills          list installed skills",
           "/skill <n> [off] pin a skill into every turn",
@@ -237,6 +238,27 @@ async function handleCommand(
         const marker = b === opts.bot ? green(" <- you") : "";
         const note = unread ? dim(` ${unread} unread`) : "";
         stdout.write(`${b.padEnd(20)}${note}${marker}\n`);
+      }
+      return;
+    }
+    case "/tell": {
+      const bot = rest[0];
+      const text = rest.slice(1).join(" ");
+      if (!bot || !text.trim()) {
+        stdout.write("usage: /tell <bot> <text>\n");
+        return;
+      }
+      try {
+        const profile = resolveBot(opts.home, bot);
+        const msg = leaveUserMessage(
+          profile.inboxDir,
+          profile.name,
+          text,
+          inboxPolicyFromConfig(opts.config.inbox),
+        );
+        stdout.write(`left message for ${profile.name} (id ${msg.id})\n`);
+      } catch (e) {
+        stdout.write(`error: ${(e as Error).message}\n`);
       }
       return;
     }

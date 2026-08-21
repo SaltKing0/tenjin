@@ -58,7 +58,7 @@ export function createCheckInboxTool(deps: {
     name: "check_inbox",
     group: "read",
     description:
-      "Check your inbox for messages from other bots. Returns unread messages and marks them read.",
+      "Check your inbox for messages from the user or other bots. User notes are listed first. Returns unread messages and marks them read.",
     inputSchema: {
       type: "object",
       properties: {},

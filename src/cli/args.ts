@@ -13,6 +13,7 @@ Usage:
   tenjin --fork <id> [n]     branch a copy at event n (default: end)
   tenjin --bot <name>        run as a specific bot
   tenjin bot new|list|init-examples   manage bots
+  tenjin tell <bot> <text>   leave a user message in a bot's inbox
   tenjin gateway [--dry-run] always-on gateway (channels, jobs, heartbeats)
                              serves the web console at gateway.listen — no TUI:
                              Tenjin lives in your messaging and your browser.

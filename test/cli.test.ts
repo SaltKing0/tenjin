@@ -6,6 +6,7 @@ test("HELP mentions all flags", () => {
   for (const flag of ["--model", "--provider", "--budget", "--resume", "-p"]) {
     expect(HELP).toContain(flag);
   }
+  expect(HELP).toContain("tenjin tell");
 });
 
 describe("parseArgs", () => {
