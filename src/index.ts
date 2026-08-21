@@ -44,6 +44,7 @@ import { createAskBotTool } from "./bots/delegate";
 import { Gateway } from "./gateway/gateway";
 import { SecurityGuard } from "./security/guard";
 import { AuditLog, formatAudit, auditPath } from "./audit/log";
+import { aggregateSpend, renderSpend } from "./audit/spend";
 import { TelegramChannel, routeText } from "./gateway/telegram";
 import { unreadMessages } from "./bots/inbox";
 import { readTool } from "./tools/read";
@@ -78,6 +79,10 @@ async function main(): Promise<number> {
 
   if (process.argv[2] === "audit") {
     return auditCommand(process.argv.slice(3));
+  }
+
+  if (process.argv[2] === "spend") {
+    return spendCommand(process.argv.slice(3));
   }
 
   let cli: CliArgs;
@@ -299,6 +304,18 @@ function botCommand(args: string[]): number {
     stdout.write(`error: ${(e as Error).message}\n`);
     return 1;
   }
+}
+
+function spendCommand(args: string[]): number {
+  let days = 0;
+  let bot: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--days") days = Number(args[++i]);
+    else if (args[i] === "--bot") bot = args[++i];
+  }
+  const rows = aggregateSpend(tenjinHome(), { days, bot });
+  stdout.write(renderSpend(rows) + "\n");
+  return 0;
 }
 
 function auditCommand(args: string[]): number {
