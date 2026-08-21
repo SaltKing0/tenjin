@@ -8,6 +8,7 @@ import {
   ConfigError,
   tenjinHome,
   memoryEnabled,
+  memorySummariesOnSessionEnd,
   vectorEnabled,
   providersFile,
   writeProvidersYaml,
@@ -408,5 +409,41 @@ describe("retry config", () => {
       "model: m\nretry:\n  retryableStatuses: [500, \"x\"]\n",
     );
     expect(() => loadConfig(project, home)).toThrow(/retry\.retryableStatuses/);
+  });
+});
+
+describe("memorySummariesOnSessionEnd (#37)", () => {
+  test("off by default (opt-in)", () => {
+    expect(memorySummariesOnSessionEnd({})).toBe(false);
+    expect(memorySummariesOnSessionEnd({ memory: { enabled: true } })).toBe(false);
+  });
+
+  test("on only when explicitly enabled and memory stays on", () => {
+    expect(
+      memorySummariesOnSessionEnd({
+        memory: { enabled: true, summaries: { onSessionEnd: true } },
+      }),
+    ).toBe(true);
+    expect(
+      memorySummariesOnSessionEnd({
+        memory: { enabled: false, summaries: { onSessionEnd: true } },
+      }),
+    ).toBe(false);
+    expect(
+      memorySummariesOnSessionEnd({
+        memory: { enabled: true, summaries: { onSessionEnd: false } },
+      }),
+    ).toBe(false);
+  });
+
+  test("parses summaries.onSessionEnd from config.yaml", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "config.yaml"),
+      "model: m\nmemory:\n  enabled: true\n  summaries:\n    onSessionEnd: true\n",
+    );
+    const { config } = loadConfig(project, home);
+    expect(config.memory?.summaries?.onSessionEnd).toBe(true);
+    expect(memorySummariesOnSessionEnd(config)).toBe(true);
   });
 });

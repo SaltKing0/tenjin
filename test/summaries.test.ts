@@ -8,6 +8,7 @@ import {
   listSummaries,
   readSummary,
   sessionsWithoutSummary,
+  summarizeLatestSession,
   summaryPath,
   writeSummary,
   type SummaryMeta,
@@ -234,5 +235,108 @@ describe("generatePendingSummaries", () => {
     });
     expect(report.generated).toHaveLength(2);
     expect(provider.requests).toHaveLength(2);
+  });
+});
+
+describe("incremental summaries (#37)", () => {
+  test("second run only passes events after uptoEvent and advances the pointer", async () => {
+    const log = seedSession("alpha task");
+    const provider = mockProvider("first summary");
+    const opts = {
+      provider,
+      model: "m",
+      maxTokens: 512,
+      projectPath: project,
+      memoryDirPath: home,
+    };
+
+    await generateSummary(log, opts);
+    expect(provider.requests).toHaveLength(1);
+    expect(readSummary(summaryPath(home, log.id))?.meta.uptoEvent).toBe(3);
+
+    // New activity arrives after the first summary has been written.
+    log.append({ t: "message", role: "user", content: "beta follow-up", ts: "t" });
+    log.append({
+      t: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "more" }],
+      ts: "t",
+    });
+
+    await generateSummary(log, opts);
+    expect(provider.requests).toHaveLength(2);
+    const secondPrompt = String(provider.requests[1]?.messages[0]?.content);
+    // Only the new events are rendered for the incremental pass.
+    expect(secondPrompt).toContain("beta follow-up");
+    expect(secondPrompt).not.toContain("alpha task");
+    // The prior summary is carried in for continuity.
+    expect(secondPrompt).toContain("first summary");
+    expect(readSummary(summaryPath(home, log.id))?.meta.uptoEvent).toBe(5);
+  });
+
+  test("no new events leaves the existing summary untouched (no provider call)", async () => {
+    const log = seedSession("stable");
+    const provider = mockProvider("s");
+    const opts = {
+      provider,
+      model: "m",
+      maxTokens: 512,
+      projectPath: project,
+      memoryDirPath: home,
+    };
+    await generateSummary(log, opts);
+    expect(provider.requests).toHaveLength(1);
+
+    await generateSummary(log, opts);
+    expect(provider.requests).toHaveLength(1); // no extra call
+    expect(readSummary(summaryPath(home, log.id))?.meta.uptoEvent).toBe(3);
+  });
+});
+
+describe("summarizeLatestSession (#37 gateway path)", () => {
+  test("writes a summary for the newest session in the given dirs", async () => {
+    const sessions = mkdtempSync(join(tmpdir(), "tj-mem-sess-"));
+    try {
+      const log = SessionLog.create(sessions);
+      log.append({ t: "session_start", id: log.id, ts: "t", provider: "anthropic", model: "m" });
+      log.append({ t: "message", role: "user", content: "gateway session work", ts: "t" });
+
+      const provider = mockProvider("gateway summary");
+      const res = await summarizeLatestSession({
+        sessionsDirPath: sessions,
+        memoryDirPath: home,
+        provider,
+        model: "m",
+        maxTokens: 512,
+        projectPath: project,
+      });
+
+      expect(res?.sessionId).toBe(log.id);
+      expect(res?.sessionId).toBeDefined();
+      const entry = readSummary(summaryPath(home, log.id));
+      expect(entry?.meta.uptoEvent).toBe(2);
+      expect(provider.requests).toHaveLength(1);
+    } finally {
+      rmSync(sessions, { recursive: true, force: true });
+    }
+  });
+
+  test("returns null when there are no sessions", async () => {
+    const sessions = mkdtempSync(join(tmpdir(), "tj-mem-empty-"));
+    try {
+      const provider = mockProvider("x");
+      const res = await summarizeLatestSession({
+        sessionsDirPath: sessions,
+        memoryDirPath: home,
+        provider,
+        model: "m",
+        maxTokens: 512,
+        projectPath: project,
+      });
+      expect(res).toBeNull();
+      expect(provider.requests).toHaveLength(0);
+    } finally {
+      rmSync(sessions, { recursive: true, force: true });
+    }
   });
 });

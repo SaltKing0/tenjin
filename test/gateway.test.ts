@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -434,5 +434,59 @@ describe("heartbeat", () => {
     expect(() =>
       parseGatewaySettings({ heartbeat: { enabled: true } }),
     ).toThrow(/requires a `bot`/);
+  });
+});
+
+describe("onSessionEnd summaries (#37)", () => {
+  test("enabled: a finished job writes a summary for the bot session", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        memory: { enabled: true, summaries: { onSessionEnd: true } },
+        gateway: {
+          jobs: [{ name: "j", bot: "worker", prompt: "summarize me", every: "1m" }],
+        },
+      }),
+      registry: { get: () => mockProvider("run output") } as never,
+      log: () => {},
+    });
+
+    await gw.fireDue(Date.now() + 120_000);
+
+    const summariesDir = join(home, "bots", "worker", "memory", "summaries");
+    let summaryFile: string | undefined;
+    for (let i = 0; i < 60; i++) {
+      const files = existsSync(summariesDir) ? readdirSync(summariesDir) : [];
+      if (files.length > 0) {
+        summaryFile = files[0];
+        break;
+      }
+      await Bun.sleep(20);
+    }
+    expect(summaryFile).toBeDefined();
+    // The summary is a real file with YAML frontmatter (uptoEvent written).
+    const text = readFileSync(join(summariesDir, summaryFile!), "utf8");
+    expect(text).toMatch(/uptoEvent:/);
+  });
+
+  test("disabled by default: no summary file is produced", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: {
+          jobs: [{ name: "j", bot: "worker", prompt: "summarize me", every: "1m" }],
+        },
+      }),
+      registry: { get: () => mockProvider("run output") } as never,
+      log: () => {},
+    });
+
+    await gw.fireDue(Date.now() + 120_000);
+    await Bun.sleep(100);
+
+    const summariesDir = join(home, "bots", "worker", "memory", "summaries");
+    expect(existsSync(summariesDir)).toBe(false);
   });
 });
