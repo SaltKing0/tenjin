@@ -6,7 +6,7 @@ export function createSaveSkillTool(deps: { projectDir: string }): ToolDef {
     name: "save_skill",
     group: "write",
     description:
-      "Persist a reusable skill to the project so future sessions can load it via use_skill. Use when you notice a repeatable pattern worth capturing.",
+      "Persist a reusable skill to the project so future sessions can load it via use_skill. Use when you notice a repeatable pattern worth capturing. Set overwrite: true to update an existing skill of the same name.",
     inputSchema: {
       type: "object",
       properties: {
@@ -16,6 +16,10 @@ export function createSaveSkillTool(deps: { projectDir: string }): ToolDef {
           description: "One line: what the skill does and when to use it",
         },
         content: { type: "string", description: "Full instructions in markdown" },
+        overwrite: {
+          type: "boolean",
+          description: "Replace an existing skill of the same name (default false)",
+        },
       },
       required: ["name", "description", "content"],
     },
@@ -24,6 +28,7 @@ export function createSaveSkillTool(deps: { projectDir: string }): ToolDef {
         name: String(args.name ?? ""),
         description: String(args.description ?? ""),
         content: String(args.content ?? ""),
+        overwrite: args.overwrite === true || args.overwrite === "true",
       });
       return `Saved skill to ${path}`;
     },

@@ -90,13 +90,15 @@ export function sanitizeSkillName(name: string): string {
 
 export function saveSkill(
   projectDir: string,
-  input: { name: string; description: string; content: string },
+  input: { name: string; description: string; content: string; overwrite?: boolean },
 ): string {
   const name = sanitizeSkillName(input.name);
   const dir = projectSkillsDir(projectDir);
   const skillDir = join(dir, name);
-  if (existsSync(skillDir)) {
-    throw new ConfigError(`skill "${name}" already exists`);
+  if (existsSync(skillDir) && !input.overwrite) {
+    throw new ConfigError(
+      `skill "${name}" already exists; pass overwrite: true to update it`,
+    );
   }
   mkdirSync(skillDir, { recursive: true });
   const frontmatter = [
