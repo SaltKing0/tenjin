@@ -18,7 +18,7 @@ import { cheapModelRef, type ModelRef } from "../config/models";
 import { summarizeLatestSession } from "../memory/summaries";
 import { createCheckInboxTool, createSendMessageTool } from "../bots/tools";
 import { createRememberTool } from "../tools/memory";
-import { formatInbox, inboxPolicyFromConfig, markRead, unreadMessages } from "../bots/inbox";
+import { formatInbox, inboxPolicyFromConfig, markRead, unreadMessages, USER_SENDER } from "../bots/inbox";
 import type { ToolDef } from "../tools/registry";
 import { emit } from "./events";
 
@@ -49,6 +49,9 @@ export interface JobRunRecord {
 
 /** Default number of completed runs kept per job. */
 export const DEFAULT_JOB_HISTORY_LEN = 20;
+
+/** Default per-bot-pair reply cooldown for heartbeats (#181 safety net, ms). */
+const DEFAULT_HEARTBEAT_REPLY_COOLDOWN_MS = 60_000;
 
 export interface JobView {
   name: string;
@@ -668,7 +671,13 @@ export class Gateway {
       const jobPolicy = capPolicy(job.policy, profile.config.security?.policy);
       if (job.kind === "heartbeat") {
         const inboxPolicy = inboxPolicyFromConfig(this.deps.config.inbox);
-        const unread = unreadMessages(profile.inboxDir, inboxPolicy);
+        // #181: the heartbeat only reacts to user-originated messages. Bot mail
+        // (send_message / notifyBot) is inter-bot traffic the recipient handles
+        // on a real run — surfacing it here would make two heartbeat bots reply
+        // to each other forever. Bot messages stay unread (not auto-replied).
+        const unread = unreadMessages(profile.inboxDir, inboxPolicy).filter(
+          (m) => m.from === USER_SENDER,
+        );
         const inboxPart =
           unread.length > 0
             ? // #189: bot-to-bot inbox content is untrusted — scan, audit and
@@ -691,7 +700,13 @@ export class Gateway {
         }
         const tools: ToolDef[] = [
           createCheckInboxTool({ profile, policy: inboxPolicy }),
-          createSendMessageTool({ home: this.deps.home, fromBot: profile.name, policy: inboxPolicy }),
+          createSendMessageTool({
+            home: this.deps.home,
+            fromBot: profile.name,
+            policy: inboxPolicy,
+            // #181 safety net: per-bot-pair cooldown so a heartbeat can't loop.
+            replyCooldownMs: this.settings.heartbeat?.replyCooldownMs ?? DEFAULT_HEARTBEAT_REPLY_COOLDOWN_MS,
+          }),
           createRememberTool({ memoryDirPath: profile.memoryDir }),
         ];
         extraTools = tools;

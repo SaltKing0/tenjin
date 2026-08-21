@@ -82,6 +82,9 @@ export interface DiscordChannelConfig {
 export interface HeartbeatConfig {
   bot: string;
   intervalMs: number;
+  /** Per-bot-pair reply cooldown (ms) applied to the heartbeat's send_message,
+   * as a safety net against bot-to-bot reply loops (#181). 0 disables. */
+  replyCooldownMs?: number;
 }
 
 export interface ListenConfig {
@@ -459,7 +462,15 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     const bot = typeof hb.bot === "string" ? hb.bot.trim() : "";
     if (!bot) throw new ConfigError("gateway.heartbeat.enabled requires a `bot`");
     const every = typeof hb.every === "string" ? hb.every : "30m";
-    settings.heartbeat = { bot, intervalMs: parseEvery(every) };
+    let replyCooldownMs: number | undefined;
+    if (hb.replyCooldownMs !== undefined && hb.replyCooldownMs !== null) {
+      const c = hb.replyCooldownMs;
+      if (typeof c !== "number" || !Number.isInteger(c) || c < 0) {
+        throw new ConfigError("gateway.heartbeat.replyCooldownMs must be a non-negative integer (ms)");
+      }
+      replyCooldownMs = c;
+    }
+    settings.heartbeat = { bot, intervalMs: parseEvery(every), ...(replyCooldownMs !== undefined ? { replyCooldownMs } : {}) };
   }
 
   const rawListen = gw.listen;
