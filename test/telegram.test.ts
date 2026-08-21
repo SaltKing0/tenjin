@@ -323,3 +323,78 @@ describe("TelegramChannel hardening (#69)", () => {
     expect(sentMessages).toEqual([]);
   });
 });
+
+describe("TelegramChannel implements Channel (#97)", () => {
+  let apiBase: string;
+  let sentMessages: Array<{ chat_id: number; text: string }>;
+  let scriptedUpdates: TgUpdate[];
+  let server: ReturnType<typeof Bun.serve>;
+
+  beforeEach(() => {
+    sentMessages = [];
+    scriptedUpdates = [];
+    server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        if (url.pathname.endsWith("/getUpdates")) {
+          const out = scriptedUpdates;
+          scriptedUpdates = [];
+          return Response.json({ result: out });
+        }
+        if (url.pathname.endsWith("/sendMessage")) {
+          const body = (await req.json()) as { chat_id: number; text: string };
+          sentMessages.push(body);
+          return Response.json({ ok: true });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    apiBase = `http://localhost:${server.port}`;
+  });
+
+  afterEach(() => server.stop(true));
+
+  const makeChannel = (opts: Partial<ConstructorParameters<typeof TelegramChannel>[0]> = {}) =>
+    new TelegramChannel(
+      {
+        token: "T0KEN",
+        apiBase,
+        defaultBot: "researcher",
+        allowedUsers: [42],
+        pollTimeoutSec: 0,
+        ...opts,
+      },
+      async () => null,
+    );
+
+  test("onMessage setter wires the handler after construction", async () => {
+    const channel = makeChannel();
+    let got = "";
+    channel.onMessage(async (msg) => {
+      got = msg.text;
+      return "ok";
+    });
+    scriptedUpdates = [update(1, 42, "hello channel")];
+    await channel.pollOnce();
+    expect(got).toBe("hello channel");
+  });
+
+  test("send(text) posts to adminChatId", async () => {
+    const channel = makeChannel({ adminChatId: 999 });
+    await channel.send("broadcast");
+    expect(sentMessages).toEqual([{ chat_id: 999, text: "broadcast" }]);
+  });
+
+  test("send(text) without adminChatId is a config error", async () => {
+    const channel = makeChannel();
+    await expect(channel.send("nope")).rejects.toThrow(/adminChatId/);
+  });
+
+  test("start with an already-aborted signal resolves immediately", async () => {
+    const channel = makeChannel();
+    const ac = new AbortController();
+    ac.abort();
+    await channel.start(ac.signal);
+  });
+});
