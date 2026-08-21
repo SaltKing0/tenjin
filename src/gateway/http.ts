@@ -82,16 +82,16 @@ export function startHttpServer(deps: HttpDeps): HttpServerHandle {
           return Response.json({ error: "handler failed" }, { status: 500 });
         }
       }
+      if (url.pathname === "/api/chat/stream" && deps.streamChat) {
+        const streamed = await deps.streamChat(req);
+        return streamed ?? Response.json({ error: "not found" }, { status: 404 });
+      }
       if (url.pathname.startsWith("/api/")) {
         if (deps.api) {
           const response = await deps.api(req, url);
           if (response) return response;
         }
         return Response.json({ error: "not found" }, { status: 404 });
-      }
-      if (url.pathname === "/api/chat/stream" && deps.streamChat) {
-        const streamed = await deps.streamChat(req);
-        return streamed ?? Response.json({ error: "not found" }, { status: 404 });
       }
       return Response.json({ error: "not found" }, { status: 404 });
     },

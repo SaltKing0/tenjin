@@ -14,6 +14,8 @@ Usage:
   tenjin --bot <name>        run as a specific bot
   tenjin bot new|list|init-examples   manage bots
   tenjin gateway [--dry-run] always-on gateway (channels, jobs, heartbeats)
+                             serves the web console at gateway.listen — no TUI:
+                             Tenjin lives in your messaging and your browser.
   tenjin audit [--tail n] [--bot x] [--kind k]   security event trail
   tenjin spend [--days n] [--bot x]              spend across all sessions
 
