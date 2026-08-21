@@ -19,6 +19,12 @@ Usage:
                              Tenjin lives in your messaging and your browser.
   tenjin audit [--tail n] [--bot x] [--kind k]   security event trail
   tenjin spend [--days n] [--bot x]              spend across all sessions
+  tenjin job list|add|rm|run                     manage scheduled gateway jobs
+                             job list            list jobs with nextDue/lastRun
+                             job add <bot> "<cron>" "<prompt>"   add a job
+                             job rm <id>         remove a job
+                             job run <id>        run a job immediately
+                             (gateway picks up changes via SIGHUP or restart)
 
 Options:
   -h, --help                 show this help

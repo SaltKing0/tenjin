@@ -144,11 +144,23 @@ export function msUntilNextJob(jobs: ScheduledJob[], nowMs: number): number {
 }
 
 export class Gateway {
-  readonly settings: GatewaySettings;
-  readonly jobs: ScheduledJob[];
+  settings: GatewaySettings;
+  jobs: ScheduledJob[];
 
   constructor(private deps: GatewayDeps) {
     this.settings = parseGatewaySettings(deps.config.gateway);
+    this.jobs = buildJobs(this.settings, Date.now());
+  }
+
+  /**
+   * Re-read the jobs from a fresh config and rebuild the schedule, so the
+   * running gateway picks up `tenjin job add/rm` changes without a restart
+   * (wired up to SIGHUP in the CLI). Channels/handlers keep their previous
+   * settings — only the job set is refreshed.
+   */
+  reload(config: HarnessConfig): void {
+    this.deps.config = config;
+    this.settings = parseGatewaySettings(config.gateway);
     this.jobs = buildJobs(this.settings, Date.now());
   }
 

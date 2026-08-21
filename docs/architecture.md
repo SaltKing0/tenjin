@@ -53,6 +53,10 @@ CLI, loads config, builds an `AppContext`, and dispatches to one of:
 - **`bot`** — bot lifecycle: `new`, `list`, `init-examples`.
 - **`gateway`** — the always-on process (below).
 - **`audit` / `spend`** — CLI views over the event trail and spend records.
+- **`job`** — manage scheduled gateway jobs from the headless CLI: `list`,
+  `add <bot> "<cron>" "<prompt>"`, `rm <id>`, `run <id>`. Edits
+  `config.yaml` in block style and validates cron with the shared parser; a
+  running gateway picks up the change via SIGHUP or restart.
 - **`doctor` / `export` / `forget`** — diagnostics and data management.
 
 `AppContext` carries the resolved config, provider registry, default model refs,

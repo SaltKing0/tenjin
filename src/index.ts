@@ -77,6 +77,7 @@ import { editTool } from "./tools/edit";
 import { bashTool } from "./tools/bash";
 import type { ToolDef } from "./tools/registry";
 import { parseArgs, HELP, type CliArgs } from "./cli/args";
+import { listJobs, addJob, removeJob, findJob, runJob, renderJob } from "./cli/jobs";
 import { PRODUCT } from "./version";
 
 interface AppContext {
@@ -112,6 +113,10 @@ async function main(): Promise<number> {
 
   if (process.argv[2] === "spend") {
     return spendCommand(process.argv.slice(3));
+  }
+
+  if (process.argv[2] === "job") {
+    return jobCommand(process.argv.slice(3));
   }
 
   if (process.argv[2] === "doctor") {
@@ -422,6 +427,103 @@ function spendCommand(args: string[]): number {
   return 0;
 }
 
+async function jobCommand(args: string[]): Promise<number> {
+  const [sub, ...rest] = args;
+  const home = tenjinHome();
+  const cwd = process.cwd();
+  try {
+    switch (sub) {
+      case "list": {
+        const views = listJobs(home);
+        if (views.length === 0) {
+          stdout.write("no jobs — tenjin job add <bot> \"<cron>\" \"<prompt>\"\n");
+          return 0;
+        }
+        for (const v of views) stdout.write(renderJob(v));
+        return 0;
+      }
+      case "add": {
+        const [bot, cron, ...promptParts] = rest;
+        const prompt = promptParts.join(" ").trim();
+        if (!bot || !cron || !prompt) {
+          stdout.write("usage: tenjin job add <bot> \"<cron>\" \"<prompt>\"\n");
+          return 2;
+        }
+        const name = addJob(home, { bot, cron, prompt });
+        stdout.write(
+          `added job ${name} (bot=${bot.trim()} cron "${cron.trim()}") — restart the gateway or send SIGHUP to reload\n`,
+        );
+        return 0;
+      }
+      case "rm": {
+        const id = rest[0];
+        if (!id) {
+          stdout.write("usage: tenjin job rm <id>\n");
+          return 2;
+        }
+        const removed = removeJob(home, id);
+        if (!removed) {
+          stdout.write(`unknown job \"${id}\" — tenjin job list to see jobs\n`);
+          return 1;
+        }
+        stdout.write(`removed job ${id}\n`);
+        return 0;
+      }
+      case "run": {
+        const id = rest[0];
+        if (!id) {
+          stdout.write("usage: tenjin job run <id>\n");
+          return 2;
+        }
+        return await runJobCommand(home, cwd, id);
+      }
+      default:
+        stdout.write("usage: tenjin job list|add <bot> \"<cron>\" \"<prompt>\"|rm <id>|run <id>\n");
+        return 2;
+    }
+  } catch (e) {
+    if (e instanceof ConfigError) {
+      stdout.write(`config error: ${e.message}\n`);
+      return 2;
+    }
+    stdout.write(`error: ${(e as Error).message}\n`);
+    return 1;
+  }
+}
+
+async function runJobCommand(home: string, cwd: string, id: string): Promise<number> {
+  const { config } = loadConfig(cwd, home, { skipModelCheck: true });
+  const registry = new ProviderRegistry(
+    config.providers?.openai?.baseUrl,
+    {
+      anthropic: config.providers?.anthropic?.apiKey,
+      openai: config.providers?.openai?.apiKey,
+    },
+    config.retry,
+  );
+  const job = findJob(home, id);
+  const profile = resolveBot(home, job.bot);
+  const ref = botModelRef(profile, config);
+  const result = await runJob(home, id, {
+    home,
+    cwd,
+    config,
+    provider: registry.get(ref.provider),
+    audit: (kind, detail) =>
+      new AuditLog(auditPath(home)).append(kind, "cli", detail, profile.name),
+  });
+  if (!result.ok) {
+    stdout.write(`job ${id} failed: ${result.error}\n`);
+    return 1;
+  }
+  const output = result.text.trim();
+  if (output) stdout.write(`${output}\n`);
+  stdout.write(
+    `  [job ${id} · ${result.stopReason} · ${formatUSD(result.costUSD)}]\n`,
+  );
+  return result.stopReason === "end_turn" ? 0 : 1;
+}
+
 function auditCommand(args: string[]): number {
   let tail = 50;
   let bot: string | undefined;
@@ -466,6 +568,19 @@ async function gatewayCommand(args: string[]): Promise<number> {
       audit.append("tool_block", "gateway", detail),
     );
     const gateway = new Gateway({ home, cwd, config, registry, log, guard });
+
+    // Hot-reload job changes (made via `tenjin job add/rm`) on SIGHUP, without
+    // a restart. Re-reads config.yaml and rebuilds the job schedule.
+    process.on("SIGHUP", () => {
+      try {
+        const { config: fresh } = loadConfig(cwd, home, { skipModelCheck: true });
+        gateway.reload(fresh);
+        log("gateway: job config reloaded (SIGHUP)");
+        for (const line of gateway.describe()) log(`  ${line}`);
+      } catch (e) {
+        log(`gateway: reload failed (${(e as Error).message}) — keeping previous jobs`);
+      }
+    });
 
     const channels: Record<string, (text: string) => Promise<void>> = {};
     let telegramRun: Promise<void> | null = null;
