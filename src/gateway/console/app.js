@@ -1077,6 +1077,65 @@ function writeDetectedCache(cache) {
   localStorage.setItem(DETECT_CACHE_KEY, JSON.stringify(cache));
 }
 
+/* #257: group the detected model list into Chat / Embedding / Other with a
+ * `:free` badge and a search filter. The backend already returns the grouped
+ * structure (`{models, groups}` from /api/settings/detect) sorted free-first
+ * within each group, so the client only renders it — no heuristic duplication.
+ */
+const GROUP_LABELS = { chat: "Chat", embedding: "Embedding", other: "Other" };
+
+// Normalize a per-provider detected entry: new cache holds the backend's
+// `groups` object ({chat:[{id,group,free}],...}), legacy caches hold a flat
+// string[]. Coerce both to the groups shape.
+function normalizeDetected(groups) {
+  if (Array.isArray(groups)) {
+    return { chat: groups.map((id) => ({ id, group: "chat", free: false })), embedding: [], other: [] };
+  }
+  const g = groups || {};
+  return {
+    chat: g.chat || [],
+    embedding: g.embedding || [],
+    other: g.other || [],
+  };
+}
+
+function detectedModelCount(detected) {
+  let n = 0;
+  for (const v of Object.values(detected)) {
+    const g = normalizeDetected(v);
+    n += g.chat.length + g.embedding.length + g.other.length;
+  }
+  return n;
+}
+
+function matchesModelQuery(m, q) {
+  if (!q) return true;
+  return m.id.toLowerCase().includes(q);
+}
+
+function renderProviderGroups(select, provider, groups, q) {
+  const g = normalizeDetected(groups);
+  for (const key of ["chat", "embedding", "other"]) {
+    const entries = g[key].filter((m) => matchesModelQuery(m, q));
+    if (entries.length === 0) continue;
+    if (select.tagName === "SELECT") {
+      const og = el("optgroup", { label: GROUP_LABELS[key] });
+      for (const m of entries) og.append(el("option", { value: provider + ":" + m.id }, m.id + (m.free ? "  ⭐ free" : "")));
+      select.append(og);
+    }
+  }
+}
+
+// Rebuild the default-model dropdown from the detected cache, honoring a
+// search filter. Returns how many options were rendered.
+function renderDetectedModelOptions(select, detected, q) {
+  select.replaceChildren(el("option", { value: "" }, "— run detect on a provider to list models —"));
+  for (const [provider, groups] of Object.entries(detected)) {
+    renderProviderGroups(select, provider, groups, q || "");
+  }
+  return detectedModelCount(detected);
+}
+
 async function panelSettings(main) {
   main.replaceChildren(el("h1", {}, "Settings"));
   const settings = await apiJson("/api/settings");
@@ -1090,13 +1149,23 @@ async function panelSettings(main) {
   const statusLine = el("div", { class: "dim" });
   const modelSelect = el("select", { style: "width:100%; margin-bottom:8px" },
     el("option", { value: "" }, "— run detect on a provider to list models —"));
+  // #257: search filter over the model list (shown once it exceeds 50 entries).
+  const modelFilter = el("input", {
+    type: "text",
+    placeholder: "filter models…",
+    style: "width:100%; margin-bottom:8px; box-sizing:border-box",
+  });
+  const modelArea = el("div", {}, modelFilter, modelSelect);
+  modelFilter.addEventListener("input", () => {
+    const total = renderDetectedModelOptions(modelSelect, state.detected, modelFilter.value.trim().toLowerCase());
+    modelFilter.style.display = total > 50 ? "" : "none";
+    setDefaultModel(state.defaultModel);
+  });
   // restore previously detected models from the cache so the dropdown
   // is populated immediately on reopen, before any detect runs
-  for (const [provider, models] of Object.entries(state.detected)) {
-    for (const model of models) {
-      modelSelect.append(el("option", { value: provider + ":" + model }, provider + ":" + model));
-    }
-  }
+  const cachedTotal = renderDetectedModelOptions(modelSelect, state.detected, "");
+  modelFilter.style.display = cachedTotal > 50 ? "" : "none";
+  modelFilter.value = "";
 
   // Select (and if needed add) a model in the default dropdown. Used to
   // surface a model id the user typed manually even when it is not in any
@@ -1147,11 +1216,13 @@ async function panelSettings(main) {
           detectOut.className = "err";
           return;
         }
-        state.detected[name] = data.models;
+        state.detected[name] = data.groups || { chat: data.models.map((id) => ({ id, group: "chat", free: false })), embedding: [], other: [] };
         writeDetectedCache(state.detected);
-        detectOut.textContent = data.models.length + " models detected";
+        const total = renderDetectedModelOptions(modelSelect, state.detected, modelFilter.value.trim().toLowerCase());
+        modelFilter.style.display = total > 50 ? "" : "none";
+        detectOut.textContent = data.models.length + " models detected (grouped)";
         detectOut.className = "ok";
-        modelSelect.append(...data.models.map((m) => el("option", { value: name + ":" + m }, name + ":" + m)));
+        setDefaultModel(state.defaultModel);
       } catch (e) {
         detectOut.textContent = "detection failed: " + e.message;
         detectOut.className = "err";
@@ -1254,7 +1325,7 @@ async function panelSettings(main) {
     el("h2", {}, "models"),
     el("div", { class: "card" },
       el("div", { class: "dim", style: "margin-bottom:4px" }, "default model"),
-      modelSelect,
+      modelArea,
       el("div", { class: "dim", style: "margin:8px 0 4px" }, "cheap tier (summaries, background jobs)"),
       cheapSelect,
     ),

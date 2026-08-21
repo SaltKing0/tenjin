@@ -28,7 +28,7 @@ import {
   resolveRequest,
   type ApprovalRequest,
 } from "./approvals";
-import { getSettings, applySettings, detectModels, testProvider, verifySettingsApply, DetectTimeoutError } from "./settings";
+import { getSettings, applySettings, detectModels, testProvider, verifySettingsApply, classifyIntoGroups, isChatModel, DetectTimeoutError } from "./settings";
 import { sessionsDir } from "../config/loader";
 import { listConfiguredJobs, type JobRunResult, type JobView } from "./gateway";
 import { parseGatewaySettings } from "./config";
@@ -230,8 +230,10 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
             apiKey: typeof body.apiKey === "string" ? body.apiKey : undefined,
           },
           typeof body.timeoutMs === "number" && body.timeoutMs > 0 ? body.timeoutMs : undefined,
+          true, // raw: keep embeddings/audio/image so we can group them (#257)
         );
-        return json({ models });
+        const chat = models.filter(isChatModel).sort();
+        return json({ models: chat, groups: classifyIntoGroups(models) });
       } catch (e) {
         const status = e instanceof DetectTimeoutError ? 504 : 400;
         return json({ error: (e as Error).message }, status);

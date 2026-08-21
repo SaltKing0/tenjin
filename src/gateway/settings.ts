@@ -159,6 +159,78 @@ export function isChatModel(id: string): boolean {
   return !NON_CHAT_HINTS.some((h) => low.includes(h));
 }
 
+/** Model id hints that identify an *embedding* model (subset of #62's chat
+ * filter, kept separate so the detect list can group embeddings distinctly
+ * while `isChatModel` still reuses the full NON_CHAT_HINTS set). */
+const EMBEDDING_HINTS = [
+  "embedding",
+  "-embed-",
+  "text-embed",
+  "ada-002",
+  "text-ada", // deprecated OpenAI embedding generation
+  "text-babbage",
+  "text-curie",
+  "similarity",
+  "rerank",
+  "re-rank",
+  "search-",
+  "babbage", // legacy embeddings
+];
+
+/** Classification of a single model id for the detect list (#257): which
+ * group it belongs to and whether it is an OpenRouter-style `:free` tier. */
+export type ModelGroup = "chat" | "embedding" | "other";
+
+export interface ClassifiedModel {
+  id: string;
+  group: ModelGroup;
+  free: boolean;
+}
+
+export function classifyModel(id: string): ClassifiedModel {
+  const low = id.toLowerCase();
+  const free = low.endsWith(":free");
+  let group: ModelGroup;
+  if (EMBEDDING_HINTS.some((h) => low.includes(h))) {
+    group = "embedding";
+  } else if (isChatModel(id)) {
+    group = "chat";
+  } else {
+    group = "other";
+  }
+  return { id, group, free };
+}
+
+/**
+ * Classify a raw model-id list into chat / embedding / other groups (#257).
+ * Within each group `:free` models are sorted first (so the zero-cost
+ * OpenRouter entry points surface), then the rest alphabetically.
+ */
+export function classifyModels(ids: string[]): ClassifiedModel[] {
+  return ids
+    .map(classifyModel)
+    .sort((a, b) => classifyOrder(a, b));
+}
+
+/** Sort comparator: free-tier first within the same group, then by id. */
+function classifyOrder(a: ClassifiedModel, b: ClassifiedModel): number {
+  if (a.group !== b.group) return a.group < b.group ? -1 : 1;
+  if (a.free !== b.free) return a.free ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+export function classifyIntoGroups(
+  ids: string[],
+): Record<ModelGroup, ClassifiedModel[]> {
+  const groups: Record<ModelGroup, ClassifiedModel[]> = {
+    chat: [],
+    embedding: [],
+    other: [],
+  };
+  for (const m of classifyModels(ids)) groups[m.group].push(m);
+  return groups;
+}
+
 export class DetectTimeoutError extends Error {
   constructor(provider: string, timeoutMs: number) {
     super(
@@ -199,6 +271,9 @@ export async function detectModels(
     apiKey?: string;
   },
   timeoutMs: number = DETECT_TIMEOUT_MS,
+  /** #257: when true, include non-chat ids (embeddings, audio, image…) so the
+   * detect list can be grouped instead of pre-filtered to chat only. */
+  raw = false,
 ): Promise<string[]> {
   const provider = input.provider.toLowerCase();
   const { url, headers } = modelsEndpoint(provider, {
@@ -217,8 +292,8 @@ export async function detectModels(
     const data = (await res.json()) as { data?: Array<{ id?: string }> };
     const ids = (data.data ?? [])
       .map((m) => m.id)
-      .filter((id): id is string => typeof id === "string" && isChatModel(id));
-    return ids.sort();
+      .filter((id): id is string => typeof id === "string");
+    return raw ? [...new Set(ids)] : ids.filter(isChatModel).sort();
   } finally {
     clearTimeout(timer);
   }
