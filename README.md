@@ -184,6 +184,7 @@ named `tenjin-home` volume. To connect Telegram, set `TELEGRAM_BOT_TOKEN` in
 | --- | --- |
 | `tenjin` | Interactive REPL in the current directory |
 | `tenjin -p "<prompt>"` | One-shot prompt; answer and exit |
+| `tenjin --version` | Print the Tenjin version and exit |
 | `tenjin --model <id>` | Override the configured model |
 | `tenjin --provider <name>` | `anthropic` \| `openai` |
 | `tenjin --budget <usd>` | Session spend cap (0 = unlimited) |

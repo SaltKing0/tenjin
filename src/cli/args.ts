@@ -38,6 +38,7 @@ Usage:
 
 Options:
   -h, --help                 show this help
+  -v, --version              print the version and exit
 `;
 
 export interface ForkSpec {
@@ -47,6 +48,7 @@ export interface ForkSpec {
 
 export interface CliArgs {
   help: boolean;
+  version: boolean;
   print?: string;
   model?: string;
   provider?: string;
@@ -58,13 +60,17 @@ export interface CliArgs {
 }
 
 export function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { help: false };
+  const args: CliArgs = { help: false, version: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     switch (a) {
       case "-h":
       case "--help":
         args.help = true;
+        break;
+      case "-v":
+      case "--version":
+        args.version = true;
         break;
       case "-p":
       case "--print": {
