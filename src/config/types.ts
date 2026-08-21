@@ -21,7 +21,13 @@ export interface HarnessConfig {
   };
   models?: { default?: string; cheap?: string };
   gateway?: unknown;
-  security?: { blockedPatterns?: string[]; disabled?: boolean; redaction?: boolean };
+  security?: {
+    blockedPatterns?: string[];
+    disabled?: boolean;
+    redaction?: boolean;
+    workspaceRoot?: string;
+    allowedPaths?: string[];
+  };
   memory?: {
     enabled?: boolean;
     vector?: { enabled?: boolean; model?: string };
