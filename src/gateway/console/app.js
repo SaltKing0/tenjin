@@ -849,6 +849,22 @@ async function panelJobs(main) {
           el("div", { class: "dim", style: "margin-top:8px" }, `schedule: ${scheduleLabel(job)}`),
           el("div", { class: "dim" }, `next due: ${new Date(job.nextDueMs).toLocaleString()}`),
           el("div", { class: "dim" }, `last run: ${last}`),
+          job.history?.length
+            ? el(
+                "details",
+                { style: "margin-top:6px" },
+                el("summary", { class: "dim" }, `${job.history.length} recent run(s)`),
+                ...job.history.map((h) =>
+                  el(
+                    "div",
+                    { class: "dim", style: "margin-left:12px" },
+                    `${h.status} · ${new Date(h.at).toLocaleString()} · ${h.durationMs}ms · ${fmtUsd(h.costUSD ?? 0)}` +
+                      (h.stopReason ? ` · ${h.stopReason}` : "") +
+                      (h.error ? ` · ${h.error}` : ""),
+                  ),
+                ),
+              )
+            : null,
           job.prompt ? el("div", { class: "dim" }, `prompt: ${job.prompt}`) : null,
           job.postTo ? el("div", { class: "dim" }, `postTo: ${job.postTo}`) : null,
           el("div", { style: "margin-top:8px" }, runBtn),

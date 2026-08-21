@@ -117,7 +117,7 @@ serves the static console (`src/gateway/console/`) and
 | `GET /api/audit` | Security/audit events |
 | `GET /api/approvals` | Pending approvals (scan expires stale ones) |
 | `POST /api/approvals/:id` | Approve / deny a request |
-| `GET /api/jobs` | Scheduled jobs (cron/every, policy, lastRun, nextDue) |
+| `GET /api/jobs` | Scheduled jobs (cron/every, policy, lastRun, nextDue, run history) |
 | `POST /api/jobs/:id/run` | Run a job now (does not advance nextDue) |
 | `GET /api/chat/stream` | Streaming chat (SSE) |
 | `GET /api/health` | Observability snapshot: uptime, active/pending jobs, pending approvals, spend today, session count, cached provider reachability |
@@ -311,7 +311,11 @@ gateway:
 - **`catchUp`** — on boot the gateway re-runs scheduled jobs whose slot came due
   while it was down (default `enabled: true`, `max: 50` runs per boot). A job is
   caught up when the next scheduled run after its last run is already in the
-  past; the last run of each job is persisted in `~/.tenjin/gateway-state.json`.
+  past; run history is persisted in `~/.tenjin/gateway-state.json`.
+- **`jobHistory`** — how many past runs per job to keep in persisted history and
+  expose via the console/`/api/jobs` (default `20`). Ring buffer: older runs are
+  dropped. Each run records start/end time, status (`ok` | `error` | `timeout`),
+  cost, duration, and the session log reference.
 - **`channels`** — the list of channel kinds the gateway starts. Each name must
   be a registered channel (an unknown name is a config error). Defaults to the
   set of channels with `enabled: true` (e.g. `[telegram]`, `[slack]`, or both);
@@ -359,7 +363,7 @@ every bot and `gateway.jobs` — a collision is a config error at boot.
 ├── memory/                     # summaries, facts, vector store
 ├── approvals/                  # out-of-band approval requests (*.json)
 ├── audit.jsonl                 # audit event trail
-├── gateway-state.json          # last run per scheduled job (catch-up bookkeeping)
+├── gateway-state.json          # per-job run history (catch-up bookkeeping + last N runs)
 └── bots/<name>/
     ├── SOUL.md                 # bot personality
     ├── config.yaml             # per-bot model / budget / security / routines / heartbeat (optional)

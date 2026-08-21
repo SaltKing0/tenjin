@@ -84,6 +84,8 @@ export interface HeadlessResult {
   stopReason: string;
   costUSD: number;
   usage: Usage;
+  /** Session log id written for this run, if a sessionLogDir was configured. */
+  sessionId?: string;
 }
 
 export interface SkillDirs {
@@ -232,5 +234,6 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     stopReason: result.stopReason,
     costUSD: result.costUSD,
     usage: result.usage,
+    ...(logger?.id ? { sessionId: logger.id } : {}),
   };
 }

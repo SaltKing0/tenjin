@@ -72,6 +72,8 @@ export interface GatewaySettings {
   listen: ListenConfig | null;
   allowWrites: boolean;
   catchUp: CatchUpConfig;
+  /** How many past runs per job to keep in persisted history (#151). */
+  jobHistory: number;
 }
 
 interface RawJob {
@@ -87,6 +89,7 @@ interface RawJob {
 }
 
 const DEFAULT_CATCH_UP: CatchUpConfig = { enabled: true, max: 50 };
+const DEFAULT_JOB_HISTORY = 20;
 
 function parseCatchUp(cfg: unknown): CatchUpConfig {
   const c = cfg && typeof cfg === "object" ? (cfg as Record<string, unknown>) : {};
@@ -101,6 +104,19 @@ function parseCatchUp(cfg: unknown): CatchUpConfig {
   return { enabled, max };
 }
 
+/** Parse `gateway.jobHistory` (default 20) — how many past runs per job to keep. */
+function parseJobHistory(cfg: unknown): number {
+  const c = cfg && typeof cfg === "object" ? (cfg as Record<string, unknown>) : {};
+  let limit = DEFAULT_JOB_HISTORY;
+  if (c.jobHistory !== undefined && c.jobHistory !== null) {
+    if (typeof c.jobHistory !== "number" || !Number.isInteger(c.jobHistory) || c.jobHistory < 1) {
+      throw new ConfigError("gateway.jobHistory must be a positive integer");
+    }
+    limit = c.jobHistory;
+  }
+  return limit;
+}
+
 export function parseGatewaySettings(raw: unknown): GatewaySettings {
   if (raw === null || raw === undefined) {
     return {
@@ -112,6 +128,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
       listen: null,
       allowWrites: false,
       catchUp: { ...DEFAULT_CATCH_UP },
+      jobHistory: DEFAULT_JOB_HISTORY,
     };
   }
   if (typeof raw !== "object") {
@@ -127,6 +144,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     listen: null,
     allowWrites: gw.allowWrites === true || undefined,
     catchUp: parseCatchUp(gw.catchUp),
+    jobHistory: parseJobHistory(gw),
   } as GatewaySettings;
 
   const rawJobs = gw.jobs;
