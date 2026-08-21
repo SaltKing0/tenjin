@@ -43,6 +43,8 @@ export interface HeadlessOptions {
   audit?: (kind: "write_exec" | "budget_halt", detail: string) => void;
   approve?: (toolName: string, group: "read" | "write", input: unknown) => Promise<boolean>;
   onTextDelta?: (delta: string) => void;
+  /** Live side-channel invoked when the agent invokes a tool (name only). */
+  onToolActivity?: (name: string) => void;
 }
 
 export interface HeadlessResult {
@@ -120,40 +122,40 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     guard: opts.guard,
     onTextDelta: opts.onTextDelta,
     audit: opts.audit,
-    onEvent: logger
-      ? (e: TurnEvent) => {
-          const ts = new Date().toISOString();
-          if (e.t === "assistant_message") {
-            logger?.append({ t: "message", role: "assistant", content: e.content, ts });
-          } else if (e.t === "tool_call") {
-            logger?.append({
-              t: "tool_call",
-              id: e.id,
-              name: e.name,
-              input: redactor.redactValue(e.input),
-              ts,
-            });
-          } else if (e.t === "tool_result") {
-            logger?.append({
-              t: "tool_result",
-              id: e.id,
-              name: e.name,
-              ok: e.ok,
-              output: redactor.redact(e.output),
-              ts,
-            });
-          } else if (e.t === "usage") {
-            logger?.append({
-              t: "usage",
-              inputTokens: e.usage.inputTokens,
-              outputTokens: e.usage.outputTokens,
-              costUSD: e.costUSD,
-              spentUSD: budget.spentUSD,
-              ts,
-            });
-          }
-        }
-      : undefined,
+    onEvent: (e: TurnEvent) => {
+      if (e.t === "tool_call") opts.onToolActivity?.(e.name);
+      if (!logger) return;
+      const ts = new Date().toISOString();
+      if (e.t === "assistant_message") {
+        logger?.append({ t: "message", role: "assistant", content: e.content, ts });
+      } else if (e.t === "tool_call") {
+        logger?.append({
+          t: "tool_call",
+          id: e.id,
+          name: e.name,
+          input: redactor.redactValue(e.input),
+          ts,
+        });
+      } else if (e.t === "tool_result") {
+        logger?.append({
+          t: "tool_result",
+          id: e.id,
+          name: e.name,
+          ok: e.ok,
+          output: redactor.redact(e.output),
+          ts,
+        });
+      } else if (e.t === "usage") {
+        logger?.append({
+          t: "usage",
+          inputTokens: e.usage.inputTokens,
+          outputTokens: e.usage.outputTokens,
+          costUSD: e.costUSD,
+          spentUSD: budget.spentUSD,
+          ts,
+        });
+      }
+    },
   });
   return {
     text: result.text,

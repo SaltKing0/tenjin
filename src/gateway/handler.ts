@@ -36,6 +36,8 @@ export interface HandleContext {
   source: "telegram" | "http";
   chatId?: number;
   onDelta?: (delta: string) => void;
+  /** Live tool-activity callback (name only), forwarded from the agent loop. */
+  onTool?: (name: string) => void;
 }
 
 export function chatStreamResponse(
@@ -50,7 +52,11 @@ export function chatStreamResponse(
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
       };
       try {
-        const reply = await handle(text, { ...ctx, onDelta: (d) => send({ type: "delta", text: d }) });
+        const reply = await handle(text, {
+          ...ctx,
+          onDelta: (d) => send({ type: "delta", text: d }),
+          onTool: (name) => send({ type: "tool", name }),
+        });
         send({ type: "done", reply });
       } catch (e) {
         send({ type: "error", message: (e as Error).message });
@@ -140,6 +146,7 @@ export function createMessageHandler(deps: HandlerDeps) {
         approve,
         audit: (kind, detail) => deps.audit.append(kind, ctx.actor, detail, botName),
         onTextDelta: ctx.onDelta,
+        onToolActivity: ctx.onTool,
         redactor: Redactor.fromConfig(deps.config.security),
       });
     } catch (e) {
