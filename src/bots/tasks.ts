@@ -389,8 +389,13 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
           `delegation tree budget exhausted during task ${id}`,
           correlationId,
         );
+        // #193: preserve the partial text a tree-budget stop produced instead
+        // of discarding it (analogous to the sync ask_bot path), and surface
+        // stopReason in the error text so callers/dependents can tell it apart
+        // from a hard failure.
+        if (result.text) task.result = result.text;
         throw new Error(
-          `delegation tree budget exhausted (${tb?.usedIterations ?? 0}/${tb?.maxIterations ?? "∞"} iterations)`,
+          `delegation tree budget exhausted (${tb?.usedIterations ?? 0}/${tb?.maxIterations ?? "∞"} iterations) (stopReason: tree_budget_exceeded)`,
         );
       }
 
@@ -424,7 +429,7 @@ export function createAskBotAsyncTool(deps: AsyncTaskDeps): ToolDef {
     name: "ask_bot_async",
     group: "write",
     description:
-      "Ask another bot a question WITHOUT waiting for its answer. Returns a task_id immediately; poll bot_task_status to read the result. The target bot runs headless with its own model and soul, read-only. Optionally dependsOn another async task (start only once that task is done, with its result in the prompt) and/or notifyBot (a bot inbox that is messaged on completion).",
+      "Ask another bot a question WITHOUT waiting for its answer. Returns a task_id immediately; poll bot_task_status to read the result. The target bot runs headless with its own model and soul, read-only. Optionally dependsOn another async task (start only once that task is done, with its result in the prompt) and/or notifyBot (a bot inbox that is messaged on completion). Effort vs tree budget: a subagent's effort dial scales how many iterations it may use, and every iteration counts against the shared delegation-tree cap — so a high/max-effort subagent can exhaust the whole tree budget, after which later siblings stop immediately with tree_budget_exceeded. The tree cap is authoritative across the chain; per-task effort only widens one subagent's own share.",
     inputSchema: {
       type: "object",
       properties: {

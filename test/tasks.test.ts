@@ -506,6 +506,38 @@ describe("task delegation tree budget (#154)", () => {
     expect(ta.treeMaxIterations).toBe(1);
     expect(tb.treeMaxIterations).toBe(1);
   });
+
+  test("a tree-budget stop preserves the partial text in result and reports stopReason (#193)", async () => {
+    // provider emits a text block (partial answer) plus a tool_use on its only
+    // iteration; the next iteration trips the shared tree cap (max=1).
+    const calls = { n: 0 };
+    const p = {
+      name: "tc-text",
+      async chat(): Promise<ChatResponse> {
+        calls.n += 1;
+        return {
+          stopReason: "tool_use",
+          content: [
+            { type: "text", text: "PARTIAL RESULT before budget stop" },
+            { type: "tool_use", id: "tc", name: "read_file", input: { path: "." } },
+          ],
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      },
+    } as unknown as Provider;
+    const started = startAsyncTask(deps(p), {
+      targetBot: "researcher",
+      message: "m",
+      maxTreeIterations: 1,
+    });
+    const task = await started.settled;
+    expect(task.status).toBe("error");
+    expect(task.error).toContain("delegation tree budget exhausted");
+    expect(task.error).toContain("stopReason: tree_budget_exceeded");
+    // the partial text produced before the stop is preserved, not discarded
+    expect(task.result).toContain("PARTIAL RESULT before budget stop");
+    expect(calls.n).toBe(1);
+  });
 });
 
 describe("corrupted task files (#183)", () => {

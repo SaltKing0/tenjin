@@ -31,7 +31,7 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
     name: "ask_bot",
     group: "write",
     description:
-      "Ask another bot a question and wait for its answer. The target bot runs headless with its own model and soul, read-only, under a small spend cap. `bot` may be a bot name or a team role (team.yaml).",
+      "Ask another bot a question and wait for its answer. The target bot runs headless with its own model and soul, read-only, under a small spend cap. `bot` may be a bot name or a team role (team.yaml). Effort vs tree budget: a subagent's effort dial scales how many iterations it may use, and every iteration counts against the shared delegation-tree cap — so a high/max-effort subagent can exhaust the whole tree budget, after which later siblings stop immediately with tree_budget_exceeded. The tree cap is authoritative across the chain.",
     inputSchema: {
       type: "object",
       properties: {
