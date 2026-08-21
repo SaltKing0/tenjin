@@ -23,6 +23,7 @@ export interface TurnResult {
   usage: Usage;
   costUSD: number;
   model: string;
+  text: string;
 }
 
 export interface ApproveFn {
@@ -47,10 +48,11 @@ export interface AgentTurnOptions {
 export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> {
   const totals: Usage = { inputTokens: 0, outputTokens: 0 };
   let costUSD = 0;
+  let lastText = "";
 
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
     if (opts.budget.exhausted) {
-      return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model };
+      return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText };
     }
 
     const response = await opts.provider.chat(
@@ -67,6 +69,10 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
 
     opts.messages.push({ role: "assistant", content: response.content });
     opts.onEvent?.({ t: "assistant_message", content: response.content });
+    lastText = response.content
+      .map((b) => (b.type === "text" ? b.text : ""))
+      .join("")
+      .trim();
 
     totals.inputTokens += response.usage.inputTokens;
     totals.outputTokens += response.usage.outputTokens;
@@ -75,7 +81,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
     opts.onEvent?.({ t: "usage", usage: response.usage, costUSD: turnCost });
 
     if (response.stopReason !== "tool_use") {
-      return { stopReason: response.stopReason, usage: totals, costUSD, model: opts.model };
+      return { stopReason: response.stopReason, usage: totals, costUSD, model: opts.model, text: lastText };
     }
 
     const results: ToolResultBlock[] = [];
@@ -106,7 +112,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
     opts.messages.push({ role: "user", content: results });
   }
 
-  return { stopReason: "max_iterations", usage: totals, costUSD, model: opts.model };
+  return { stopReason: "max_iterations", usage: totals, costUSD, model: opts.model, text: lastText };
 }
 
 function groupOf(tools: ToolDef[], name: string): ToolGroup {

@@ -39,6 +39,7 @@ import {
   type BotProfile,
 } from "./bots/profile";
 import { createSendMessageTool, createCheckInboxTool } from "./bots/tools";
+import { createAskBotTool } from "./bots/delegate";
 import { unreadMessages } from "./bots/inbox";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";

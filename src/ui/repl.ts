@@ -14,6 +14,7 @@ import { rebuildMessages, sumUsage } from "../session/events";
 import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { buildSkillsSection, summarizeSkills } from "../skills/activate";
+import { createAskBotTool } from "../bots/delegate";
 import { getSkill, listSkills, scaffoldSkill } from "../skills/loader";
 import { listSummaries, sessionsWithoutSummary } from "../memory/summaries";
 import { loadChunks, indexedSessionIds } from "../memory/vector-store";
@@ -54,6 +55,18 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     active: opts.defaultRef,
     pinnedSkills: new Set<string>(),
   };
+  if (opts.bot) {
+    opts.tools.push(
+      createAskBotTool({
+        home: opts.home,
+        fromBot: opts.bot,
+        cwd: opts.cwd,
+        getProvider: (name) => opts.registry.get(name),
+        globalConfig: opts.config,
+        sessionBudget: state.budget,
+      }),
+    );
+  }
   state.budget.spentUSD = opts.initialSpentUSD ?? 0;
   const sessionAllowed = new Set<string>();
 
