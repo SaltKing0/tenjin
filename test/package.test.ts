@@ -34,6 +34,12 @@ function buildRichBot(name = "porter"): void {
   writeFileSync(join(root, "memory", "facts.json"), "secret-memory");
   mkdirSync(join(root, "inbox"), { recursive: true });
   writeFileSync(join(root, "inbox", "msg.json"), "secret-inbox");
+  // runtime task state (user prompts / results) must NOT be exported
+  mkdirSync(join(root, "tasks"), { recursive: true });
+  writeFileSync(join(root, "tasks", "t1.json"), "secret-task");
+  // runtime refine proposals next to a bundled skill must NOT be exported
+  mkdirSync(join(root, "skills", "pocket", "refine"), { recursive: true });
+  writeFileSync(join(root, "skills", "pocket", "refine", "VERSION-1.md"), "# proposal secret-refine");
 }
 
 describe("bot export", () => {
@@ -45,6 +51,8 @@ describe("bot export", () => {
     expect(manifest.some((f) => f.includes("sessions"))).toBe(false);
     expect(manifest.some((f) => f.includes("memory"))).toBe(false);
     expect(manifest.some((f) => f.includes("inbox"))).toBe(false);
+    expect(manifest.some((f) => f.includes("tasks"))).toBe(false);
+    expect(manifest.some((f) => f.includes("refine"))).toBe(false);
     // portable content included
     expect(manifest).toContain("SOUL.md");
     expect(manifest).toContain("config.yaml");
@@ -58,6 +66,8 @@ describe("bot export", () => {
     expect(raw).not.toContain("secret-session");
     expect(raw).not.toContain("secret-memory");
     expect(raw).not.toContain("secret-inbox");
+    expect(raw).not.toContain("secret-task");
+    expect(raw).not.toContain("secret-refine");
   });
 
   test("unknown bot throws ConfigError", () => {
@@ -87,6 +97,10 @@ describe("bot import", () => {
       expect(existsSync(join(botsDir(home2), "porter", "sessions"))).toBe(false);
       expect(existsSync(join(botsDir(home2), "porter", "memory"))).toBe(false);
       expect(existsSync(join(botsDir(home2), "porter", "inbox"))).toBe(false);
+      expect(existsSync(join(botsDir(home2), "porter", "tasks"))).toBe(false);
+      // the bundled skill's SKILL.md imports, but its runtime refine proposal does not
+      expect(existsSync(join(botsDir(home2), "porter", "skills", "pocket", "SKILL.md"))).toBe(true);
+      expect(existsSync(join(botsDir(home2), "porter", "skills", "pocket", "refine"))).toBe(false);
     } finally {
       rmSync(home2, { recursive: true, force: true });
     }
