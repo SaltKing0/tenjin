@@ -47,6 +47,7 @@ import { createSendMessageTool, createCheckInboxTool } from "./bots/tools";
 import { createAskBotTool } from "./bots/delegate";
 import { Gateway } from "./gateway/gateway";
 import { SecurityGuard } from "./security/guard";
+import { Redactor } from "./security/redact";
 import { AuditLog, formatAudit, auditPath } from "./audit/log";
 import { aggregateSpend, renderSpend } from "./audit/spend";
 import { TelegramChannel } from "./gateway/telegram";
@@ -580,6 +581,7 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     guard: ctx.guard,
     audit: (kind, detail) =>
       new AuditLog(auditPath(tenjinHome())).append(kind, "user", detail),
+    redactor: Redactor.fromConfig(ctx.config.security),
   });
   stdout.write(`${result.text}\n`);
   stdout.write(

@@ -1,6 +1,7 @@
 import type { HarnessConfig } from "../config/types";
 import type { ProviderRegistry } from "../provider/registry";
 import type { SecurityGuard } from "../security/guard";
+import { Redactor } from "../security/redact";
 import type { AuditLog } from "../audit/log";
 import { resolveBot, botModelRef, botBudgetUSD } from "../bots/profile";
 import { runHeadless } from "../agent/headless";
@@ -133,6 +134,7 @@ export function createMessageHandler(deps: HandlerDeps) {
       approve,
       audit: (kind, detail) => deps.audit.append(kind, ctx.actor, detail, botName),
       onTextDelta: ctx.onDelta,
+      redactor: Redactor.fromConfig(deps.config.security),
     });
     deps.log(
       `${ctx.source}: handled for ${botName} (${formatUSD(result.costUSD)})`,

@@ -129,4 +129,58 @@ describe("runHeadless", () => {
     expect(system).toContain("You are test.");
     expect(system).toContain("use tabs");
   });
+
+  test("session log redacts secrets in tool output", async () => {
+    require("node:fs").writeFileSync(
+      join(dir, "note.txt"),
+      "OPENAI_API_KEY=sk-abc1234567890xyz\n",
+    );
+    const provider = scriptProvider([
+      {
+        stopReason: "tool_use",
+        content: [
+          { type: "tool_use", id: "t1", name: "read_file", input: { path: "note.txt" } },
+        ],
+        usage: { inputTokens: 100, outputTokens: 10 },
+      },
+      endTurn("done"),
+    ]);
+    await runHeadless(base({ provider, sessionLogDir: join(dir, "sessions") }));
+
+    const file = require("node:fs")
+      .readdirSync(join(dir, "sessions"))
+      .find((f: string) => f.endsWith(".jsonl"));
+    expect(file).toBeTruthy();
+    const raw = require("node:fs").readFileSync(
+      join(dir, "sessions", file as string),
+      "utf8",
+    );
+    expect(raw).not.toContain("sk-abc1234567890xyz");
+    expect(raw).toContain("[REDACTED]");
+  });
+
+  test("session log leaves non-secret output intact", async () => {
+    require("node:fs").writeFileSync(join(dir, "plain.txt"), "just a normal note\n");
+    const provider = scriptProvider([
+      {
+        stopReason: "tool_use",
+        content: [
+          { type: "tool_use", id: "t1", name: "read_file", input: { path: "plain.txt" } },
+        ],
+        usage: { inputTokens: 100, outputTokens: 10 },
+      },
+      endTurn("done"),
+    ]);
+    await runHeadless(base({ provider, sessionLogDir: join(dir, "sessions") }));
+
+    const file = require("node:fs")
+      .readdirSync(join(dir, "sessions"))
+      .find((f: string) => f.endsWith(".jsonl"));
+    expect(file).toBeTruthy();
+    const raw = require("node:fs").readFileSync(
+      join(dir, "sessions", file as string),
+      "utf8",
+    );
+    expect(raw).toContain("just a normal note");
+  });
 });
