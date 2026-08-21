@@ -88,6 +88,10 @@ export function applySettings(
   writeProvidersYaml(deps.home, {
     providers: config.providers,
     models: config.models,
+    extra: {
+      ...(config.provider ? { provider: config.provider } : {}),
+      ...(config.model ? { model: config.model } : {}),
+    },
   });
 
   const keys: ProviderKeys = {

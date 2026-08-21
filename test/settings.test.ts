@@ -23,6 +23,7 @@ afterEach(() => {
 });
 
 function setup() {
+  require("node:fs").writeFileSync(join(home, "config.yaml"), "model: claude-sonnet-4-5\n");
   const { config } = loadConfig(project, home, { skipModelCheck: true });
   const registry = new ProviderRegistry();
   const auditLines: string[] = [];
@@ -169,6 +170,73 @@ describe("detectModels", () => {
       ).rejects.toThrow(/401/);
     } finally {
       server.stop(true);
+    }
+  });
+});
+
+describe("live-apply through gateway objects", () => {
+  test("applied default model flows into botModelRef without restart", async () => {
+    const { createBot, botModelRef, resolveBot } = await import("../src/bots/profile");
+    createBot(home, "worker");
+    const { deps, config, registry } = setup();
+    const profile = resolveBot(home, "worker");
+
+    const before = botModelRef(profile, config);
+    expect(before.model).toBe("claude-sonnet-4-5");
+
+    applySettings(deps, {
+      openai: { apiKey: "sk-new", baseUrl: "https://custom.example/v1" },
+      models: { default: "openai:new-model" },
+    });
+
+    const after = botModelRef(profile, config);
+    expect(after).toEqual({ provider: "openai", model: "new-model" });
+
+    // registry serves openai with the new key — no env, no restart
+    delete process.env.OPENAI_API_KEY;
+    expect(registry.get("openai").name).toBe("openai");
+  });
+
+  test("console api POST /api/settings applies to shared config object", async () => {
+    const { startHttpServer } = await import("../src/gateway/http");
+    const { createConsoleApi } = await import("../src/gateway/console-api");
+    const { AuditLog } = await import("../src/audit/log");
+
+    const { deps, config, registry } = setup();
+    let server: any = null;
+    try {
+      server = startHttpServer({
+        config: { port: 0, host: "127.0.0.1", token: "t" },
+        handleMessage: async () => null,
+        status: () => ({}),
+        api: createConsoleApi({
+          home,
+          cwd: home,
+          config,
+          registry,
+          audit: new AuditLog(join(home, "audit.jsonl")),
+        }),
+      });
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
+        method: "POST",
+        headers: { authorization: "Bearer t", "content-type": "application/json" },
+        body: JSON.stringify({
+          anthropic: { apiKey: "sk-via-console" },
+          models: { default: "anthropic:console-model" },
+        }),
+      });
+      expect(res.status).toBe(200);
+
+      // same config object the gateway uses is mutated
+      expect(config.providers?.anthropic?.apiKey).toBe("sk-via-console");
+      expect(config.model).toBe("console-model");
+      expect(registry.get("anthropic").name).toBe("anthropic");
+
+      // persisted for next boot
+      const reloaded = loadConfig(project, home, { skipModelCheck: true }).config;
+      expect(reloaded.model).toBe("console-model");
+    } finally {
+      server?.stop();
     }
   });
 });

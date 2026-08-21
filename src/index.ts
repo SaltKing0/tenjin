@@ -367,7 +367,10 @@ async function gatewayCommand(args: string[]): Promise<number> {
   try {
     const { config } = loadConfig(cwd, home, { skipModelCheck: dryRun });
     if (!dryRun) validateConfig(config);
-    const registry = new ProviderRegistry(config.providers?.openai?.baseUrl);
+    const registry = new ProviderRegistry(config.providers?.openai?.baseUrl, {
+      anthropic: config.providers?.anthropic?.apiKey,
+      openai: config.providers?.openai?.apiKey,
+    });
     const controller = new AbortController();
     process.on("SIGINT", () => controller.abort());
     process.on("SIGTERM", () => controller.abort());

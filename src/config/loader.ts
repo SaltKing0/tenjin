@@ -88,9 +88,9 @@ export function providersFile(home = tenjinHome()): string {
 
 export function writeProvidersYaml(
   home: string,
-  data: { providers?: unknown; models?: unknown },
+  data: { providers?: unknown; models?: unknown; extra?: Record<string, unknown> },
 ): void {
-  const doc: Record<string, unknown> = {};
+  const doc: Record<string, unknown> = { ...(data.extra ?? {}) };
   if (data.providers) doc.providers = data.providers;
   if (data.models) doc.models = data.models;
   const path = providersFile(home);
