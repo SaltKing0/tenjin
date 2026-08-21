@@ -1,6 +1,10 @@
 #!/usr/bin/env bun
-import { stdout } from "node:process";
-import { mkdirSync } from "node:fs";
+import { stdout, stdin } from "node:process";
+import { createInterface } from "node:readline/promises";
+import { dirname, basename, resolve, join } from "node:path";
+import { spawnSync } from "node:child_process";
+
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import {
   ensureGlobalDir,
   loadConfig,
@@ -91,6 +95,19 @@ async function main(): Promise<number> {
 
   if (process.argv[2] === "spend") {
     return spendCommand(process.argv.slice(3));
+  }
+
+  if (process.argv[2] === "doctor") {
+    return doctorCommand();
+  }
+
+  if (process.argv[2] === "export") {
+    return exportCommand(process.argv.slice(3));
+  }
+
+  if (process.argv[2] === "forget") {
+    process.exitCode = await forgetCommand(process.argv.slice(3));
+    return process.exitCode;
   }
 
   let cli: CliArgs;
@@ -380,7 +397,7 @@ async function gatewayCommand(args: string[]): Promise<number> {
         registry,
         availableBots: available,
         defaultBot,
-        allowWrites: tg?.allowWrites === true,
+        allowWrites: gateway.settings.allowWrites,
         approvalTimeoutMs: tg?.approvalTimeoutMs ?? 120_000,
         guard,
         audit,
@@ -539,3 +556,143 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
 }
 
 process.exitCode = await main();
+
+function doctorCommand(): number {
+  const home = tenjinHome();
+  const cwd = process.cwd();
+  const checks: Array<{ state: "ok" | "warn" | "fail"; label: string; detail?: string }> = [];
+  const add = (state: "ok" | "warn" | "fail", label: string, detail?: string) =>
+    checks.push({ state, label, detail });
+
+  let config: HarnessConfig | null = null;
+  try {
+    const loaded = loadConfig(cwd, home, { skipModelCheck: true });
+    config = loaded.config;
+    add("ok", "config loads");
+  } catch (e) {
+    add("fail", "config loads", (e as Error).message);
+  }
+
+  if (config) {
+    const ref = defaultModelRef(config);
+    if (ref.model) add("ok", `model ${ref.provider}:${ref.model}`);
+    else add("warn", "no model configured", "set model in ~/.tenjin/config.yaml");
+
+    const needsAnthropic =
+      ref.provider === "anthropic" || cheapModelRef(config)?.provider === "anthropic";
+    const needsOpenai =
+      ref.provider === "openai" || cheapModelRef(config)?.provider === "openai";
+    if (needsAnthropic) {
+      if (process.env.ANTHROPIC_API_KEY) add("ok", "ANTHROPIC_API_KEY set");
+      else add("fail", "ANTHROPIC_API_KEY missing", "required by anthropic model tier");
+    }
+    if (needsOpenai) {
+      if (process.env.OPENAI_API_KEY) add("ok", "OPENAI_API_KEY set");
+      else add("warn", "OPENAI_API_KEY missing", "needed for openai tiers + vector memory");
+    }
+    if (vectorEnabled(config)) {
+      if (process.env.OPENAI_API_KEY) add("ok", "vector memory ready");
+      else add("warn", "vector memory on but no OPENAI_API_KEY", "recall will be unavailable");
+    }
+    if (config.gateway && typeof config.gateway === "object") {
+      const tg = (config.gateway as Record<string, unknown>).telegram;
+      if (
+        tg &&
+        typeof tg === "object" &&
+        (tg as Record<string, unknown>).enabled === true &&
+        !process.env.TELEGRAM_BOT_TOKEN
+      ) {
+        add("fail", "TELEGRAM_BOT_TOKEN missing", "gateway.telegram is enabled");
+      } else {
+        add("ok", "gateway telegram token present or disabled");
+      }
+    }
+  }
+
+  try {
+    ensureGlobalDir(home);
+    const probe = join(home, ".doctor-probe");
+    writeFileSync(probe, "x");
+    rmSync(probe);
+    add("ok", `${home} writable`);
+  } catch (e) {
+    add("fail", `${home} writable`, (e as Error).message);
+  }
+
+  const bots = listBots(home);
+  add(bots.length ? "ok" : "warn", `${bots.length} bot(s)`, bots.join(", ") || undefined);
+
+  for (const c of checks) {
+    const icon = c.state === "ok" ? "✅" : c.state === "warn" ? "⚠️ " : "❌";
+    stdout.write(`${icon} ${c.label}${c.detail ? ` — ${c.detail}` : ""}\n`);
+  }
+  return checks.some((c) => c.state === "fail") ? 1 : 0;
+}
+
+function exportCommand(args: string[]): number {
+  const home = tenjinHome();
+  let out = "";
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--out") out = args[++i] ?? "";
+  }
+  if (!out) out = `tenjin-export-${new Date().toISOString().slice(0, 10)}.tar.gz`;
+  const parent = dirname(home);
+  const name = basename(home);
+  const result = spawnSync("tar", ["-czf", resolve(out), "-C", parent, name]);
+  if (result.status !== 0) {
+    stdout.write(`export failed: ${result.stderr?.toString().slice(0, 300)}\n`);
+    return 1;
+  }
+  stdout.write(`exported ${home} → ${resolve(out)}\n`);
+  return 0;
+}
+
+async function forgetCommand(args: string[]): Promise<number> {
+  const home = tenjinHome();
+  let bot: string | null = null;
+  let sessions = false;
+  let memory = false;
+  let all = false;
+  let yes = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--bot") bot = args[++i] ?? null;
+    else if (args[i] === "--sessions") sessions = true;
+    else if (args[i] === "--memory") memory = true;
+    else if (args[i] === "--all") all = true;
+    else if (args[i] === "--yes") yes = true;
+  }
+  if (!bot) {
+    stdout.write("usage: tenjin forget --bot <name> [--sessions|--memory|--all] [--yes]\n");
+    return 2;
+  }
+  const profile = resolveBot(home, bot);
+  const targets: string[] = [];
+  if (all || sessions) targets.push(profile.sessionsDir);
+  if (all || memory) targets.push(profile.memoryDir);
+  if (targets.length === 0) {
+    stdout.write("nothing selected — pass --sessions, --memory, or --all\n");
+    return 2;
+  }
+
+  if (!yes) {
+    const rl = createInterface({ input: stdin, output: stdout });
+    const answer = await rl.question(`delete ${targets.join(", ")}? [y/N] `);
+    rl.close();
+    if (answer.trim().toLowerCase() !== "y") {
+      stdout.write("aborted\n");
+      return 0;
+    }
+  }
+
+  for (const target of targets) {
+    rmSync(target, { recursive: true, force: true });
+    stdout.write(`deleted ${target}\n`);
+  }
+  new AuditLog(auditPath(home)).append(
+    "data_delete",
+    "user",
+    `forgot bot "${profile.name}": ${targets.map((t) => basename(t)).join(", ")}`,
+    profile.name,
+  );
+  return 0;
+}

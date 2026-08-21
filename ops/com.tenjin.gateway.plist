@@ -1,0 +1,29 @@
+<!-- macOS launchd job for `tenjin gateway`.
+     Install:  cp ops/com.tenjin.gateway.plist ~/Library/LaunchAgents/
+               launchctl load ~/Library/LaunchAgents/com.tenjin.gateway.plist
+     Logs:     ~/.tenjin/gateway.log
+-->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.tenjin.gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/bun</string>
+    <string>run</string>
+    <string>/path/to/stealth/src/index.ts</string>
+    <string>gateway</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>/your/home</string>
+    <key>ANTHROPIC_API_KEY</key><string>sk-ant-...</string>
+    <key>TELEGRAM_BOT_TOKEN</key><string>123456:ABC...</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>.tenjin/gateway.log</string>
+  <key>StandardErrorPath</key><string>.tenjin/gateway.log</string>
+</dict>
+</plist>

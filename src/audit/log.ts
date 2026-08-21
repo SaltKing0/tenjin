@@ -8,7 +8,8 @@ export type AuditKind =
   | "budget_halt"
   | "channel_reject"
   | "delegation"
-  | "gateway_msg";
+  | "gateway_msg"
+  | "data_delete";
 
 export interface AuditEvent {
   ts: string;

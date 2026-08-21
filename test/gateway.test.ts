@@ -48,8 +48,8 @@ function mockProvider(reply = "job output"): Provider {
 
 describe("parseGatewaySettings", () => {
   test("empty/missing → defaults", () => {
-    expect(parseGatewaySettings(undefined)).toEqual({ jobs: [], telegram: null, heartbeat: null, listen: null });
-    expect(parseGatewaySettings(null)).toEqual({ jobs: [], telegram: null, heartbeat: null, listen: null });
+    expect(parseGatewaySettings(undefined)).toEqual({ jobs: [], telegram: null, heartbeat: null, listen: null, allowWrites: false });
+    expect(parseGatewaySettings(null)).toEqual({ jobs: [], telegram: null, heartbeat: null, listen: null, allowWrites: false });
   });
 
   test("valid job parses with schedule validation", () => {

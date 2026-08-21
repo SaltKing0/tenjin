@@ -34,6 +34,7 @@ export interface GatewaySettings {
   telegram: TelegramChannelConfig | null;
   heartbeat: HeartbeatConfig | null;
   listen: ListenConfig | null;
+  allowWrites: boolean;
 }
 
 interface RawJob {
@@ -47,13 +48,19 @@ interface RawJob {
 
 export function parseGatewaySettings(raw: unknown): GatewaySettings {
   if (raw === null || raw === undefined) {
-    return { jobs: [], telegram: null, heartbeat: null, listen: null };
+    return { jobs: [], telegram: null, heartbeat: null, listen: null, allowWrites: false };
   }
   if (typeof raw !== "object") {
     throw new ConfigError("gateway config must be a mapping");
   }
   const gw = raw as Record<string, unknown>;
-  const settings: GatewaySettings = { jobs: [], telegram: null, heartbeat: null, listen: null };
+  const settings: GatewaySettings = {
+    jobs: [],
+    telegram: null,
+    heartbeat: null,
+    listen: null,
+    allowWrites: gw.allowWrites === true || undefined,
+  } as GatewaySettings;
 
   const rawJobs = gw.jobs;
   if (rawJobs !== undefined && rawJobs !== null) {
@@ -139,6 +146,10 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
       host: typeof l.host === "string" ? l.host : "127.0.0.1",
       token,
     };
+  }
+
+  if (settings.allowWrites === undefined) {
+    settings.allowWrites = settings.telegram?.allowWrites === true;
   }
 
   return settings;
