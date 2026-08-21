@@ -8,6 +8,7 @@ import {
   createAskBotAsyncTool,
   createBotTaskStatusTool,
   listTasks,
+  reconcileOrphanedTasks,
   startAsyncTask,
   readTaskForStatus,
   writeTask,
@@ -598,5 +599,63 @@ describe("corrupted task files (#183)", () => {
     expect(good?.result).toBe("r");
     const bad = listed.find((t) => t.id === "BAD");
     expect(bad?.status).toBe("error");
+  });
+});
+
+describe("task orphan reconciliation (#180)", () => {
+  function staleTask(id: string, status: "running" | "pending" | "done"): BotTask {
+    return {
+      id,
+      bot: "researcher",
+      message: "m",
+      status,
+      timeoutMs: 1000,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  test("sweeps stale running/pending tasks to error(orphaned by restart), leaves fresh/done alone", () => {
+    writeTask(home, "researcher", staleTask("RUN_A", "running"));
+    writeTask(home, "researcher", staleTask("PEND_B", "pending"));
+    writeTask(home, "researcher", staleTask("DONE_C", "done"));
+
+    // A boot sweep with an effective clock ~5s past the 1s task lifetime marks
+    // the running/pending orphans (their live promise would have transitioned
+    // or been aborted long ago).
+    const swept = reconcileOrphanedTasks(home, { nowMs: Date.now() + 5000 });
+    expect(swept).toBe(2);
+
+    expect(readTaskForStatus(home, "researcher", "RUN_A")?.status).toBe("error");
+    expect(readTaskForStatus(home, "researcher", "RUN_A")?.error).toContain("orphaned");
+    expect(readTaskForStatus(home, "researcher", "PEND_B")?.status).toBe("error");
+    // terminal tasks are never touched
+    expect(readTaskForStatus(home, "researcher", "DONE_C")?.status).toBe("done");
+
+    // A fresh (non-stale) running task is left alone and not reswept.
+    writeTask(home, "researcher", staleTask("FRESH", "running"));
+    expect(reconcileOrphanedTasks(home)).toBe(0);
+    expect(readTaskForStatus(home, "researcher", "FRESH")?.status).toBe("running");
+  });
+
+  test("a dependent of a swept orphan fails fast instead of waiting out its timeout", async () => {
+    writeTask(home, "researcher", staleTask("ORPH", "running"));
+    // simulate restart: the boot sweep turns the dead-owner task into error
+    reconcileOrphanedTasks(home, { nowMs: Date.now() + 5000 });
+    expect(readTaskForStatus(home, "researcher", "ORPH")?.error).toContain("orphaned");
+
+    // A NEW dependent references the swept orphan. With a 60s timeout it would
+    // hang if it waited on a live task — but the orphan is already error, so it
+    // must fail promptly.
+    const startedAt = Date.now();
+    const chain = startAsyncTask(deps(delayedProvider(0, "SHOULD NOT RUN")), {
+      targetBot: "researcher",
+      message: "dependent",
+      dependsOn: "ORPH",
+      timeoutMs: 60_000,
+    });
+    const final = await chain.settled;
+    expect(final.status).toBe("error");
+    expect(final.error).toMatch(/dependency/);
+    expect(Date.now() - startedAt).toBeLessThan(2000);
   });
 });
