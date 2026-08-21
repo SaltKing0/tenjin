@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditLog, auditPath, formatAudit } from "../src/audit/log";
+import { Redactor } from "../src/security/redact";
 
 let home: string;
 
@@ -59,4 +60,19 @@ test("formatAudit renders readable lines", () => {
   expect(formatted).toContain("[researcher]");
   expect(formatted).toContain('.env');
   expect(formatAudit([])).toBe("(no audit events)");
+});
+
+test("redacts secrets in detail by default", () => {
+  const log = new AuditLog(auditPath(home));
+  log.append("gateway_msg", "u1", "saw OPENAI_API_KEY=sk-abc1234567890");
+  const events = log.query();
+  expect(events[0]?.detail).not.toContain("sk-abc1234567890");
+  expect(events[0]?.detail).toContain("[REDACTED]");
+  expect(events[0]?.detail).toContain("OPENAI_API_KEY=");
+});
+
+test("honours a disabled redactor", () => {
+  const log = new AuditLog(auditPath(home), new Redactor(false));
+  log.append("gateway_msg", "u1", "OPENAI_API_KEY=sk-abc1234567890");
+  expect(log.query()[0]?.detail).toContain("sk-abc1234567890");
 });

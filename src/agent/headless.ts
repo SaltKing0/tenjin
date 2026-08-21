@@ -11,6 +11,7 @@ import { writeTool } from "../tools/write";
 import { editTool } from "../tools/edit";
 import { bashTool } from "../tools/bash";
 import type { ToolDef } from "../tools/registry";
+import { Redactor } from "../security/redact";
 
 export type ToolPolicy = "read-only" | "none" | "full";
 
@@ -28,6 +29,7 @@ export interface HeadlessOptions {
   sessionLogDir?: string;
   sessionBot?: string;
   guard?: import("../security/guard").SecurityGuard | null;
+  redactor?: Redactor | null;
   audit?: (kind: "write_exec" | "budget_halt", detail: string) => void;
   approve?: (toolName: string, group: "read" | "write", input: unknown) => Promise<boolean>;
   onTextDelta?: (delta: string) => void;
@@ -53,6 +55,7 @@ export function toolsForPolicy(policy: ToolPolicy): ToolDef[] {
 
 export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult> {
   const policy = opts.policy ?? "read-only";
+  const redactor = opts.redactor ?? new Redactor();
   const system = buildSystemPrompt({
     soulText: opts.soulText,
     agentsMd: opts.agentsMd ?? null,
@@ -94,9 +97,22 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           if (e.t === "assistant_message") {
             logger?.append({ t: "message", role: "assistant", content: e.content, ts });
           } else if (e.t === "tool_call") {
-            logger?.append({ t: "tool_call", id: e.id, name: e.name, input: e.input, ts });
+            logger?.append({
+              t: "tool_call",
+              id: e.id,
+              name: e.name,
+              input: redactor.redactValue(e.input),
+              ts,
+            });
           } else if (e.t === "tool_result") {
-            logger?.append({ t: "tool_result", id: e.id, name: e.name, ok: e.ok, output: e.output, ts });
+            logger?.append({
+              t: "tool_result",
+              id: e.id,
+              name: e.name,
+              ok: e.ok,
+              output: redactor.redact(e.output),
+              ts,
+            });
           } else if (e.t === "usage") {
             logger?.append({
               t: "usage",

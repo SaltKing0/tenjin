@@ -5,6 +5,7 @@ import { resolveBot, botModelRef, botBudgetUSD } from "../bots/profile";
 import { runHeadless } from "../agent/headless";
 import { formatUSD } from "../agent/budget";
 import { parseSchedule, nextRun, type Schedule } from "./schedule";
+import { Redactor } from "../security/redact";
 import { parseGatewaySettings, type GatewaySettings } from "./config";
 import { createCheckInboxTool } from "../bots/tools";
 import { formatInbox, unreadMessages } from "../bots/inbox";
@@ -151,6 +152,7 @@ export class Gateway {
       sessionLogDir: profile.sessionsDir,
       sessionBot: profile.name,
       guard: this.deps.guard,
+      redactor: Redactor.fromConfig(this.deps.config.security),
     });
     this.log(
       `job ${job.name} done (${result.stopReason}, ${formatUSD(result.costUSD)})`,

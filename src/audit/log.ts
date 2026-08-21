@@ -1,5 +1,6 @@
 import { existsSync, appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { Redactor } from "../security/redact";
 
 export type AuditKind =
   | "tool_block"
@@ -25,7 +26,10 @@ export function auditPath(home: string): string {
 }
 
 export class AuditLog {
-  constructor(readonly path: string) {}
+  constructor(
+    readonly path: string,
+    readonly redactor: Redactor = new Redactor(),
+  ) {}
 
   append(kind: AuditKind, actor: string, detail: string, bot?: string): void {
     const event: AuditEvent = {
@@ -33,7 +37,7 @@ export class AuditLog {
       kind,
       actor,
       ...(bot ? { bot } : {}),
-      detail,
+      detail: this.redactor.redact(detail),
     };
     appendFileSync(this.path, `${JSON.stringify(event)}\n`);
   }

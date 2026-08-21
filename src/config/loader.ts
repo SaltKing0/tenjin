@@ -42,6 +42,8 @@ memory:
   vector:
     enabled: true           # semantic recall; needs OPENAI_API_KEY at runtime
     # model: text-embedding-3-small
+# security:
+#   redaction: true          # mask secrets (sk-…, AKIA…, keys) in session/audit logs
 # models:                   # optional model tiers (provider-prefixed to mix providers)
 #   default: anthropic:claude-sonnet-4-5
 #   cheap: openai:gpt-4o-mini
