@@ -72,6 +72,72 @@ function globToSource(pattern: string): string {
     .replace(/\?/g, ".");
 }
 
+/* ---- Obfuscation decoding helpers ------------------------------------ *
+ * These close trivial guard bypasses: a blocked filename smuggled through
+ * base64, hex, or printf escapes decodes back to a plain path that the
+ * pattern matcher can then see.
+ */
+
+function isPrintableAscii(s: string): boolean {
+  return s.length > 0 && /^[\x20-\x7E]+$/.test(s);
+}
+
+function decodeBase64Payloads(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(
+    /(?:^|[^A-Za-z0-9+/])([A-Za-z0-9+/]{4,}={0,2})(?=$|[^A-Za-z0-9+/=])/g,
+  )) {
+    const tok = m[1]!;
+    if (tok.replace(/=+$/, "").length < 4) continue;
+    const decoded = Buffer.from(tok, "base64").toString("utf8");
+    if (isPrintableAscii(decoded)) out.push(decoded);
+  }
+  return out;
+}
+
+function decodeHexPayloads(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(
+    /(?:^|[^0-9A-Fa-f])([0-9A-Fa-f]{4,})(?=$|[^0-9A-Fa-f])/g,
+  )) {
+    const run = m[1]!;
+    if (run.length % 2 !== 0) continue;
+    const decoded = Buffer.from(run, "hex").toString("utf8");
+    if (isPrintableAscii(decoded)) out.push(decoded);
+  }
+  return out;
+}
+
+function decodeEscapePayloads(text: string): string[] {
+  const out: string[] = [];
+  const hexBytes: number[] = [];
+  for (const m of text.matchAll(/\\(?:x|X)([0-9A-Fa-f]{2})/g)) {
+    hexBytes.push(parseInt(m[1]!, 16));
+  }
+  if (hexBytes.length) {
+    const decoded = Buffer.from(hexBytes).toString("utf8");
+    if (isPrintableAscii(decoded)) out.push(decoded);
+  }
+  const octBytes: number[] = [];
+  for (const m of text.matchAll(/\\(?:0)?([0-7]{1,3})(?!\d)/g)) {
+    octBytes.push(parseInt(m[1]!, 8));
+  }
+  if (octBytes.length) {
+    const decoded = Buffer.from(octBytes).toString("utf8");
+    if (isPrintableAscii(decoded)) out.push(decoded);
+  }
+  return out;
+}
+
+/** Decode and rescan obfuscated payloads embedded anywhere in a command. */
+function decodeEncodedPayloads(text: string): string[] {
+  return [
+    ...decodeEscapePayloads(text),
+    ...decodeHexPayloads(text),
+    ...decodeBase64Payloads(text),
+  ];
+}
+
 export class SecurityGuard {
   private entries: Array<{ pattern: string; full: RegExp; base: RegExp }>;
   private workspaceRoot?: string;
@@ -124,6 +190,8 @@ export class SecurityGuard {
   checkCommand(command: string): GuardResult {
     const direct = this.checkText(command);
     if (direct.blocked && !command.includes(" ")) return direct;
+    const inline = this.scanInlineScript(command);
+    if (inline) return inline;
     const tokens = command.split(/[\s"'|;&<>()$`]+/).filter(Boolean);
     for (const token of tokens) {
       const result = this.checkText(token);
@@ -134,7 +202,43 @@ export class SecurityGuard {
         return { blocked: true, pattern: entry.pattern, target: command };
       }
     }
+    const encoded = this.scanEncoded(command);
+    if (encoded) return encoded;
     return { blocked: false };
+  }
+
+  /**
+   * Decode base64 / hex / printf-escaped payloads anywhere in the command and
+   * rescan each decoded result against the pattern table. Pure token matching
+   * misses `base64 -d <<< LmVudg==`, `xxd -r -p <<< 2e656e76` and
+   * `printf '\x2e\x65\x6e\x76'` because the encoded token itself never looks
+   * like the blocked path.
+   */
+  private scanEncoded(text: string): GuardResult | null {
+    for (const payload of decodeEncodedPayloads(text)) {
+      const result = this.checkText(payload);
+      if (result.blocked) return result;
+    }
+    return null;
+  }
+
+  /**
+   * Interpreters invoked with -c / -e / -r run an inline script that plain
+   * tokenisation may not see as a path. Extract the quoted script body and
+   * scan it directly (including any encoded payloads inside it).
+   */
+  private scanInlineScript(command: string): GuardResult | null {
+    const re = /\b(?:python|python3|node|perl|php|ruby|sh|bash|zsh|ksh|dash|deno|bun)\s+-([a-zA-Z])\s+(["'`])([\s\S]*?)\2/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(command))) {
+      if (!/^[cerE]$/.test(m[1]!)) continue;
+      const script = m[3]!;
+      const direct = this.checkText(script);
+      if (direct.blocked) return direct;
+      const encoded = this.scanEncoded(script);
+      if (encoded) return encoded;
+    }
+    return null;
   }
 
   /**
