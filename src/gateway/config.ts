@@ -27,6 +27,8 @@ export interface ListenConfig {
   port: number;
   host: string;
   token: string;
+  rateLimitMax?: number;
+  rateLimitWindowMs?: number;
 }
 
 export interface GatewaySettings {
@@ -145,6 +147,9 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
       port,
       host: typeof l.host === "string" ? l.host : "127.0.0.1",
       token,
+      rateLimitMax: typeof l.rateLimitMax === "number" ? l.rateLimitMax : undefined,
+      rateLimitWindowMs:
+        typeof l.rateLimitWindowMs === "number" ? l.rateLimitWindowMs : undefined,
     };
   }
 

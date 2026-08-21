@@ -1,5 +1,11 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { startHttpServer, type HttpServerHandle } from "../src/gateway/http";
+import { join } from "node:path";
+import {
+  startHttpServer,
+  safeEqual,
+  type HttpListenConfig,
+  type HttpServerHandle,
+} from "../src/gateway/http";
 
 let handle: HttpServerHandle | null = null;
 
@@ -8,12 +14,21 @@ afterEach(() => {
   handle = null;
 });
 
-function start(overrides: Partial<Parameters<typeof startHttpServer>[0]> = {}) {
+type StartOverrides = Omit<Partial<Parameters<typeof startHttpServer>[0]>, "config"> & {
+  config?: Partial<HttpListenConfig>;
+};
+
+function start(overrides: StartOverrides = {}) {
   handle = startHttpServer({
-    config: { port: 0, host: "127.0.0.1", token: "SECRETTOKEN" },
     handleMessage: async (text) => `echo:${text}`,
     status: () => ({ jobs: [{ name: "j1", bot: "b", nextDueMs: 123 }] }),
     ...overrides,
+    config: {
+      port: 0,
+      host: "127.0.0.1",
+      token: "SECRETTOKEN",
+      ...(overrides.config ?? {}),
+    },
   });
   return `http://127.0.0.1:${handle.port}`;
 }
@@ -84,4 +99,68 @@ test("unknown routes 404; invalid json 400", async () => {
     body: "{broken",
   });
   expect(badJson.status).toBe(400);
+});
+
+test("safeEqual compares in constant time without leaking length", () => {
+  expect(safeEqual("SECRETTOKEN", "SECRETTOKEN")).toBe(true);
+  expect(safeEqual("SECRETTOKEN", "SECRETTOKEn")).toBe(false);
+  expect(safeEqual("abc", "abcd")).toBe(false);
+  expect(safeEqual("", "")).toBe(false);
+  expect(safeEqual("", "SECRETTOKEN")).toBe(false);
+});
+
+test("rejects malformed bearer header", async () => {
+  const base = start();
+  const noScheme = await fetch(`${base}/status`, {
+    headers: { authorization: "SECRETTOKEN" },
+  });
+  expect(noScheme.status).toBe(401);
+
+  const emptyToken = await fetch(`${base}/status`, {
+    headers: { authorization: "Bearer " },
+  });
+  expect(emptyToken.status).toBe(401);
+});
+
+test("rate limit rejects requests beyond the per-IP budget on /api/*", async () => {
+  const base = start({ config: { rateLimitMax: 3, rateLimitWindowMs: 60_000 } });
+  const statuses: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    const res = await fetch(`${base}/api/settings`, {
+      headers: { authorization: "Bearer SECRETTOKEN" },
+    });
+    statuses.push(res.status);
+  }
+  expect(statuses).toEqual([404, 404, 404, 429, 429]);
+  const limited = await fetch(`${base}/api/settings`, {
+    headers: { authorization: "Bearer SECRETTOKEN" },
+  });
+  expect(limited.headers.get("retry-after")).toBe("60");
+});
+
+test("rate limit does not affect non-api routes", async () => {
+  const base = start({ config: { rateLimitMax: 1, rateLimitWindowMs: 60_000 } });
+  const first = await fetch(`${base}/status`, {
+    headers: { authorization: "Bearer SECRETTOKEN" },
+  });
+  const second = await fetch(`${base}/status`, {
+    headers: { authorization: "Bearer SECRETTOKEN" },
+  });
+  expect(first.status).toBe(200);
+  expect(second.status).toBe(200);
+});
+
+test("console responses carry security headers", async () => {
+  const base = start({
+    consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
+  });
+  const res = await fetch(`${base}/console`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-security-policy")).toContain("default-src 'self'");
+  expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+  // Console el() sets styles via inline style="" attributes, so style-src must
+  // allow 'unsafe-inline' or the UI loses its layout (script-src stays 'self').
+  expect(res.headers.get("content-security-policy")).toContain("style-src 'self' 'unsafe-inline'");
+  expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+  expect(res.headers.get("x-frame-options")).toBe("DENY");
 });
