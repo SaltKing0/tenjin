@@ -1,40 +1,113 @@
 import type { SummaryEntry } from "./summaries";
 
-export const DEFAULT_MAX_CHARS = 3200;
+// Token budget instead of a character budget. A summary section that is too
+// long wastes prompt tokens every run, so we bound it at the token level.
+// DEFAULT_MAX_TOKENS ~ the old 3200-char default at ~4 chars/token.
+export const DEFAULT_MAX_TOKENS = 800;
+
+// Heuristic token count (no tokenizer dependency): ~4 chars per token is the
+// common approximation for English prose. Ceil so an empty string is 1 token.
+export function estimateTokens(text: string): number {
+  return Math.max(1, Math.ceil(text.length / 4));
+}
 
 export interface MemorySectionOptions {
   currentProject: string;
-  maxChars?: number;
+  maxTokens?: number;
 }
 
 const HEADER =
   "# Memory — recent sessions in this project\nWhat happened before, newest first:";
 
+// A summary written under a parent directory is relevant to a current project
+// that lives in one of its subdirectories (and vice versa): projects are often
+// nested, and a moved repo keeps a shared prefix with its old location.
+// Exact match is most relevant; an ancestor/descendant directory is relevant
+// but weaker. Boundary-aware so "/proj" never matches "/projects".
+function normPath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function isPathPrefix(prefix: string, path: string): boolean {
+  const a = normPath(prefix);
+  const b = normPath(path);
+  return a === b || b.startsWith(a + "/");
+}
+
+function pathRelevance(projectPath: string, currentProject: string): number {
+  if (projectPath === currentProject) return 1;
+  if (isPathPrefix(projectPath, currentProject)) return 0.5;
+  if (isPathPrefix(currentProject, projectPath)) return 0.5;
+  return 0;
+}
+
+// Recency window over which a summary's freshness decays to zero.
+const RECENCY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Weighting: relevance dominates recency so a directly-matching fact is always
+// ranked above a merely-inherited one, while ties within a relevance tier are
+// broken by recency (newest first).
+const RELEVANCE_WEIGHT = 2;
+
+function dateMs(created: string): number {
+  const t = Date.parse(created);
+  return Number.isFinite(t) ? t : NaN;
+}
+
+function entryScore(
+  entry: SummaryEntry,
+  currentProject: string,
+  newestMs: number,
+): number {
+  const relevance = pathRelevance(entry.meta.projectPath, currentProject);
+  let recency = 0;
+  if (Number.isFinite(newestMs)) {
+    const ageMs = newestMs - dateMs(entry.meta.created);
+    recency = Number.isFinite(ageMs) ? Math.max(0, 1 - ageMs / RECENCY_WINDOW_MS) : 0;
+  }
+  return RELEVANCE_WEIGHT * relevance + recency;
+}
+
 export function buildMemorySection(
   entries: SummaryEntry[],
   opts: MemorySectionOptions,
 ): string | null {
-  const relevant = entries
-    .filter((e) => e.meta.projectPath === opts.currentProject && e.text)
-    .sort((a, b) => (a.meta.created < b.meta.created ? 1 : -1));
-
+  const relevant = entries.filter(
+    (e) => e.text && pathRelevance(e.meta.projectPath, opts.currentProject) > 0,
+  );
   if (relevant.length === 0) return null;
 
-  const max = opts.maxChars ?? DEFAULT_MAX_CHARS;
+  // Newest created timestamp among the matched set anchors recency.
+  let newestMs = NaN;
+  for (const e of relevant) {
+    const t = dateMs(e.meta.created);
+    if (Number.isFinite(t) && (Number.isNaN(newestMs) || t > newestMs)) newestMs = t;
+  }
+
+  const scored = relevant
+    .map((e) => ({ e, score: entryScore(e, opts.currentProject, newestMs) }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.e.meta.created < b.e.meta.created ? 1 : -1;
+    });
+
+  const max = opts.maxTokens ?? DEFAULT_MAX_TOKENS;
   const body: string[] = [];
 
-  for (const entry of relevant) {
+  for (const { e: entry } of scored) {
     const date = entry.meta.created.slice(0, 10);
     const prefix = `- ${date} (${entry.meta.sessionId}): `;
     const candidate = `${HEADER}\n${[...body, `${prefix}${entry.text}`].join("\n")}`;
-    if (candidate.length <= max) {
+    if (estimateTokens(candidate) <= max) {
       body.push(`${prefix}${entry.text}`);
       continue;
     }
     if (body.length === 0) {
-      const room = max - HEADER.length - 1 - prefix.length - 1;
-      if (room > 20) {
-        body.push(`${prefix}${entry.text.slice(0, room)}…`);
+      // A single oversized summary is truncated to fit the token budget
+      // rather than dropped, so the most relevant fact is never lost.
+      const roomChars = max * 4 - (HEADER.length + 1 + prefix.length + 1);
+      if (roomChars > 20) {
+        body.push(`${prefix}${entry.text.slice(0, roomChars - 1)}…`);
       }
     }
     break;
