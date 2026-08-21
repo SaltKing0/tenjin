@@ -293,6 +293,38 @@ describe("sessions + trajectory", () => {
     const r2 = await fetch(`${base}/api/session/..%2F..%2Fetc%2Fpasswd`, { headers: auth });
     expect([400, 404]).toContain(r2.status);
   });
+
+  test("pagination honors limit/offset and reports total (#58)", async () => {
+    // beforeEach already seeded solo-1 → 6 solo sessions in total.
+    for (let i = 0; i < 5; i++) seedSession(null, `p${i}`);
+    const base = startServer();
+    const page = await (await fetch(`${base}/api/sessions?limit=2&offset=1`, { headers: auth })).json() as any;
+    expect(page.total).toBe(6);
+    expect(page.sessions).toHaveLength(2);
+    const second = await (await fetch(`${base}/api/sessions?limit=10&offset=4`, { headers: auth })).json() as any;
+    expect(second.sessions).toHaveLength(2);
+    expect(second.total).toBe(6);
+  });
+
+  test("free-text search filters on the preview (#58)", async () => {
+    seedSession(null, "s-a");
+    for (const id of ["s-b", "s-c"]) seedSession(null, id);
+    const base = startServer();
+    const res = await fetch(`${base}/api/sessions?q=hello%20from%20s-b`, { headers: auth });
+    const data = (await res.json()) as any;
+    expect(data.sessions.every((s: any) => s.id === "s-b")).toBe(true);
+    const none = await fetch(`${base}/api/sessions?q=zzz-no-match`, { headers: auth });
+    const empty = (await none.json()) as any;
+    expect(empty.total).toBe(0);
+    expect(empty.sessions).toHaveLength(0);
+  });
+
+  test("pagination rejects bad limit/offset (#58)", async () => {
+    const base = startServer();
+    expect((await fetch(`${base}/api/sessions?limit=0`, { headers: auth })).status).toBe(400);
+    expect((await fetch(`${base}/api/sessions?limit=501`, { headers: auth })).status).toBe(400);
+    expect((await fetch(`${base}/api/sessions?offset=-1`, { headers: auth })).status).toBe(400);
+  });
 });
 
 test("spend endpoint aggregates seeded sessions", async () => {
@@ -930,5 +962,27 @@ describe("memory endpoint", () => {
     expect(js).toContain("/api/memory/");
     expect(js).toContain("read-only view of a bot's facts");
     expect(js).toContain("chunks:");
+  });
+});
+
+describe("audit kind validation (#58)", () => {
+  test("GET /api/audit serves the backend kind list", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/audit`, { headers: auth });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { events: unknown[]; kinds: string[] };
+    expect(Array.isArray(data.kinds)).toBe(true);
+    expect(data.kinds).toContain("tool_block");
+    expect(data.kinds).toContain("approval");
+    expect(data.kinds).toContain("guard_disabled");
+  });
+
+  test("unknown audit kind returns 400 instead of silent empty results", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/audit?kind=bogus_kind`, { headers: auth });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain("unknown audit kind");
+    const ok = await fetch(`${base}/api/audit?kind=approval`, { headers: auth });
+    expect(ok.status).toBe(200);
   });
 });
