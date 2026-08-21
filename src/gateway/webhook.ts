@@ -55,6 +55,8 @@ const DEFAULT_RATE_LIMIT_MAX = 60;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_MESSAGE_LENGTH = 8192;
 const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
+/** Evict stale rate/ip entries once the maps grow past this bound (#317). */
+export const WEBHOOK_MAP_SWEEP_THRESHOLD = 1000;
 
 /** Compute the `sha256=<hex>` webhook signature for a raw body at `timestamp` (epoch s). */
 export function webhookSignature(secret: string, timestamp: string, rawBody: string): string {
@@ -176,6 +178,39 @@ export class WebhookChannel implements Channel {
     return false;
   }
 
+  /** Current size of the rate-limit / replay maps (observability + tests). */
+  mapSizes(): { rateHits: number; ipHits: number; recentMessages: number } {
+    return {
+      rateHits: this.rateHits.size,
+      ipHits: this.ipHits.size,
+      recentMessages: this.recentMessages.size,
+    };
+  }
+
+  /**
+   * Drop rate/ip entries whose window has fully elapsed so a long-running
+   * gateway doesn't accumulate one entry per distinct sender/IP forever (#317).
+   * `recentMessages` is already swept inside {@link isReplay} past its bound.
+   */
+  sweep(now = Date.now()): void {
+    const windowMs = this.opts.rateLimitWindowMs ?? DEFAULT_RATE_LIMIT_WINDOW_MS;
+    for (const [sender, hits] of this.rateHits) {
+      if (hits.length === 0) {
+        this.rateHits.delete(sender);
+        continue;
+      }
+      const last = hits[hits.length - 1];
+      if (last === undefined) {
+        this.rateHits.delete(sender);
+        continue;
+      }
+      if (now - last >= windowMs) this.rateHits.delete(sender);
+    }
+    for (const [ip, entry] of this.ipHits) {
+      if (now >= entry.resetAt) this.ipHits.delete(ip);
+    }
+  }
+
   private reject(info: WebhookRejection, status: number, body: unknown): Response {
     this.opts.onRejected?.(info);
     return Response.json(body, { status });
@@ -203,6 +238,11 @@ export class WebhookChannel implements Channel {
   }
 
   private eventHandler = async (req: Request): Promise<Response> => {
+    // Opportunistically evict stale rate/ip entries once the maps get large, so
+    // a long-running gateway stays bounded (#317).
+    if (this.rateHits.size + this.ipHits.size > WEBHOOK_MAP_SWEEP_THRESHOLD) {
+      this.sweep();
+    }
     // Pre-auth guards run BEFORE the body is read or any HMAC/parse work, so
     // unsigned garbage can't cost unbounded memory or CPU (DoS, #203): per-IP
     // rate limit + content-length cap, keyed by the connection IP (not the

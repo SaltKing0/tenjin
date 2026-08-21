@@ -303,6 +303,36 @@ describe("WebhookChannel HTTP handler", () => {
     expect(second.status).toBe(200); // benign response, not an error
     expect(runs).toBe(1); // ran once despite two deliveries
   });
+
+  test("sweep evicts stale rate/ip entries so the maps stay bounded (#317)", async () => {
+    const ch = new WebhookChannel(
+      { secret: SECRET, defaultBot: "researcher", allowedSenders: [], rateLimitMax: 100, rateLimitWindowMs: 10_000, maxMessageLength: 64 },
+      () => {},
+    );
+    ch.onMessage(async (m) => `echo:${m.text}`);
+    const eh = (ch as unknown as { eventHandler: (r: Request) => Promise<Response> }).eventHandler;
+    // Distinct senders fill the rate map; every request also touches the per-IP map.
+    for (let i = 0; i < 25; i++) {
+      const b = signedBody({ text: `hi${i}`, sender: `s${i}` });
+      await eh(
+        new Request("http://127.0.0.1:1/channel/webhook", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-webhook-signature": b.signature,
+            "x-webhook-timestamp": b.ts,
+          },
+          body: b.raw,
+        }),
+      );
+    }
+    expect(ch.mapSizes().rateHits).toBe(25);
+    expect(ch.mapSizes().ipHits).toBe(1);
+    // Once the window elapses, sweep drops the stale entries.
+    ch.sweep(Date.now() + 10_000 + 1);
+    expect(ch.mapSizes().rateHits).toBe(0);
+    expect(ch.mapSizes().ipHits).toBe(0);
+  });
 });
 
 describe("gateway config webhook", () => {
