@@ -11,9 +11,11 @@ import {
   createBot,
   readBotSoul,
   writeBotSoul,
+  writeBotModel,
   renameBot,
   deleteBot,
 } from "../bots/profile";
+import { templateSoul } from "../bots/templates";
 import { sanitizeSkillName } from "../skills/loader";
 import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
 import { SessionLog, sessionLineage } from "../session/log";
@@ -282,7 +284,7 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     const botSingleMatch = /^\/api\/bots\/([a-zA-Z0-9_-]+)$/.exec(path);
 
     if (path === "/api/bots" && req.method === "POST") {
-      let body: { name?: unknown; soul?: unknown };
+      let body: { name?: unknown; soul?: unknown; role?: unknown; model?: unknown };
       try {
         body = (await req.json()) as typeof body;
       } catch {
@@ -290,10 +292,23 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
       }
       const rawName = typeof body.name === "string" ? body.name : "";
       if (!rawName.trim()) return json({ error: "name is required" }, 400);
+      // #253: an explicit soul wins over a role template; otherwise a role
+      // generates a SOUL.md draft for the new bot.
       const soul = typeof body.soul === "string" ? body.soul : undefined;
+      const role = typeof body.role === "string" ? body.role : undefined;
+      const model = typeof body.model === "string" ? body.model : undefined;
       try {
-        createBot(deps.home, rawName, soul !== undefined ? { soul } : {});
+        let effectiveSoul = soul;
+        if (effectiveSoul === undefined && role) {
+          effectiveSoul = templateSoul(role, rawName);
+        }
+        createBot(
+          deps.home,
+          rawName,
+          effectiveSoul !== undefined ? { soul: effectiveSoul } : {},
+        );
         const name = sanitizeSkillName(rawName);
+        if (model) writeBotModel(deps.home, name, model);
         return json({ ok: true, ...botDetailView(deps.home, name, deps.config) }, 201);
       } catch (e) {
         return botErrorResponse(e);

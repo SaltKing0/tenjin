@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { YAML } from "bun";
+import { stringifyBlockStyle } from "../config/block-style";
 import { ConfigError, type HarnessConfig } from "../config/types";
 import { resolveModelRef, defaultModelRef, type ModelRef } from "../config/models";
 import { sanitizeSkillName } from "../skills/loader";
@@ -250,6 +251,37 @@ export function createBot(
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SOUL.md"), opts.soul ?? botSoulTemplate(safe));
   return dir;
+}
+
+/**
+ * Pin a model to a bot's config.yaml (#253). The caller passes a fully
+ * qualified or bare model id; it is stored under `model:` alongside any
+ * existing bot config fields (security, routines, … are preserved). Backed by
+ * the shared block-style YAML writer so the file stays hand-editable.
+ */
+export function writeBotModel(home: string, name: string, model: string): string {
+  const clean = model.trim();
+  if (!clean) throw new ConfigError("model must be a non-empty id");
+  const safe = sanitizeSkillName(name);
+  const root = botDir(home, safe);
+  if (!existsSync(root)) {
+    const available = listBots(home);
+    const hint = available.length
+      ? `available bots: ${available.join(", ")}`
+      : "no bots exist yet";
+    throw new ConfigError(`unknown bot "${safe}" (${hint})`);
+  }
+  const cfgPath = join(root, "config.yaml");
+  let doc: Record<string, unknown> = {};
+  if (existsSync(cfgPath)) {
+    const parsed: unknown = YAML.parse(readFileSync(cfgPath, "utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      doc = parsed as Record<string, unknown>;
+    }
+  }
+  doc.model = clean;
+  writeFileSync(cfgPath, stringifyBlockStyle(doc));
+  return root;
 }
 
 export function listBots(home: string): string[] {
