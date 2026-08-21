@@ -184,6 +184,8 @@ async function main(): Promise<number> {
       config.providers?.openai?.baseUrl,
       undefined,
       config.retry,
+      config.providers?.anthropic?.caching,
+      config.providers?.anthropic?.baseUrl,
     );
     const defaultRef = cli.model
       ? resolveModelRef(cli.model, config.provider)
@@ -675,6 +677,8 @@ async function gatewayCommand(args: string[]): Promise<number> {
         openai: config.providers?.openai?.apiKey,
       },
       config.retry,
+      config.providers?.anthropic?.caching,
+      config.providers?.anthropic?.baseUrl,
     );
     const controller = new AbortController();
     process.on("SIGINT", () => controller.abort());

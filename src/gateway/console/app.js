@@ -824,10 +824,10 @@ async function panelSettings(main) {
     });
     const urlInput = el("input", {
       type: "text",
-      value: name === "openai" ? (settings.openai.baseUrl || "") : "",
-      placeholder: name === "openai"
-        ? "custom base URL (optional) — e.g. https://api.deepseek.com/v1"
-        : "custom base URL (optional)",
+      value: settings[name].baseUrl || "",
+      placeholder:
+        "custom base URL (optional) — e.g. " +
+        (name === "openai" ? "https://api.deepseek.com/v1" : "https://gateway.example/v1"),
       style: "width:100%; margin-bottom:8px",
     });
     const detectOut = el("div", { class: "dim", style: "margin:8px 0" });
@@ -919,10 +919,16 @@ async function panelSettings(main) {
         },
       };
       const aKey = anthropicCard.querySelector("input[type=password]").value.trim();
+      const aInputs = anthropicCard.querySelectorAll("input");
+      const aUrl = aInputs[1].value.trim();
       const oInputs = openaiCard.querySelectorAll("input");
       const oKey = oInputs[0].value.trim();
       const oUrl = oInputs[1].value.trim();
-      if (aKey) body.anthropic = { apiKey: aKey };
+      if (aKey || aUrl) {
+        body.anthropic = {};
+        if (aKey) body.anthropic.apiKey = aKey;
+        if (aUrl) body.anthropic.baseUrl = aUrl;
+      }
       if (oKey || oUrl) {
         body.openai = {};
         if (oKey) body.openai.apiKey = oKey;
