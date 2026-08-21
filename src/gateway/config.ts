@@ -1,5 +1,5 @@
 import { ConfigError } from "../config/types";
-import { parseSchedule, parseEvery } from "./schedule";
+import { parseSchedule, parseEvery, extractScheduleSpec } from "./schedule";
 import { knownChannel } from "./channel";
 
 export interface JobConfig {
@@ -126,6 +126,7 @@ interface RawJob {
   every?: unknown;
   cron?: unknown;
   tz?: unknown;
+  schedule?: unknown;
   timeoutMs?: unknown;
   policy?: unknown;
 }
@@ -190,16 +191,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
       if (!prompt) throw new ConfigError(`gateway job "${name}" missing \`prompt\``);
       if (seen.has(name)) throw new ConfigError(`duplicate job name "${name}"`);
       seen.add(name);
-      if (entry.tz !== undefined && entry.tz !== null && typeof entry.tz !== "string") {
-        throw new ConfigError(`gateway job "${name}" tz must be an IANA time zone name`);
-      }
-      const tz =
-        typeof entry.tz === "string" && entry.tz.trim() !== "" ? entry.tz.trim() : undefined;
-      const scheduleSpec = {
-        every: typeof entry.every === "string" ? entry.every : undefined,
-        cron: typeof entry.cron === "string" ? entry.cron : undefined,
-        tz,
-      };
+      const scheduleSpec = extractScheduleSpec(entry, `gateway job "${name}"`);
       parseSchedule(scheduleSpec);
       let timeoutMs: number | undefined;
       if (entry.timeoutMs !== undefined && entry.timeoutMs !== null) {

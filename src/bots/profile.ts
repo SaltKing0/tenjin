@@ -13,7 +13,7 @@ import { stringifyBlockStyle } from "../config/block-style";
 import { ConfigError, type HarnessConfig } from "../config/types";
 import { resolveModelRef, defaultModelRef, type ModelRef } from "../config/models";
 import { sanitizeSkillName } from "../skills/loader";
-import { parseSchedule, parseEvery } from "../gateway/schedule";
+import { parseSchedule, parseEvery, extractScheduleSpec } from "../gateway/schedule";
 import type { ToolPolicy } from "../agent/headless";
 import { isEffortLevel, EFFORT_LEVELS, type EffortLevel } from "../agent/effort";
 
@@ -147,17 +147,9 @@ function parseBotRoutines(raw: unknown): BotRoutineConfig[] | undefined {
     if (!prompt) throw new ConfigError(`bot routine "${name}" missing \`prompt\``);
     if (seen.has(name)) throw new ConfigError(`duplicate routine name "${name}"`);
     seen.add(name);
-    if (entry.tz !== undefined && entry.tz !== null && typeof entry.tz !== "string") {
-      throw new ConfigError(`bot routine "${name}" tz must be an IANA time zone name`);
-    }
-    const tz =
-      typeof entry.tz === "string" && entry.tz.trim() !== "" ? entry.tz.trim() : undefined;
-    const scheduleSpec = {
-      every: typeof entry.every === "string" ? entry.every : undefined,
-      cron: typeof entry.cron === "string" ? entry.cron : undefined,
-      tz,
-    };
-    // Validate the schedule with the shared parser (exactly one of every|cron).
+    // Normalize the schedule (flat keys, nested `schedule:` mapping, or a bare
+    // cron string) and validate it with the shared parser.
+    const scheduleSpec = extractScheduleSpec(entry, `bot routine "${name}"`);
     parseSchedule(scheduleSpec);
     let timeoutMs: number | undefined;
     if (entry.timeoutMs !== undefined && entry.timeoutMs !== null) {

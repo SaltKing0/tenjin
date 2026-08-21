@@ -196,6 +196,27 @@ test("bot routine requires exactly one of every|cron", () => {
   expect(() => resolveBot(home, "noop")).toThrow(/exactly one of `every` or `cron`/);
 });
 
+test("bot routine accepts schedule as a nested mapping (#297)", () => {
+  createBot(home, "nested");
+  writeFileSync(
+    join(botsDir(home), "nested", "config.yaml"),
+    "routines:\n  - name: x\n    prompt: p\n    schedule:\n      cron: \"0 2 * * *\"\n      tz: UTC\n",
+  );
+  const profile = resolveBot(home, "nested");
+  expect(profile.config.routines?.[0]?.scheduleSpec.cron).toBe("0 2 * * *");
+  expect(profile.config.routines?.[0]?.scheduleSpec.tz).toBe("UTC");
+});
+
+test("bot routine accepts schedule as a flat string (#297)", () => {
+  createBot(home, "flat");
+  writeFileSync(
+    join(botsDir(home), "flat", "config.yaml"),
+    "routines:\n  - name: x\n    prompt: p\n    schedule: \"0 2 * * *\"\n",
+  );
+  const profile = resolveBot(home, "flat");
+  expect(profile.config.routines?.[0]?.scheduleSpec.cron).toBe("0 2 * * *");
+});
+
 test("bot routine rejects invalid schedule", () => {
   createBot(home, "badsched");
   writeFileSync(

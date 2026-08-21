@@ -120,6 +120,9 @@ export interface AddJobInput {
  * block style. The cron expression is checked with the shared parser BEFORE
  * anything is written; the bot must already exist. Returns the generated
  * job id (`job-<n>`), which `job rm`/`job run` act on.
+ *
+ * Writes the canonical flat schedule form (`cron:` on the job) — see
+ * `docs/architecture.md` (`gateway.jobs`) for the accepted schedule shapes.
  */
 export function addJob(home: string, input: AddJobInput): string {
   const bot = input.bot.trim();
