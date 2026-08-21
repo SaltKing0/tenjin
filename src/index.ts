@@ -18,6 +18,8 @@ import {
 } from "./config/loader";
 import { createProvider } from "./provider/factory";
 import { ProviderRegistry } from "./provider/registry";
+import { ProviderStats } from "./provider/stats";
+import { buildHealth, buildMetrics } from "./gateway/observability";
 import { defaultModelRef, cheapModelRef, resolveModelRef, type ModelRef } from "./config/models";
 import { loadSoul, loadAgentsMd, buildSystemPrompt } from "./agent/prompt";
 import { formatUSD } from "./agent/budget";
@@ -753,6 +755,9 @@ async function gatewayCommand(args: string[]): Promise<number> {
   const cwd = process.cwd();
   try {
     const { config } = loadConfig(cwd, home, { skipModelCheck: true });
+    // #135: the gateway shares one provider-outcome counter across every
+    // provider the registry hands out and the /api/health + /metrics endpoints.
+    const providerStats = new ProviderStats();
     const registry = new ProviderRegistry(
       config.providers?.openai?.baseUrl,
       {
@@ -762,6 +767,7 @@ async function gatewayCommand(args: string[]): Promise<number> {
       config.retry,
       config.providers?.anthropic?.caching,
       config.providers?.anthropic?.baseUrl,
+      providerStats,
     );
     const controller = new AbortController();
     process.on("SIGINT", () => controller.abort());
@@ -996,6 +1002,20 @@ async function gatewayCommand(args: string[]): Promise<number> {
             runNow: (name) => gateway.runNow(name),
           },
         }),
+        // #135: observability — cached view of spend, jobs, sessions and the
+        // providers' live outcome counter, no per-request provider probe.
+        health: () =>
+          buildHealth(Date.now(), {
+            home,
+            stats: providerStats,
+            jobs: gateway.listJobs(),
+          }),
+        metrics: () =>
+          buildMetrics(Date.now(), {
+            home,
+            stats: providerStats,
+            jobs: gateway.listJobs(),
+          }),
         streamChat: async (req) => {
           if (!telegramHandle) return null;
           let body: { text?: unknown; bot?: unknown };

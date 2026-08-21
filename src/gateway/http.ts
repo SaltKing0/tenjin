@@ -21,6 +21,10 @@ export interface HttpDeps {
   log?: (line: string) => void;
   api?: (req: Request, url: URL) => Promise<Response | null>;
   streamChat?: (req: Request) => Promise<Response | null>;
+  /** GET /api/health body (uptimeMs is added by the server itself). */
+  health?: () => Promise<Record<string, unknown>> | Record<string, unknown>;
+  /** GET /metrics Prometheus text output. */
+  metrics?: () => string;
   consoleDir?: string;
 }
 
@@ -151,6 +155,23 @@ export function startHttpServer(deps: HttpDeps): HttpServerHandle {
         return Response.json({
           uptimeMs: Date.now() - startedAt,
           ...deps.status(),
+        });
+      }
+      if (req.method === "GET" && url.pathname === "/api/health") {
+        if (!deps.health) {
+          return Response.json({ error: "not found" }, { status: 404 });
+        }
+        return Response.json({
+          uptimeMs: Date.now() - startedAt,
+          ...(await deps.health()),
+        });
+      }
+      if (req.method === "GET" && url.pathname === "/metrics") {
+        if (!deps.metrics) {
+          return Response.json({ error: "not found" }, { status: 404 });
+        }
+        return new Response(deps.metrics(), {
+          headers: { "content-type": "text/plain; version=0.0.4; charset=utf-8" },
         });
       }
       if (req.method === "POST" && url.pathname === "/message") {

@@ -4,6 +4,7 @@ import { AnthropicProvider } from "../provider/anthropic";
 import { OpenAIProvider } from "../provider/openai";
 import type { RetryConfig } from "../config/types";
 import { ConfigError } from "../config/types";
+import { ProviderStats, monitoredProvider } from "./stats";
 
 export interface ProviderKeys {
   anthropic?: string;
@@ -70,6 +71,7 @@ export class ProviderRegistry {
   private keys: ProviderKeys;
   private retry?: RetryConfig;
   private anthropicCaching: boolean;
+  private stats?: ProviderStats;
 
   constructor(
     openaiBaseUrl?: string,
@@ -77,12 +79,15 @@ export class ProviderRegistry {
     retry?: RetryConfig,
     anthropicCaching = true,
     anthropicBaseUrl?: string,
+    /** When set, every provider returned by get() reports its outcomes here. */
+    stats?: ProviderStats,
   ) {
     this.openaiBaseUrl = openaiBaseUrl;
     this.keys = { ...keys };
     this.retry = retry;
     this.anthropicCaching = anthropicCaching;
     this.anthropicBaseUrl = anthropicBaseUrl ?? env.ANTHROPIC_BASE_URL;
+    this.stats = stats;
     this.register(anthropicFactory);
     this.register(openaiFactory);
   }
@@ -127,8 +132,9 @@ export class ProviderRegistry {
       );
     }
     const created = factory.create(this.context());
-    this.cache.set(name, created);
-    return created;
+    const provider = this.stats ? monitoredProvider(created, this.stats) : created;
+    this.cache.set(name, provider);
+    return provider;
   }
 
   private context(): ProviderContext {
