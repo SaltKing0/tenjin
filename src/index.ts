@@ -105,6 +105,7 @@ import { bashTool } from "./tools/bash";
 import type { ToolDef } from "./tools/registry";
 import { parseArgs, HELP, type CliArgs } from "./cli/args";
 import { listJobs, addJob, removeJob, findJob, runJob, renderJob } from "./cli/jobs";
+import { runOnboard, usage as onboardUsage } from "./cli/onboard";
 import { PRODUCT } from "./version";
 import { backupHome, restoreHome } from "./backup";
 
@@ -158,6 +159,16 @@ async function main(): Promise<number> {
 
   if (process.argv[2] === "forget") {
     process.exitCode = await forgetCommand(process.argv.slice(3));
+    return process.exitCode;
+  }
+
+  if (process.argv[2] === "onboard") {
+    const onboardArgs = process.argv.slice(3);
+    if (onboardArgs.includes("--help") || onboardArgs.includes("-h")) {
+      stdout.write(onboardUsage());
+      return 0;
+    }
+    process.exitCode = await runOnboard(onboardArgs, { home: tenjinHome() });
     return process.exitCode;
   }
 
