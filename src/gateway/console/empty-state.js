@@ -12,9 +12,9 @@ export const EMPTY_STATES = {
   chat: {
     title: "Choose a bot or start in Solo mode",
     caption:
-      "Create a bot (role + SOUL) in the Status panel, or just start typing — Solo mode uses the default model.",
+      "Create a bot (role + SOUL) in the Bots panel, or just start typing — Solo mode uses the default model.",
     cta: "Create a bot",
-    hash: "#status",
+    hash: "#bots",
   },
   // jobs — nothing scheduled yet
   jobs: {
@@ -64,6 +64,7 @@ export const ROUTES = [
   "#spend",
   "#audit",
   "#status",
+  "#bots",
 ];
 
 /** Resolve the empty-state descriptor for a panel, or null when unknown. */

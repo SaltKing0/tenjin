@@ -49,6 +49,27 @@ body {
 .sidebar nav a:hover { color: var(--text); background: #21262d; }
 .sidebar nav a.active { color: var(--text); border-left: 2px solid var(--accent); }
 
+/* #276: bot section under the panel nav in the sidebar */
+.sidebar-bots {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.sidebar-bots-label {
+  padding: 0 16px 4px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+.sidebar-bots nav a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.sidebar-bots .badge { font-size: 10px; white-space: nowrap; }
+
 .main { flex: 1; padding: 24px; max-width: 1100px; overflow-wrap: anywhere; }
 
 /* #256: slim persistent top bar + offline banner, spanning every panel. */
@@ -265,6 +286,10 @@ input, select {
   }
   .sidebar nav a.active { border-left: none; border-top: 2px solid var(--accent); }
   .sidebar nav a:hover { background: #21262d; }
+
+  /* #276: the desktop bot section is dropped on the bottom-nav layout (bots stay
+     reachable via the Bots panel and the top-bar switcher). */
+  .sidebar-bots { display: none; }
 
   /* reserve space for the fixed bottom bar so content is never hidden */
   .main { padding: 16px 14px calc(64px + env(safe-area-inset-bottom)); max-width: none; }
