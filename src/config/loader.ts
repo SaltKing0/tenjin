@@ -99,6 +99,7 @@ const SCHEMA: Record<string, FieldDef> = {
   model: { types: ["string"] },
   maxTokens: { types: ["number"] },
   budgetUSD: { types: ["number"] },
+  defaultBot: { types: ["string"] },
   maxTreeIterations: { types: ["number"] },
   approval: { types: ["mapping"], valueType: "string" },
   pricing: {

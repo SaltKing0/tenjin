@@ -123,10 +123,12 @@ docker compose ps           # wait for "healthy"
 curl -H "Authorization: Bearer $GATEWAY_TOKEN" http://localhost:3000/api/health
 ```
 
-That's it. On first boot the entrypoint seeds a `default` bot into the fresh
-home volume so the gateway (which needs a bot for the web console) starts
-cleanly. The gateway config (`config.yaml`) is mounted read-only, so jobs,
-channels and the console token can be edited without rebuilding the image:
+That's it. On first boot the entrypoint seeds a bot into the fresh home volume
+so the gateway (which needs a bot for the web console) starts cleanly. The
+seed bot is named after the top-level `defaultBot` in `config.yaml` (or the
+`$TENJIN_DEFAULT_BOT` env override); it falls back to `default`. The gateway
+config (`config.yaml`) is mounted read-only, so jobs, channels and the console
+token can be edited without rebuilding the image:
 
 ```sh
 # edit ./config.yaml, then:
