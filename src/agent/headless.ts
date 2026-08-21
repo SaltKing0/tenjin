@@ -73,6 +73,8 @@ export interface HeadlessOptions {
   onToolActivity?: (name: string) => void;
   /** Context-window guard config (`context` in config.yaml, #101). */
   context?: import("../config/loader").ContextConfig | null;
+  /** Abort the run (e.g. a per-task timeout). Propagates to provider calls. */
+  signal?: AbortSignal;
 }
 
 export interface HeadlessResult {
@@ -168,6 +170,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     budget,
     maxTokens: opts.maxTokens,
     cwd: opts.cwd,
+    signal: opts.signal,
     globalBudgetGate,
     approve:
       opts.approve ??

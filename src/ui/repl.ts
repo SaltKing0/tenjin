@@ -17,6 +17,7 @@ import { renderTrajectory } from "../session/trajectory";
 import { resolveContextGuard } from "../session/context";
 import { buildSkillsSection, summarizeSkills } from "../skills/activate";
 import { createAskBotTool } from "../bots/delegate";
+import { createAskBotAsyncTool, createBotTaskStatusTool } from "../bots/tasks";
 import { listBots, resolveBot } from "../bots/profile";
 import { AuditLog, formatAudit, auditPath } from "../audit/log";
 import { inboxPolicyFromConfig, leaveUserMessage, unreadMessages } from "../bots/inbox";
@@ -76,6 +77,18 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         audit: (kind, detail, correlationId) =>
           audit.append(kind, "user", detail, opts.bot, correlationId),
       }),
+      createAskBotAsyncTool({
+        home: opts.home,
+        fromBot: opts.bot,
+        cwd: opts.cwd,
+        getProvider: (name) => opts.registry.get(name),
+        globalConfig: opts.config,
+        sessionBudget: state.budget,
+        guard: opts.guard ?? null,
+        audit: (kind, detail, correlationId) =>
+          audit.append(kind, "user", detail, opts.bot, correlationId),
+      }),
+      createBotTaskStatusTool({ home: opts.home }),
     );
   }
   state.budget.spentUSD = opts.initialSpentUSD ?? 0;
