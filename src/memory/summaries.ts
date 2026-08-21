@@ -144,6 +144,31 @@ export function sessionsWithoutSummary(
     .map((s) => SessionLog.open(s.path));
 }
 
+/**
+ * Sessions whose summary is stale: no summary yet, or an existing summary whose
+ * `uptoEvent` pointer lags behind the session's current event count (new
+ * activity since it was last summarized, e.g. a REPL resume). This is the
+ * delta-based pending set #37's incremental mechanism relies on — without it,
+ * a resumed session's summary is only ever refreshed if it happens to be the
+ * newest session (#207).
+ */
+export function sessionsWithStaleSummary(
+  sessionsDirPath: string,
+  memoryDirPath: string,
+): SessionLog[] {
+  const summaries = new Map(
+    listSummaries(memoryDirPath).map((s) => [s.meta.sessionId, s.meta.uptoEvent]),
+  );
+  return SessionLog.list(sessionsDirPath)
+    .filter((s) => {
+      const upto = summaries.get(s.id);
+      if (upto === undefined) return true; // no summary yet
+      const count = SessionLog.open(s.path).events().length;
+      return count > upto; // new events past the pointer
+    })
+    .map((s) => SessionLog.open(s.path));
+}
+
 export async function generateSummary(
   log: SessionLog,
   opts: {
@@ -365,7 +390,10 @@ export async function generatePendingSummaries(opts: {
   limit?: number;
 }): Promise<GenerationReport> {
   const report: GenerationReport = { generated: [], errors: [] };
-  const pending = sessionsWithoutSummary(opts.sessionsDirPath, opts.memoryDirPath);
+  // #207: include sessions with a stale summary (new events past uptoEvent), not
+  // just unsummarized ones, so resumed sessions keep getting their summaries
+  // refreshed via the incremental mechanism.
+  const pending = sessionsWithStaleSummary(opts.sessionsDirPath, opts.memoryDirPath);
   for (const log of pending.slice(0, opts.limit ?? 10)) {
     try {
       await generateSummary(log, opts);
