@@ -106,7 +106,7 @@ import type { ToolDef } from "./tools/registry";
 import { parseArgs, HELP, type CliArgs } from "./cli/args";
 import { listJobs, addJob, removeJob, findJob, runJob, renderJob } from "./cli/jobs";
 import { runOnboard, usage as onboardUsage } from "./cli/onboard";
-import { PRODUCT } from "./version";
+import { PRODUCT, VERSION } from "./version";
 import { backupHome, restoreHome } from "./backup";
 
 interface AppContext {
@@ -203,6 +203,10 @@ async function main(): Promise<number> {
   }
   if (cli.help) {
     stdout.write(HELP);
+    return 0;
+  }
+  if (cli.version) {
+    stdout.write(`${PRODUCT} v${VERSION}\n`);
     return 0;
   }
 

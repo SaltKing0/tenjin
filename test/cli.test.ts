@@ -46,12 +46,18 @@ test("HELP mentions all flags", () => {
 
 describe("parseArgs", () => {
   test("empty argv → defaults", () => {
-    expect(parseArgs([])).toEqual({ help: false });
+    expect(parseArgs([])).toEqual({ help: false, version: false });
   });
 
   test("-h and --help set help flag", () => {
     expect(parseArgs(["-h"]).help).toBe(true);
     expect(parseArgs(["--help"]).help).toBe(true);
+  });
+
+  test("-v and --version set version flag", () => {
+    expect(parseArgs(["-v"]).version).toBe(true);
+    expect(parseArgs(["--version"]).version).toBe(true);
+    expect(parseArgs(["--model", "x"]).version).toBe(false);
   });
 
   test("-p consumes the entire remainder as prompt", () => {
@@ -122,6 +128,37 @@ describe("parseArgs", () => {
     test("missing id throws", () => {
       expect(() => parseArgs(["--fork"])).toThrow(/requires a session id/);
     });
+  });
+});
+
+describe("e2e: --version flag", () => {
+  const CLI = join(import.meta.dir, "..", "src", "index.ts");
+  function run(args: string[]): { exitCode: number | null; stdout: string } {
+    const p = Bun.spawnSync(["bun", "run", CLI, ...args], {
+      cwd: join(import.meta.dir, ".."),
+      env: {
+        ...process.env,
+        TENJIN_HOME: mkdtempSync(join(tmpdir(), "tj-ver-")),
+      },
+    });
+    return { exitCode: p.exitCode, stdout: p.stdout.toString() };
+  }
+
+  test("--version prints the version banner and exits 0", () => {
+    const { exitCode, stdout } = run(["--version"]);
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toMatch(/^Tenjin v\d+\.\d+\.\d+$/);
+  });
+
+  test("-v prints the same version banner", () => {
+    const { exitCode, stdout } = run(["-v"]);
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toMatch(/^Tenjin v\d+\.\d+\.\d+$/);
+  });
+
+  test("--version needs no config / keys (skips model check)", () => {
+    const { exitCode } = run(["--version"]);
+    expect(exitCode).toBe(0);
   });
 });
 
