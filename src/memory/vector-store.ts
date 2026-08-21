@@ -79,7 +79,7 @@ export interface SearchResult {
   skipped: number;
 }
 
-export function searchChunks(chunks: VectorChunk[], opts: SearchOptions): SearchResult {
+export function searchChunks(chunks: Iterable<VectorChunk>, opts: SearchOptions): SearchResult {
   const topK = opts.topK ?? 5;
   const minScore = opts.minScore ?? 0;
   const queryDim = opts.query.length;
@@ -98,6 +98,11 @@ export function searchChunks(chunks: VectorChunk[], opts: SearchOptions): Search
   }
   hits.sort((a, b) => b.score - a.score);
   return { hits: hits.slice(0, topK), skipped };
+}
+
+/** Yield items from several arrays in order without allocating a combined copy. #310 */
+function* concatIter<T>(...arrays: Array<T[]>): Iterable<T> {
+  for (const a of arrays) for (const x of a) yield x;
 }
 
 export function indexedSessionIds(chunks: VectorChunk[]): Set<string> {
@@ -161,6 +166,14 @@ export class VectorStore {
     return indexedSessionIds(this.chunks.concat(this.buffer));
   }
 
+  /** All chunk ids currently in the index (buffered + persisted). #310 */
+  chunkIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const c of this.chunks) ids.add(c.id);
+    for (const c of this.buffer) ids.add(c.id);
+    return ids;
+  }
+
   /** Buffer one chunk; flushes automatically once the buffer threshold is reached. */
   add(chunk: VectorChunk, flush = false): void {
     this.buffer.push(chunk);
@@ -180,21 +193,14 @@ export class VectorStore {
     this.buffer = [];
   }
 
-  /** Search the in-memory index (buffered + persisted) with dimension blocking. */
+  /**
+   * Search the in-memory index (buffered + persisted) with dimension/embedModel
+   * blocking. #310: iterates both arrays directly (no O(n) `concat` copy per
+   * retrieval) and lets `searchChunks` do the blocking + skipped accounting
+   * exactly once.
+   */
   search(opts: SearchOptions): SearchResult {
-    const all = this.chunks.concat(this.buffer);
-    const queryDim = opts.query.length;
-    let skipped = 0;
-    const candidates: VectorChunk[] = [];
-    for (const c of all) {
-      if ((c.embedDim ?? c.embedding.length) !== queryDim) {
-        skipped++;
-        continue;
-      }
-      candidates.push(c);
-    }
-    const res = searchChunks(candidates, opts);
-    return { hits: res.hits, skipped: skipped + res.skipped };
+    return searchChunks(concatIter(this.chunks, this.buffer), opts);
   }
 
   /**
