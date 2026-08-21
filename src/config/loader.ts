@@ -7,12 +7,13 @@ import {
   ConfigError,
   type ApprovalMode,
   type HarnessConfig,
+  type PricingConfig,
   type PricingOverride,
   type ProviderName,
 } from "./types";
 
 export { ConfigError };
-export type { ApprovalMode, HarnessConfig, PricingOverride, ProviderName };
+export type { ApprovalMode, HarnessConfig, PricingConfig, PricingOverride, ProviderName };
 
 const DEFAULTS: HarnessConfig = {
   provider: "anthropic",
@@ -34,9 +35,12 @@ approval:                  # ask | allow | deny, per tool
   write: ask
   edit: ask
   bash: ask
-# pricing:                  # optional override, USD per million tokens
-#   inputPerMTok: 3
-#   outputPerMTok: 15
+# pricing:
+#   default:                 # USD per 1M tokens for models not in the built-in table
+#     inputPerMTok: 5
+#     outputPerMTok: 15
+#   # inputPerMTok: 3        # optional: override ALL models (known and unknown)
+#   # outputPerMTok: 15
 memory:
   enabled: true             # session summaries + recall (set false to disable)
   vector:
@@ -199,5 +203,40 @@ function validate(cfg: HarnessConfig, globalPath: string, skipModelCheck: boolea
   }
   if (typeof cfg.budgetUSD !== "number" || cfg.budgetUSD < 0) {
     throw new ConfigError(`budgetUSD must be a number >= 0 (0 = unlimited)`);
+  }
+  validatePricing(cfg.pricing);
+}
+
+function validateRatePair(pair: unknown, label: string): void {
+  if (typeof pair !== "object" || pair === null) {
+    throw new ConfigError(`${label} must be a mapping with inputPerMTok and outputPerMTok`);
+  }
+  const obj = pair as Record<string, unknown>;
+  if (typeof obj.inputPerMTok !== "number" || obj.inputPerMTok < 0) {
+    throw new ConfigError(`${label}.inputPerMTok must be a number >= 0`);
+  }
+  if (typeof obj.outputPerMTok !== "number" || obj.outputPerMTok < 0) {
+    throw new ConfigError(`${label}.outputPerMTok must be a number >= 0`);
+  }
+}
+
+function validatePricing(pricing: PricingConfig | undefined): void {
+  if (pricing === undefined) return;
+  if (typeof pricing !== "object" || pricing === null) {
+    throw new ConfigError(`pricing must be a mapping`);
+  }
+  const hasIn = pricing.inputPerMTok !== undefined;
+  const hasOut = pricing.outputPerMTok !== undefined;
+  if (hasIn !== hasOut) {
+    throw new ConfigError(`pricing requires both inputPerMTok and outputPerMTok`);
+  }
+  if (hasIn) {
+    validateRatePair(
+      { inputPerMTok: pricing.inputPerMTok, outputPerMTok: pricing.outputPerMTok },
+      "pricing",
+    );
+  }
+  if (pricing.default !== undefined) {
+    validateRatePair(pricing.default, "pricing.default");
   }
 }

@@ -109,6 +109,14 @@ describe("applySettings", () => {
     applySettings(deps, { models: { default: "anthropic:m", cheap: "" } });
     expect(config.models?.cheap).toBeUndefined();
   });
+
+  test("preserves pricing.default across a console save", () => {
+    const { deps, config } = setup();
+    config.pricing = { default: { inputPerMTok: 4, outputPerMTok: 12 } };
+    applySettings(deps, { anthropic: { apiKey: "sk-live-key-9876" } });
+    const reloaded = loadConfig(project, home).config;
+    expect(reloaded.pricing?.default).toEqual({ inputPerMTok: 4, outputPerMTok: 12 });
+  });
 });
 
 describe("detectModels", () => {

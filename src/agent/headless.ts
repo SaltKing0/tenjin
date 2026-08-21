@@ -1,6 +1,7 @@
 import type { Provider, Usage } from "../provider/types";
 import { buildSystemPrompt } from "./prompt";
-import { Budget } from "./budget";
+import { createBudget } from "./budget";
+import type { PricingConfig } from "../config/loader";
 import { runAgentTurn } from "./loop";
 import { SessionLog } from "../session/log";
 import type { TurnEvent } from "./loop";
@@ -22,6 +23,7 @@ export interface HeadlessOptions {
   message: string;
   maxTokens: number;
   capUSD: number;
+  pricing?: PricingConfig;
   policy?: ToolPolicy;
   agentsMd?: string | null;
   extraTools?: ToolDef[];
@@ -71,7 +73,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     });
     logger.append({ t: "message", role: "user", content: opts.message, ts: new Date().toISOString() });
   }
-  const budget = new Budget(opts.capUSD);
+  const budget = createBudget(opts.capUSD, opts.pricing);
 
   const result = await runAgentTurn({
     provider: opts.provider,

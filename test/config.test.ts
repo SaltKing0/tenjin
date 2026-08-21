@@ -151,6 +151,45 @@ describe("memory flags", () => {
   });
 });
 
+describe("pricing.default", () => {
+  test("loads from providers.yaml", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: m\n");
+    writeFileSync(
+      join(home, "providers.yaml"),
+      "pricing:\n  default:\n    inputPerMTok: 4\n    outputPerMTok: 12\n",
+    );
+    const { config } = loadConfig(project, home);
+    expect(config.pricing?.default).toEqual({ inputPerMTok: 4, outputPerMTok: 12 });
+  });
+
+  test("full override still loads from config.yaml", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "config.yaml"),
+      "model: m\npricing:\n  inputPerMTok: 3\n  outputPerMTok: 15\n",
+    );
+    const { config } = loadConfig(project, home);
+    expect(config.pricing?.inputPerMTok).toBe(3);
+    expect(config.pricing?.outputPerMTok).toBe(15);
+  });
+
+  test("rejects incomplete default pair", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "config.yaml"),
+      "model: m\npricing:\n  default:\n    inputPerMTok: 4\n",
+    );
+    expect(() => loadConfig(project, home)).toThrow(/pricing\.default/);
+  });
+
+  test("rejects one-sided override", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: m\npricing:\n  inputPerMTok: 3\n");
+    expect(() => loadConfig(project, home)).toThrow(/both inputPerMTok and outputPerMTok/);
+  });
+});
+
 describe("providers.yaml (console-managed)", () => {
   test("overrides global config, project still wins", () => {
     mkdirSync(home, { recursive: true });

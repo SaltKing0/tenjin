@@ -1,10 +1,13 @@
 import type { Usage } from "../provider/types";
-import type { PricingOverride } from "../config/loader";
+import type { PricingConfig, PricingOverride } from "../config/loader";
 
 export interface Pricing {
   inputPerMTok: number;
   outputPerMTok: number;
 }
+
+/** Conservative fallback so unknown models still consume budget. Override via `pricing.default`. */
+export const DEFAULT_PRICING: Pricing = { inputPerMTok: 5, outputPerMTok: 15 };
 
 const PRICING_PREFIXES: Array<[string, Pricing]> = [
   ["claude-opus", { inputPerMTok: 15, outputPerMTok: 75 }],
@@ -18,13 +21,50 @@ const PRICING_PREFIXES: Array<[string, Pricing]> = [
   ["deepseek-reasoner", { inputPerMTok: 0.55, outputPerMTok: 2.19 }],
 ];
 
-export function pricingFor(model: string, override?: PricingOverride): Pricing {
+const warnedUnknown = new Set<string>();
+
+export function resetUnknownModelWarnings(): void {
+  warnedUnknown.clear();
+}
+
+function warnUnknownModel(model: string, used: Pricing): void {
+  const key = model.toLowerCase();
+  if (warnedUnknown.has(key)) return;
+  warnedUnknown.add(key);
+  console.warn(
+    `budget: unknown model "${model}" — using default pricing $${used.inputPerMTok}/$${used.outputPerMTok} per 1M in/out. Set pricing.default in providers.yaml to configure.`,
+  );
+}
+
+function asPair(cfg: PricingConfig | undefined): Pricing | undefined {
+  if (
+    cfg &&
+    typeof cfg.inputPerMTok === "number" &&
+    typeof cfg.outputPerMTok === "number"
+  ) {
+    return { inputPerMTok: cfg.inputPerMTok, outputPerMTok: cfg.outputPerMTok };
+  }
+  return undefined;
+}
+
+export function pricingFor(
+  model: string,
+  override?: PricingOverride,
+  defaultPricing?: PricingOverride,
+): Pricing {
   if (override) return override;
   const lower = model.toLowerCase();
   for (const [prefix, pricing] of PRICING_PREFIXES) {
     if (lower.startsWith(prefix)) return pricing;
   }
-  return { inputPerMTok: 0, outputPerMTok: 0 };
+  const used = defaultPricing ?? DEFAULT_PRICING;
+  warnUnknownModel(model, used);
+  return used;
+}
+
+/** Build a Budget from harness `pricing` (full override and/or `pricing.default`). */
+export function createBudget(capUSD: number, pricing?: PricingConfig): Budget {
+  return new Budget(capUSD, asPair(pricing), pricing?.default);
 }
 
 export class Budget {
@@ -34,10 +74,11 @@ export class Budget {
   constructor(
     readonly capUSD: number,
     private pricingOverride?: PricingOverride,
+    private defaultPricing?: PricingOverride,
   ) {}
 
   add(usage: Usage, model: string): number {
-    const p = pricingFor(model, this.pricingOverride);
+    const p = pricingFor(model, this.pricingOverride, this.defaultPricing);
     const inTok = usage.inputTokens ?? 0;
     const outTok = usage.outputTokens ?? 0;
     const cost = (inTok * p.inputPerMTok + outTok * p.outputPerMTok) / 1_000_000;

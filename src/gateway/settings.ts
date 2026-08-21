@@ -91,6 +91,7 @@ export function applySettings(
     extra: {
       ...(config.provider ? { provider: config.provider } : {}),
       ...(config.model ? { model: config.model } : {}),
+      ...(config.pricing ? { pricing: config.pricing } : {}),
     },
   });
 

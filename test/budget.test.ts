@@ -1,5 +1,16 @@
-import { describe, test, expect } from "bun:test";
-import { Budget, pricingFor, formatUSD } from "../src/agent/budget";
+import { describe, test, expect, beforeEach, spyOn } from "bun:test";
+import {
+  Budget,
+  createBudget,
+  pricingFor,
+  formatUSD,
+  DEFAULT_PRICING,
+  resetUnknownModelWarnings,
+} from "../src/agent/budget";
+
+beforeEach(() => {
+  resetUnknownModelWarnings();
+});
 
 describe("pricingFor", () => {
   test("known model prefixes map to pricing", () => {
@@ -20,15 +31,35 @@ describe("pricingFor", () => {
     expect(pricingFor("Claude-Sonnet-4")).toEqual({ inputPerMTok: 3, outputPerMTok: 15 });
   });
 
-  test("unknown model prices at zero (tokens still tracked)", () => {
-    expect(pricingFor("mystery-model-v9")).toEqual({ inputPerMTok: 0, outputPerMTok: 0 });
+  test("unknown model uses built-in default pricing (not zero)", () => {
+    expect(pricingFor("mystery-model-v9")).toEqual(DEFAULT_PRICING);
   });
 
-  test("explicit override beats the table", () => {
+  test("unknown model uses configured default when provided", () => {
+    expect(
+      pricingFor("mystery-model-v9", undefined, { inputPerMTok: 1.5, outputPerMTok: 6 }),
+    ).toEqual({ inputPerMTok: 1.5, outputPerMTok: 6 });
+  });
+
+  test("explicit override beats the table and the default", () => {
     expect(pricingFor("anything", { inputPerMTok: 1, outputPerMTok: 2 })).toEqual({
       inputPerMTok: 1,
       outputPerMTok: 2,
     });
+    expect(
+      pricingFor("mystery-model-v9", { inputPerMTok: 9, outputPerMTok: 9 }, DEFAULT_PRICING),
+    ).toEqual({ inputPerMTok: 9, outputPerMTok: 9 });
+  });
+
+  test("unknown model warns once", () => {
+    const warn = spyOn(console, "warn");
+    pricingFor("mystery-model-v9");
+    pricingFor("mystery-model-v9");
+    pricingFor("MYSTERY-MODEL-V9");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/unknown model "mystery-model-v9"/);
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/pricing\.default/);
+    warn.mockRestore();
   });
 });
 
@@ -80,6 +111,30 @@ describe("Budget", () => {
     const b = new Budget(0, pricing);
     b.add({ inputTokens: 999_999_999, outputTokens: 999_999_999 }, "m");
     expect(b.exhausted).toBe(false);
+  });
+
+  test("unknown model uses default price so the cap actually bites", () => {
+    const b = createBudget(5, {
+      default: { inputPerMTok: 5, outputPerMTok: 15 },
+    });
+    b.add({ inputTokens: 1_000_000, outputTokens: 0 }, "local-llama-3");
+    expect(b.spentUSD).toBeCloseTo(5);
+    expect(b.exhausted).toBe(true);
+  });
+
+  test("unknown model with built-in default is not free", () => {
+    const b = new Budget(1);
+    const cost = b.add({ inputTokens: 1_000_000, outputTokens: 0 }, "mystery-model-v9");
+    expect(cost).toBeCloseTo(DEFAULT_PRICING.inputPerMTok);
+    expect(b.exhausted).toBe(true);
+  });
+
+  test("createBudget full override still prices every model the same", () => {
+    const b = createBudget(100, { inputPerMTok: 1, outputPerMTok: 2 });
+    const known = b.add({ inputTokens: 1_000_000, outputTokens: 0 }, "claude-sonnet-4-5");
+    const unknown = b.add({ inputTokens: 1_000_000, outputTokens: 0 }, "mystery-model-v9");
+    expect(known).toBeCloseTo(1);
+    expect(unknown).toBeCloseTo(1);
   });
 });
 

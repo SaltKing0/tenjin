@@ -146,6 +146,7 @@ export class Gateway {
       message,
       maxTokens: this.deps.config.maxTokens,
       capUSD: botBudgetUSD(profile, this.deps.config.budgetUSD),
+      pricing: this.deps.config.pricing,
       policy: "read-only",
       extraTools,
       sessionLogDir: profile.sessionsDir,

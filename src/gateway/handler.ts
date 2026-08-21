@@ -125,6 +125,7 @@ export function createMessageHandler(deps: HandlerDeps) {
       message: rest,
       maxTokens: deps.config.maxTokens,
       capUSD: botBudgetUSD(profile, deps.config.budgetUSD),
+      pricing: deps.config.pricing,
       policy: deps.allowWrites ? "full" : "read-only",
       agentsMd: loadAgentsMd(deps.cwd),
       sessionLogDir: profile.sessionsDir,
