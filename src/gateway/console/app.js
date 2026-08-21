@@ -252,7 +252,7 @@ async function panelSessions(main) {
         localStorage.setItem("tenjin_bot", value);
         await panelSessions(main);
       }),
-      el("span", { class: "dim" }, "click a session to view its trajectory"),
+      el("span", { class: "dim" }, "click a session to open its timeline"),
     ),
   );
   const list = el("div");
@@ -270,22 +270,100 @@ async function panelSessions(main) {
       {
         class: "card",
         style: "cursor:pointer",
-        onclick: async () => {
-          const detail = await apiJson(
-            `/api/session/${encodeURIComponent(session.id)}?bot=${encodeURIComponent(currentBot)}`,
-          );
-          list.replaceChildren(
-            el("button", { onclick: () => panelSessions(main) }, "< back"),
-            el("h2", {}, `${detail.id}${session.parentId ? ` (forked from ${session.parentId})` : ""}`),
-            el("pre", {}, detail.lines.join("\n")),
-          );
-        },
+        onclick: async () => openReplay(main, session.id),
       },
       el("strong", {}, session.id),
       session.parentId ? el("span", { class: "badge" }, `fork of ${session.parentId}`) : null,
       el("div", { class: "dim" }, `${when} — ${session.preview}`),
     );
     list.append(row);
+  }
+}
+
+async function openReplay(main, id) {
+  main.replaceChildren(
+    el("h1", {}, "Session"),
+    el(
+      "div",
+      { class: "toolbar" },
+      el("button", { onclick: () => panelSessions(main) }, "< back"),
+      el("span", { class: "dim" }, id),
+      el("button", { onclick: () => forkSession(main, id) }, "Fork"),
+    ),
+  );
+  const box = el("div");
+  main.append(box);
+
+  const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/events?bot=${encodeURIComponent(currentBot)}`);
+  box.append(el("h2", {}, "Timeline"));
+  if (!data.events || data.events.length === 0) {
+    box.append(el("div", { class: "dim" }, "(empty session)"));
+    return;
+  }
+  for (const ev of data.events) {
+    switch (ev.t) {
+      case "session_start": {
+        const head = `session ${ev.id} · ${ev.provider || "?"}:${ev.model || "?"}`;
+        box.append(el("div", { class: "dim" }, ev.parent ? `${head} — forked from ${ev.parent.id} @${ev.parent.uptoEvent}` : head));
+        break;
+      }
+      case "message":
+        box.append(messageCard(ev));
+        break;
+      case "tool_call": {
+        const details = el(
+          "details",
+          {},
+          el("summary", {}, `→ ${ev.name}`),
+          el("pre", {}, JSON.stringify(ev.input ?? {}, null, 2)),
+        );
+        box.append(el("div", { class: "toolcall" }, details));
+        break;
+      }
+      case "tool_result": {
+        const cls = ev.ok ? "toolok" : "toolerr";
+        const label = ev.ok ? `← ${ev.name} ok` : `← ${ev.name} ERR`;
+        const details = el(
+          "details",
+          {},
+          el("summary", {}, label),
+          el("pre", {}, String(ev.output)),
+        );
+        box.append(el("div", { class: cls }, details));
+        break;
+      }
+      case "usage":
+        box.append(el("div", { class: "dim" }, `$ in ${ev.inputTokens} · out ${ev.outputTokens} · ${ev.costUSD} turn · ${ev.spentUSD} spent`));
+        break;
+      case "error":
+        box.append(el("div", { class: "err" }, `error: ${ev.message}`));
+        break;
+      case "compression":
+        box.append(el("div", { class: "dim" }, `~ context ${ev.beforeTokens} → ${ev.afterTokens} (elided ${ev.elidedTokens})`));
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+function messageCard(ev) {
+  if (ev.role === "user") {
+    const text = typeof ev.content === "string" ? ev.content : JSON.stringify(ev.content);
+    return el("div", { class: "msg you" }, el("strong", {}, "you"), el("div", {}, text));
+  }
+  const text =
+    typeof ev.content === "string"
+      ? ev.content
+      : (ev.content || []).map((b) => (b.type === "text" ? b.text : "")).join(" ").trim();
+  if (!text) return el("div", {});
+  return el("div", { class: "msg bot" }, el("strong", {}, "tenjin"), el("div", {}, text));
+}
+
+async function forkSession(main, id) {
+  const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/fork?bot=${encodeURIComponent(currentBot)}`, { method: "POST" });
+  if (data && data.ok) {
+    await openReplay(main, data.id);
   }
 }
 
