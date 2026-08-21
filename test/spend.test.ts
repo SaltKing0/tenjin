@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { aggregateSpend, renderSpend } from "../src/audit/spend";
+import { aggregateSpend, perBotBreakdown, renderSpend } from "../src/audit/spend";
 
 let home: string;
 
@@ -96,4 +96,60 @@ test("renderSpend produces table with total", () => {
   expect(out).toContain("$0.04");
   expect(out).toContain("total:");
   expect(renderSpend([])).toBe("no spend recorded");
+});
+
+test("perBotBreakdown aggregates spend by bot scope", () => {
+  seedSession(
+    join(home, "sessions"),
+    "solo-a",
+    "anthropic",
+    "claude-sonnet-4-5",
+    "2026-08-20T10:00:00Z",
+    [{ inputTokens: 1000, outputTokens: 100, costUSD: 0.01 }],
+  );
+  seedSession(
+    join(home, "bots", "researcher", "sessions"),
+    "r1",
+    "openai",
+    "gpt-4o-mini",
+    "2026-08-21T10:00:00Z",
+    [{ inputTokens: 5000, outputTokens: 500, costUSD: 0.02 }],
+  );
+  seedSession(
+    join(home, "bots", "researcher", "sessions"),
+    "r2",
+    "openai",
+    "gpt-4o-mini",
+    "2026-08-22T10:00:00Z",
+    [{ inputTokens: 2000, outputTokens: 200, costUSD: 0.03 }],
+  );
+  seedSession(
+    join(home, "bots", "writer", "sessions"),
+    "w1",
+    "openai",
+    "gpt-4o",
+    "2026-08-21T10:00:00Z",
+    [{ inputTokens: 3000, outputTokens: 300, costUSD: 0.04 }],
+  );
+
+  const rows = aggregateSpend(home);
+  const breakdown = perBotBreakdown(rows);
+  expect(breakdown).toHaveLength(3);
+
+  const solo = breakdown.find((b) => b.scope === "solo");
+  const researcher = breakdown.find((b) => b.scope === "researcher");
+  const writer = breakdown.find((b) => b.scope === "writer");
+
+  expect(solo).toBeDefined();
+  expect(solo!.costUSD).toBeCloseTo(0.01);
+  expect(solo!.sessions).toBe(1);
+
+  expect(researcher).toBeDefined();
+  expect(researcher!.costUSD).toBeCloseTo(0.05);
+  expect(researcher!.inputTokens).toBe(7000);
+  expect(researcher!.sessions).toBe(2);
+
+  expect(writer).toBeDefined();
+  expect(writer!.costUSD).toBeCloseTo(0.04);
+  expect(writer!.sessions).toBe(1);
 });

@@ -103,7 +103,7 @@ serves the static console (`src/gateway/console/`) and
 | `POST /api/settings/detect` | Probe provider model lists |
 | `GET /api/bots` | List bots |
 | `GET /api/sessions` | List sessions |
-| `GET /api/spend` | Aggregated spend |
+| `GET /api/spend` | Aggregated spend (rows + `byBot` per-bot breakdown) |
 | `GET /api/audit` | Security/audit events |
 | `GET /api/approvals` | Pending approvals |
 | `POST /api/approvals/:id` | Approve / deny a request |

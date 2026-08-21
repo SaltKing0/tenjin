@@ -136,6 +136,31 @@ test("spend endpoint aggregates seeded sessions", async () => {
   expect(data.rows[0].costUSD).toBeCloseTo(0.01);
 });
 
+test("spend endpoint returns per-bot breakdown", async () => {
+  seedSession(null, "s1");
+  seedSession("researcher", "s2");
+  createBot(home, "writer");
+  seedSession("writer", "s3");
+  const base = startServer();
+  const res = await fetch(`${base}/api/spend`, { headers: auth });
+  const data = (await res.json()) as any;
+  const byBot = data.byBot as Array<{ scope: string; sessions: number; costUSD: number }>;
+  // scope aggregation: solo session + researcher + writer
+  const scopes = byBot.map((b) => b.scope);
+  expect(scopes).toContain("solo");
+  expect(scopes).toContain("researcher");
+  expect(scopes).toContain("writer");
+  const writer = byBot.find((b) => b.scope === "writer")!;
+  expect(writer.sessions).toBe(1);
+  expect(writer.costUSD).toBeCloseTo(0.01);
+  const researcher = byBot.find((b) => b.scope === "researcher")!;
+  expect(researcher.costUSD).toBeCloseTo(0.01);
+  // separate sums: solo and researcher independently
+  const solo = byBot.find((b) => b.scope === "solo")!;
+  expect(solo.costUSD).toBeCloseTo(0.01);
+  expect(solo.costUSD + researcher.costUSD + writer.costUSD).toBeCloseTo(0.03);
+});
+
 test("audit endpoint filters by kind", async () => {
   const log = new AuditLog(join(home, "audit.jsonl"));
   log.append("tool_block", "guard", "blocked .env");
