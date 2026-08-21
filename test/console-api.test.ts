@@ -124,6 +124,45 @@ describe("bots CRUD + SOUL editor", () => {
     expect(((await list.json()) as any).bots.some((b: any) => b.name === "my-writer")).toBe(true);
   });
 
+  test("POST /api/bots with role generates SOUL from template (#253)", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/bots`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Librarian", role: "researcher" }),
+    });
+    expect(res.status).toBe(201);
+    const data = (await res.json()) as any;
+    expect(data.name).toBe("librarian");
+    const soul = readFileSync(join(home, "bots", "librarian", "SOUL.md"), "utf8");
+    // The template keeps the supplied name's casing in the header/voice.
+    expect(soul).toContain("Librarian");
+    expect(soul).toContain("investigation specialist");
+  });
+
+  test("POST /api/bots with role + model pins the model (#253)", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/bots`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Scribe", role: "writer", model: "anthropic:claude-sonnet-4-5" }),
+    });
+    expect(res.status).toBe(201);
+    const cfg = readFileSync(join(home, "bots", "scribe", "config.yaml"), "utf8");
+    expect(cfg).toContain("model");
+    expect(cfg).toContain("anthropic:claude-sonnet-4-5");
+  });
+
+  test("POST /api/bots with unknown role returns 400 (#253)", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/bots`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Oddball", role: "not-a-role" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   test("POST /api/bots rejects duplicate and invalid names", async () => {
     const base = startServer();
     const dup = await fetch(`${base}/api/bots`, {
