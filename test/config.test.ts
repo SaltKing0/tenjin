@@ -357,6 +357,36 @@ describe("providers.yaml (console-managed)", () => {
     expect(config.providers?.anthropic?.apiKey).toBe("sk-live");
     expect(config.models?.default).toBe("anthropic:m");
   });
+
+  test("writeProvidersYaml emits block style and round-trips nested providers (#8)", () => {
+    writeProvidersYaml(home, {
+      providers: {
+        openai: { baseUrl: "https://gateway.example.com/v1", apiKey: "ktest-openai-111" },
+        anthropic: { apiKey: "ktest-anthropic-222" },
+      },
+      models: { default: "openai:gpt-4o-mini" },
+      extra: {
+        provider: "openai",
+        model: "gpt-4o-mini",
+        pricing: { default: { inputPerMTok: 1, outputPerMTok: 2 } },
+      },
+    });
+    const raw = readFileSync(providersFile(home), "utf8");
+    // Block style: nested mapping keys each on their own indented line.
+    expect(raw).toContain("providers:");
+    expect(raw).toContain("  openai:");
+    expect(raw).toContain("    baseUrl:");
+    expect(raw).toContain("    apiKey: ktest-openai-111");
+    // Not Bun's flow style — no inline `{...}` mapping on one line.
+    expect(raw).not.toContain("{");
+    // Round-trip: the nested openai block survives a load unchanged.
+    const { config } = loadConfig(project, home);
+    expect(config.providers?.openai?.baseUrl).toBe("https://gateway.example.com/v1");
+    expect(config.providers?.openai?.apiKey).toBe("ktest-openai-111");
+    expect(config.providers?.anthropic?.apiKey).toBe("ktest-anthropic-222");
+    expect(config.models?.default).toBe("openai:gpt-4o-mini");
+    expect((config.pricing?.default as { inputPerMTok?: number })?.inputPerMTok).toBe(1);
+  });
 });
 
 describe("inbox config", () => {

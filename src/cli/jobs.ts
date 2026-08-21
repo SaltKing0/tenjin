@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { YAML } from "bun";
 import { ConfigError } from "../config/loader";
+import { stringifyBlockStyle } from "../config/block-style";
 import { parseCron } from "../gateway/schedule";
 import { listConfiguredJobs, type JobView } from "../gateway/gateway";
 import { resolveBot, botModelRef, botBudgetUSD, type BotProfile } from "../bots/profile";
@@ -78,72 +79,9 @@ export function writeConfigDoc(home: string, doc: Record<string, unknown>): void
   writeFileSync(configYamlPath(home), stringifyBlockStyle(doc));
 }
 
-// Bun's YAML.stringify emits flow style (one line per mapping), but job edits
-// must round-trip as readable block-style YAML, so we serialize the (small,
-// shallow) config doc ourselves. Values are emitted as plain scalars when that
-// is unambiguous and double-quoted otherwise.
-const PLAIN_SAFE = /^[A-Za-z0-9_./-]+$/;
-
-function blockScalar(v: unknown): string {
-  if (typeof v === "string") return PLAIN_SAFE.test(v) ? v : JSON.stringify(v);
-  if (typeof v === "boolean") return v ? "true" : "false";
-  if (typeof v === "number") return Number.isFinite(v) ? String(v) : "null";
-  if (v === null || v === undefined) return "null";
-  return JSON.stringify(String(v));
-}
-
-function isMapping(v: unknown): v is Record<string, unknown> {
-  return !!v && typeof v === "object" && !Array.isArray(v);
-}
-
-function emitBlock(v: unknown, indent: number, out: string[]): void {
-  const pad = " ".repeat(indent);
-  if (isMapping(v)) {
-    for (const [k, val] of Object.entries(v)) {
-      if (isMapping(val) || Array.isArray(val)) {
-        out.push(`${pad}${k}:\n`);
-        emitBlock(val, indent + 2, out);
-      } else {
-        out.push(`${pad}${k}: ${blockScalar(val)}\n`);
-      }
-    }
-  } else if (Array.isArray(v)) {
-    for (const item of v) {
-      if (isMapping(item)) {
-        const entries = Object.entries(item);
-        if (entries.length === 0) {
-          out.push(`${pad}- {}\n`);
-          continue;
-        }
-        const [k0, v0] = entries[0]!;
-        if (isMapping(v0) || Array.isArray(v0)) {
-          out.push(`${pad}- ${k0}:\n`);
-          emitBlock(v0, indent + 4, out);
-        } else {
-          out.push(`${pad}- ${k0}: ${blockScalar(v0)}\n`);
-        }
-        for (const [k, val] of entries.slice(1)) {
-          if (isMapping(val) || Array.isArray(val)) {
-            out.push(`${pad}  ${k}:\n`);
-            emitBlock(val, indent + 4, out);
-          } else {
-            out.push(`${pad}  ${k}: ${blockScalar(val)}\n`);
-          }
-        }
-      } else {
-        out.push(`${pad}- ${blockScalar(item)}\n`);
-      }
-    }
-  } else {
-    out.push(`${pad}${blockScalar(v)}\n`);
-  }
-}
-
-export function stringifyBlockStyle(doc: Record<string, unknown>): string {
-  const out: string[] = [];
-  emitBlock(doc, 0, out);
-  return out.join("");
-}
+// Block-style serializer lives in src/config/block-style.ts (shared with the
+// console's providers.yaml writer); re-exported here for backward compat.
+export { stringifyBlockStyle };
 
 function jobNameOf(entry: unknown): string | undefined {
   if (entry && typeof entry === "object" && typeof (entry as { name?: unknown }).name === "string") {

@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { YAML } from "bun";
+import { stringifyBlockStyle } from "./block-style";
 import { resolveModelRef } from "./models";
 import {
   ConfigError,
@@ -334,7 +335,9 @@ export function writeProvidersYaml(
   const path = providersFile(home);
   writeFileSync(
     path,
-    `# Managed by the Tenjin web console — safe to delete\n${YAML.stringify(doc)}`,
+    // #8: block style (multi-line mappings) — Bun's YAML.stringify emits
+    // unreadable flow style, so reuse the shared block serializer.
+    `# Managed by the Tenjin web console — safe to delete\n${stringifyBlockStyle(doc)}`,
     { mode: 0o600 },
   );
 }
