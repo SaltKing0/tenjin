@@ -10,6 +10,7 @@ import { firstRunView, shouldShowFirstRun } from "./first-run.js";
 import { botSectionItems } from "./sidebar-bots.js";
 import { lastRunStatus, runStatusView, historyTones } from "./job-status.js";
 import { messageText, sessionMessages } from "./chat-history.js";
+import { THEME_KEY, resolveTheme, nextTheme } from "./theme.js";
 
 import { panelGroups } from "./sidebar-groups.js";
 
@@ -23,6 +24,19 @@ import {
 } from "./approval-badge.js";
 
 const $app = document.getElementById("app");
+
+// #286: apply the saved theme (or system preference) before the first paint.
+const savedTheme = localStorage.getItem(THEME_KEY);
+const systemLight = window.matchMedia?.("(prefers-color-scheme: light)")?.matches ?? false;
+let theme = resolveTheme(savedTheme, systemLight);
+document.documentElement.dataset.theme = theme;
+// Follow the OS theme until the user makes an explicit choice.
+window.matchMedia?.("(prefers-color-scheme: light)")?.addEventListener?.("change", (e) => {
+  if (!localStorage.getItem(THEME_KEY)) {
+    theme = resolveTheme(null, e.matches);
+    document.documentElement.dataset.theme = theme;
+  }
+});
 
 // auto-accept ?token=… from the URL (then strip it from the address bar)
 const urlToken = new URLSearchParams(location.search).get("token");
@@ -1490,9 +1504,28 @@ function buildTopBar() {
     },
     approvalBadgeText(0),
   );
-  const bar = el("div", { class: "topbar" }, sseIndicator, botSel, approvalBadgeEl, approvalDropdown, budget, docs);
+  // #286: light/dark theme toggle (persisted in localStorage).
+  const themeBtn = el(
+    "button",
+    {
+      class: "topbar-theme",
+      title: "toggle light/dark theme",
+      onclick: toggleTheme,
+    },
+    theme === "light" ? "☀" : "☾",
+  );
+  const bar = el("div", { class: "topbar" }, sseIndicator, botSel, approvalBadgeEl, approvalDropdown, budget, themeBtn, docs);
   setSseUi();
   return bar;
+}
+
+// #286: flip the theme, persist the choice, and update the toggle label.
+function toggleTheme() {
+  theme = nextTheme(theme);
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem(THEME_KEY, theme);
+  const btn = document.querySelector(".topbar-theme");
+  if (btn) btn.textContent = theme === "light" ? "☀" : "☾";
 }
 
 const PANELS = [
