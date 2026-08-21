@@ -374,4 +374,17 @@ describe("DiscordChannel e2e (fake gateway + REST)", () => {
     channel.stop();
     ac.abort();
   });
+
+  test("send() chunks a reply over the outbound limit (#201)", async () => {
+    const rest = await startRest();
+    stops.push(rest.stop);
+    const long = Array.from({ length: 5 }, (_, i) => `part ${i} ` + "y".repeat(30)).join("\n");
+    const channel = new DiscordChannel(
+      makeOptions(rest.port, 1, { maxOutboundLength: 20 }),
+    );
+    await channel.send(long);
+    expect(rest.posts.length).toBeGreaterThan(1);
+    expect(rest.posts.map((p) => p.body.content).join("")).toBe(long);
+    expect(rest.posts.every((p) => (p.body.content ?? "").length <= 20)).toBe(true);
+  });
 });
