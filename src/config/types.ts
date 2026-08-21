@@ -44,6 +44,7 @@ export interface HarnessConfig {
   };
   inbox?: InboxConfig;
   retry?: RetryConfig;
+  context?: ContextConfig;
 }
 
 /** `inbox` in config.yaml. 0 disables the corresponding limit. */
@@ -64,4 +65,16 @@ export interface RetryConfig {
   maxDelayMs?: number;
   /** HTTP statuses that trigger a retry (429 or 5xx by default). */
   retryableStatuses?: number[];
+}
+
+/** `context` in config.yaml — context-window guard (#101). */
+export interface ContextConfig {
+  /** Master switch; on by default. */
+  enabled?: boolean;
+  /** Compress when the estimate exceeds this fraction of the window. Default 0.8. */
+  thresholdRatio?: number;
+  /** Context window (tokens) for models not in the built-in table or `windows`. */
+  defaultWindow?: number;
+  /** Per-model context-window override (tokens). */
+  windows?: Record<string, number>;
 }

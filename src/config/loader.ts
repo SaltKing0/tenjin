@@ -6,6 +6,7 @@ import { resolveModelRef } from "./models";
 import {
   ConfigError,
   type ApprovalMode,
+  type ContextConfig,
   type HarnessConfig,
   type InboxConfig,
   type PricingConfig,
@@ -15,7 +16,7 @@ import {
 } from "./types";
 
 export { ConfigError };
-export type { ApprovalMode, HarnessConfig, PricingConfig, PricingOverride, ProviderName };
+export type { ApprovalMode, ContextConfig, HarnessConfig, PricingConfig, PricingOverride, ProviderName };
 
 const DEFAULTS: HarnessConfig = {
   provider: "anthropic",
@@ -114,6 +115,16 @@ const SCHEMA: Record<string, FieldDef> = {
       initialDelayMs: { types: ["number"] },
       maxDelayMs: { types: ["number"] },
       retryableStatuses: { types: ["list"] },
+    },
+  },
+  // `context` from #101 (context-window guard).
+  context: {
+    types: ["mapping"],
+    children: {
+      enabled: { types: ["boolean"] },
+      thresholdRatio: { types: ["number"] },
+      defaultWindow: { types: ["number"] },
+      windows: { types: ["mapping"], valueType: "number" },
     },
   },
 };
@@ -234,6 +245,12 @@ memory:
 #   maxAttempts: 3             # total attempts including the first
 #   initialDelayMs: 500        # backoff before the first retry, doubles each attempt (ms)
 #   maxDelayMs: 8000           # upper bound on the per-attempt backoff (ms)
+# context:                     # context-window guard (chars/4 estimate)
+#   enabled: true              # compress old tool results once the estimate nears the limit
+#   thresholdRatio: 0.8        # compress when estimate > 80% of the model's context window
+#   # defaultWindow: 128000    # context window (tokens) for unknown models
+#   # windows:                 # per-model context-window override
+#   #   my-model: 32000
 `;
 
 const SOUL_TEMPLATE = `# SOUL
@@ -456,6 +473,7 @@ function validate(cfg: HarnessConfig, globalPath: string, skipModelCheck: boolea
   validatePricing(cfg.pricing);
   validateInbox(cfg.inbox);
   validateRetry(cfg.retry);
+  validateContext(cfg.context);
 }
 
 function validateRatePair(pair: unknown, label: string): void {
@@ -515,6 +533,37 @@ function validateRetry(retry: RetryConfig | undefined): void {
       )
     ) {
       throw new ConfigError(`retry.retryableStatuses must be a list of HTTP status codes (100-599)`);
+    }
+  }
+}
+
+function validateContext(context: ContextConfig | undefined): void {
+  if (context === undefined) return;
+  if (typeof context !== "object" || context === null) {
+    throw new ConfigError(`context must be a mapping`);
+  }
+  if (
+    context.thresholdRatio !== undefined &&
+    (typeof context.thresholdRatio !== "number" ||
+      context.thresholdRatio <= 0 ||
+      context.thresholdRatio > 1)
+  ) {
+    throw new ConfigError(`context.thresholdRatio must be a number in (0, 1]`);
+  }
+  if (
+    context.defaultWindow !== undefined &&
+    (typeof context.defaultWindow !== "number" || context.defaultWindow < 1)
+  ) {
+    throw new ConfigError(`context.defaultWindow must be a number >= 1`);
+  }
+  if (context.windows !== undefined) {
+    if (typeof context.windows !== "object" || context.windows === null) {
+      throw new ConfigError(`context.windows must be a mapping of model -> window tokens`);
+    }
+    for (const [model, tokens] of Object.entries(context.windows)) {
+      if (typeof tokens !== "number" || tokens < 1) {
+        throw new ConfigError(`context.windows.${model} must be a number >= 1`);
+      }
     }
   }
 }
