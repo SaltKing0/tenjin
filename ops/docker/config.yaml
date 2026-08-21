@@ -1,0 +1,30 @@
+# Example gateway config, mounted read-only into the container at
+# /data/config.yaml (see docker-compose.yml). Edit this file and restart the
+# service — no image rebuild needed.
+#
+# SECRETS: API keys / channel tokens stay in .env — never hardcode them here.
+# The listen token below must equal GATEWAY_TOKEN in .env (the container
+# HEALTHCHECK authenticates against /api/health with it).
+
+gateway:
+  allowWrites: true
+
+  # Web console + REST API. host 0.0.0.0 so the container is reachable through
+  # the published port. Port must match the EXPOSE/healthcheck (3000).
+  listen:
+    host: 0.0.0.0
+    port: 3000
+    token: dev-local-token   # <- set a strong, unique value here
+
+  # Channels: uncomment and configure to connect the gateway to a channel.
+  # telegram:
+  #   enabled: true
+  #   defaultBot: default
+  #   allowedUsers: [123456789]   # Telegram user ids allowed to talk to the agent
+
+  # Scheduled jobs: list as many as you want.
+  # jobs:
+  #   - name: morning-brief
+  #     bot: default
+  #     prompt: "Give me a 5-line morning brief."
+  #     every: 8h

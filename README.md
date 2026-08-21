@@ -96,6 +96,38 @@ units in [`ops/`](ops/):
 See [docs/architecture.md](docs/architecture.md#gateway) for what the gateway
 runs and how to configure its channels, jobs, heartbeats, and the web console.
 
+## Server deployment (Docker)
+
+The gateway can run as a container — a repeatable path for a VPS with an
+isolated runtime and a persistent volume for your Tenjin home. Everything lives
+in [`ops/docker/`](ops/docker/): a multi-stage `Dockerfile` (slim, non-root), a
+`docker-compose.yml`, and an example config. Secrets are passed via the
+environment, never baked into the image.
+
+```sh
+cd ops/docker
+cp .env.example .env        # fill in GATEWAY_TOKEN + any API keys / channel tokens
+# set the same token as `gateway.listen.token` in config.yaml
+docker compose up -d --build
+docker compose ps           # wait for "healthy"
+curl -H "Authorization: Bearer $GATEWAY_TOKEN" http://localhost:3000/api/health
+```
+
+That's it. On first boot the entrypoint seeds a `default` bot into the fresh
+home volume so the gateway (which needs a bot for the web console) starts
+cleanly. The gateway config (`config.yaml`) is mounted read-only, so jobs,
+channels and the console token can be edited without rebuilding the image:
+
+```sh
+# edit ./config.yaml, then:
+docker compose restart
+```
+
+State — sessions, memory, the audit log and any provider keys — persists in the
+named `tenjin-home` volume. To connect Telegram, set `TELEGRAM_BOT_TOKEN` in
+`.env`, enable `gateway.telegram` in `config.yaml`, and restart. For a hard reset
+(wipe all state) run `docker compose down -v`.
+
 ## Command reference
 
 | Command | Description |
