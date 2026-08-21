@@ -25,6 +25,7 @@ import { listSkills } from "../skills/loader";
 import { createUseSkillTool, summarizeSkills } from "../skills/activate";
 import { createSaveSkillTool } from "../tools/skill-writer";
 import { createListSkillsTool } from "../tools/skill-lister";
+import { loadTeam, buildTeamSection } from "../bots/team";
 
 export type ToolPolicy = "read-only" | "none" | "full";
 
@@ -125,6 +126,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       ? () => checkGlobalBudget(opts.home!, opts.globalBudget!)
       : undefined;
   const skills = opts.home ? listSkills(opts.home, opts.cwd) : [];
+  const team = opts.home ? loadTeam(opts.home) : null;
   const system = buildSystemPrompt({
     soulText: opts.soulText,
     agentsMd: opts.agentsMd ?? null,
@@ -137,6 +139,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         })
       : null,
     skillsSummary: skills.length > 0 ? summarizeSkills(skills) : null,
+    teamSection: team ? buildTeamSection(team) : null,
   });
   const skillDirs = opts.home ? { home: opts.home, projectDir: opts.cwd } : undefined;
   let logger: SessionLog | undefined;
