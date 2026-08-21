@@ -402,6 +402,34 @@ describe("Gateway execution", () => {
     expect(lines).toContain("bot=worker");
     expect(lines).toContain("→ telegram");
   });
+
+  test("reload rebuilds the job set from a fresh config (SIGHUP path)", () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: {
+          jobs: [{ name: "one", bot: "worker", prompt: "p1", every: "1m" }],
+        },
+      }),
+      registry: { get: () => mockProvider() } as never,
+    });
+    expect(gw.listJobs().map((j) => j.name)).toEqual(["one"]);
+
+    gw.reload(
+      config({
+        gateway: {
+          jobs: [
+            { name: "two", bot: "worker", prompt: "p2", cron: "0 9 * * *" },
+            { name: "three", bot: "worker", prompt: "p3", every: "30m" },
+          ],
+        },
+      }),
+    );
+
+    expect(gw.listJobs().map((j) => j.name)).toEqual(["two", "three"]);
+    expect(gw.listJobs()).toHaveLength(2);
+  });
 });
 
 describe("heartbeat", () => {
