@@ -1,0 +1,110 @@
+import type { HarnessConfig } from "../config/types";
+import type { ProviderRegistry } from "../provider/registry";
+import type { SecurityGuard } from "../security/guard";
+import type { AuditLog } from "../audit/log";
+import { resolveBot, botModelRef, botBudgetUSD } from "../bots/profile";
+import { runHeadless } from "../agent/headless";
+import { loadAgentsMd } from "../agent/prompt";
+import { formatUSD } from "../agent/budget";
+import { routeText } from "./telegram";
+import {
+  createRequest,
+  resolveRequest,
+  waitApproval,
+  summarizeInput,
+} from "./approvals";
+
+export interface HandlerDeps {
+  home: string;
+  cwd: string;
+  config: HarnessConfig;
+  registry: ProviderRegistry;
+  availableBots: string[];
+  defaultBot: string;
+  allowWrites: boolean;
+  approvalTimeoutMs: number;
+  guard: SecurityGuard | null;
+  audit: AuditLog;
+  log: (line: string) => void;
+  notifyApproval?: (chatId: number, text: string) => Promise<void>;
+}
+
+export interface HandleContext {
+  actor: string;
+  source: "telegram" | "http";
+  chatId?: number;
+}
+
+export function createMessageHandler(deps: HandlerDeps) {
+  return async function handle(
+    text: string,
+    ctx: HandleContext,
+  ): Promise<string | null> {
+    const approvalCmd = /^\/(approve|deny)\s+([a-z0-9-]+)\s*$/i.exec(text.trim());
+    if (approvalCmd && approvalCmd[1] && approvalCmd[2]) {
+      const action = approvalCmd[1].toLowerCase() as "approve" | "deny";
+      const id = approvalCmd[2];
+      const resolved = resolveRequest(
+        deps.home,
+        id,
+        action === "approve" ? "approved" : "denied",
+      );
+      deps.audit.append(
+        "approval",
+        ctx.actor,
+        `${action} ${id} -> ${resolved ? "recorded" : "not found or already resolved"}`,
+      );
+      return resolved
+        ? `Request ${id} ${action === "approve" ? "approved" : "denied"}.`
+        : `Unknown or already-resolved request ${id}.`;
+    }
+
+    const { bot: botName, rest } = routeText(text, deps.defaultBot, deps.availableBots);
+    const profile = resolveBot(deps.home, botName);
+    const ref = botModelRef(profile, deps.config);
+    deps.audit.append("gateway_msg", ctx.actor, `${botName}: ${text.slice(0, 120)}`, botName);
+
+    let approve;
+    if (deps.allowWrites) {
+      approve = async (toolName: string, group: "read" | "write", input: unknown) => {
+        if (group === "read") return true;
+        const req = createRequest(deps.home, {
+          bot: botName,
+          tool: toolName,
+          inputSummary: summarizeInput(input),
+        });
+        const notice =
+          `Approval needed [${req.id}]\nbot: ${botName}\ntool: ${toolName}\n${req.inputSummary}\nReply /approve ${req.id} or /deny ${req.id}`;
+        if (ctx.chatId !== undefined && deps.notifyApproval) {
+          await deps.notifyApproval(ctx.chatId, notice);
+        } else {
+          deps.log(`approval requested [${req.id}] (${toolName}) — no channel to notify`);
+        }
+        const decision = await waitApproval(deps.home, req.id, deps.approvalTimeoutMs);
+        deps.audit.append("approval", ctx.actor, `${toolName} (${req.id}) -> ${decision}`, botName);
+        return decision === "approved";
+      };
+    }
+
+    const result = await runHeadless({
+      provider: deps.registry.get(ref.provider),
+      model: ref.model,
+      soulText: profile.soulText,
+      cwd: deps.cwd,
+      message: rest,
+      maxTokens: deps.config.maxTokens,
+      capUSD: botBudgetUSD(profile, deps.config.budgetUSD),
+      policy: deps.allowWrites ? "full" : "read-only",
+      agentsMd: loadAgentsMd(deps.cwd),
+      sessionLogDir: profile.sessionsDir,
+      sessionBot: profile.name,
+      guard: deps.guard,
+      approve,
+      audit: (kind, detail) => deps.audit.append(kind, ctx.actor, detail, botName),
+    });
+    deps.log(
+      `${ctx.source}: handled for ${botName} (${formatUSD(result.costUSD)})`,
+    );
+    return result.text || null;
+  };
+}

@@ -23,10 +23,17 @@ export interface HeartbeatConfig {
   intervalMs: number;
 }
 
+export interface ListenConfig {
+  port: number;
+  host: string;
+  token: string;
+}
+
 export interface GatewaySettings {
   jobs: JobConfig[];
   telegram: TelegramChannelConfig | null;
   heartbeat: HeartbeatConfig | null;
+  listen: ListenConfig | null;
 }
 
 interface RawJob {
@@ -40,13 +47,13 @@ interface RawJob {
 
 export function parseGatewaySettings(raw: unknown): GatewaySettings {
   if (raw === null || raw === undefined) {
-    return { jobs: [], telegram: null, heartbeat: null };
+    return { jobs: [], telegram: null, heartbeat: null, listen: null };
   }
   if (typeof raw !== "object") {
     throw new ConfigError("gateway config must be a mapping");
   }
   const gw = raw as Record<string, unknown>;
-  const settings: GatewaySettings = { jobs: [], telegram: null, heartbeat: null };
+  const settings: GatewaySettings = { jobs: [], telegram: null, heartbeat: null, listen: null };
 
   const rawJobs = gw.jobs;
   if (rawJobs !== undefined && rawJobs !== null) {
@@ -115,6 +122,23 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     if (!bot) throw new ConfigError("gateway.heartbeat.enabled requires a `bot`");
     const every = typeof hb.every === "string" ? hb.every : "30m";
     settings.heartbeat = { bot, intervalMs: parseEvery(every) };
+  }
+
+  const rawListen = gw.listen;
+  if (rawListen !== undefined && rawListen !== null) {
+    if (typeof rawListen !== "object") throw new ConfigError("gateway.listen must be a mapping");
+    const l = rawListen as Record<string, unknown>;
+    const port = typeof l.port === "number" ? l.port : NaN;
+    const token = typeof l.token === "string" ? l.token.trim() : "";
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+      throw new ConfigError("gateway.listen.port must be a valid port number");
+    }
+    if (!token) throw new ConfigError("gateway.listen.token is required");
+    settings.listen = {
+      port,
+      host: typeof l.host === "string" ? l.host : "127.0.0.1",
+      token,
+    };
   }
 
   return settings;

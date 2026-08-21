@@ -45,7 +45,9 @@ import { Gateway } from "./gateway/gateway";
 import { SecurityGuard } from "./security/guard";
 import { AuditLog, formatAudit, auditPath } from "./audit/log";
 import { aggregateSpend, renderSpend } from "./audit/spend";
-import { TelegramChannel, routeText } from "./gateway/telegram";
+import { TelegramChannel } from "./gateway/telegram";
+import { createMessageHandler } from "./gateway/handler";
+import { startHttpServer } from "./gateway/http";
 import {
   createRequest,
   resolveRequest,
@@ -360,18 +362,59 @@ async function gatewayCommand(args: string[]): Promise<number> {
 
     const channels: Record<string, (text: string) => Promise<void>> = {};
     let telegramRun: Promise<void> | null = null;
+    let telegramHandle: ((text: string) => Promise<string | null>) | null = null;
     const tg = gateway.settings.telegram;
+    if (tg?.enabled || gateway.settings.listen) {
+      const available = listBots(home);
+      const defaultBot = tg?.defaultBot ?? available[0];
+      if (!defaultBot) {
+        throw new ConfigError("gateway needs at least one bot (tenjin bot new <name>)");
+      }
+      if (tg?.enabled && !available.includes(defaultBot)) {
+        throw new ConfigError(`telegram defaultBot "${defaultBot}" does not exist`);
+      }
+      const handleMessage = createMessageHandler({
+        home,
+        cwd,
+        config,
+        registry,
+        availableBots: available,
+        defaultBot,
+        allowWrites: tg?.allowWrites === true,
+        approvalTimeoutMs: tg?.approvalTimeoutMs ?? 120_000,
+        guard,
+        audit,
+        log,
+      });
+      telegramHandle = (text) => handleMessage(text, { actor: "http", source: "http" });
+    }
     if (tg?.enabled) {
       const token = process.env.TELEGRAM_BOT_TOKEN;
       if (!token) throw new ConfigError("gateway.telegram enabled but TELEGRAM_BOT_TOKEN is not set");
       const defaultBot = tg.defaultBot as string;
       const available = listBots(home);
-      if (!available.includes(defaultBot)) {
-        throw new ConfigError(`telegram defaultBot "${defaultBot}" does not exist`);
-      }
       const allowWrites = tg.allowWrites === true;
       const approvalTimeoutMs = tg.approvalTimeoutMs ?? 120_000;
-      const channel = new TelegramChannel(
+      let channel: TelegramChannel;
+      const notifyApproval =
+        tg.adminChatId !== undefined
+          ? async (chatId: number, text: string) => channel.send(chatId, text)
+          : undefined;
+      const handleForTelegram = createMessageHandler({
+        home,
+        cwd,
+        config,
+        registry,
+        availableBots: available,
+        defaultBot,
+        allowWrites,
+        approvalTimeoutMs,
+        guard,
+        audit,
+        log,
+        notifyApproval,
+      });
+      channel = new TelegramChannel(
         {
           token,
           defaultBot,
@@ -379,59 +422,12 @@ async function gatewayCommand(args: string[]): Promise<number> {
           apiBase: process.env.TELEGRAM_API_BASE,
           onReject: (userId) => audit.append("channel_reject", String(userId), "telegram message from non-allowlisted user"),
         },
-        async (msg) => {
-          const approvalCmd = /^\/(approve|deny)\s+([a-z0-9-]+)\s*$/i.exec(msg.text.trim());
-          if (approvalCmd && approvalCmd[1] && approvalCmd[2]) {
-            const action = approvalCmd[1].toLowerCase() as "approve" | "deny";
-            const id = approvalCmd[2];
-            const resolved = resolveRequest(home, id, action === "approve" ? "approved" : "denied");
-            audit.append("approval", String(msg.userId), `${action} ${id} -> ${resolved ? "recorded" : "not found or already resolved"}`);
-            return resolved ? `Request ${id} ${action === "approve" ? "approved" : "denied"}.` : `Unknown or already-resolved request ${id}.`;
-          }
-
-          const { bot: botName, rest } = routeText(msg.text, defaultBot, available);
-          const profile = resolveBot(home, botName);
-          const ref = botModelRef(profile, config);
-          audit.append("gateway_msg", String(msg.userId), `${botName}: ${msg.text.slice(0, 120)}`, botName);
-
-          let approve;
-          if (allowWrites) {
-            approve = async (toolName: string, group: "read" | "write", input: unknown) => {
-              if (group === "read") return true;
-              const req = createRequest(home, {
-                bot: botName,
-                tool: toolName,
-                inputSummary: summarizeInput(input),
-              });
-              await channel.send(
-                msg.chatId,
-                `Approval needed [${req.id}]\nbot: ${botName}\ntool: ${toolName}\n${req.inputSummary}\nReply /approve ${req.id} or /deny ${req.id}`,
-              );
-              const decision = await waitApproval(home, req.id, approvalTimeoutMs);
-              audit.append("approval", "remote-user", `${toolName} (${req.id}) -> ${decision}`, botName);
-              return decision === "approved";
-            };
-          }
-
-          const result = await runHeadless({
-            provider: registry.get(ref.provider),
-            model: ref.model,
-            soulText: profile.soulText,
-            cwd,
-            message: rest,
-            maxTokens: config.maxTokens,
-            capUSD: botBudgetUSD(profile, config.budgetUSD),
-            policy: allowWrites ? "full" : "read-only",
-            agentsMd: loadAgentsMd(cwd),
-            sessionLogDir: profile.sessionsDir,
-            sessionBot: profile.name,
-            guard,
-            approve,
-            audit: (kind, detail) => audit.append(kind, "gateway", detail, botName),
-          });
-          log(`telegram: handled for ${botName} (${formatUSD(result.costUSD)})`);
-          return result.text || null;
-        },
+        (msg) =>
+          handleForTelegram(msg.text, {
+            actor: String(msg.userId),
+            source: "telegram",
+            chatId: msg.chatId,
+          }),
         log,
       );
       channels["telegram"] = async (text) => {
@@ -447,8 +443,33 @@ async function gatewayCommand(args: string[]): Promise<number> {
       return 0;
     }
 
+    const runners: Promise<void>[] = [gateway.run(controller.signal)];
+    if (telegramRun) runners.push(telegramRun);
+
+    if (gateway.settings.listen) {
+      const listen = gateway.settings.listen;
+      const http = startHttpServer({
+        config: listen,
+        handleMessage: (text) =>
+          telegramHandle
+            ? telegramHandle(text)
+            : Promise.resolve(null),
+        status: () => ({
+          jobs: gateway.jobs.map((j) => ({
+            name: j.name,
+            bot: j.botName,
+            nextDueMs: j.nextDueMs,
+          })),
+          channels: Object.keys(channels),
+        }),
+        log,
+      });
+      stdout.write(`http api listening on ${listen.host}:${http.port}\n`);
+      controller.signal.addEventListener("abort", () => http.stop(), { once: true });
+    }
+
     stdout.write(`gateway running — Ctrl-C to stop\n`);
-    await Promise.all([gateway.run(controller.signal), ...(telegramRun ? [telegramRun] : [])]);
+    await Promise.all(runners);
     return 0;
   } catch (e) {
     if (e instanceof ConfigError) {
