@@ -102,6 +102,10 @@ serves the static console (`src/gateway/console/`) and
 | `GET/POST /api/settings` | Read / apply settings |
 | `POST /api/settings/detect` | Probe provider model lists |
 | `GET /api/bots` | List bots |
+| `POST /api/bots` | Create a bot (optionally with initial SOUL text) |
+| `GET /api/bots/:name` | Bot detail incl. raw SOUL text |
+| `PUT /api/bots/:name` | Edit SOUL text and/or rename the bot |
+| `DELETE /api/bots/:name` | Delete a bot (removes its directory) |
 | `GET /api/sessions` | List sessions |
 | `GET /api/spend` | Aggregated spend (rows + `byBot` per-bot breakdown) |
 | `GET /api/audit` | Security/audit events |

@@ -148,19 +148,97 @@ async function panelStatus(main) {
   }
 
   main.append(el("h2", {}, "bots"));
+  main.append(botCreateForm(main));
   for (const bot of await loadBots()) {
-    main.append(
-      el(
-        "div",
-        { class: "card" },
-        el("strong", {}, bot.name),
-        " ",
-        el("span", { class: "badge" }, bot.model),
-        bot.unread > 0 ? el("span", { class: "badge err" }, `${bot.unread} unread`) : null,
-        el("div", { class: "dim" }, `${bot.sessions} session(s)`),
-      ),
-    );
+    main.append(await botEditorCard(main, bot));
   }
+}
+
+/* ---------- bot management (create / edit SOUL / rename / delete) ---------- */
+
+async function botEditorCard(main, bot) {
+  let soul = "";
+  try {
+    soul = (await apiJson(`/api/bots/${encodeURIComponent(bot.name)}`)).soul;
+  } catch {
+    soul = "# could not load SOUL for this bot";
+  }
+  const soulArea = el("textarea", { class: "soul-input", rows: 8, spellcheck: "false" }, soul);
+  const renameInput = el("input", { class: "rename-input", type: "text", value: bot.name });
+  renameInput.setAttribute("aria-label", "rename bot");
+  const status = el("div", { class: "dim" });
+
+  const save = el("button", {}, "Save");
+  save.onclick = async () => {
+    const body = { soul: soulArea.value };
+    const newName = renameInput.value.trim();
+    if (newName && newName !== bot.name) body.rename = newName;
+    try {
+      const data = await apiJson(`/api/bots/${encodeURIComponent(bot.name)}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      status.textContent = `saved → ${data.name}`;
+      status.className = "ok";
+      await panelStatus(main);
+    } catch (e) {
+      status.textContent = e.message;
+      status.className = "err";
+    }
+  };
+
+  const del = el("button", { class: "danger" }, "Delete");
+  del.onclick = async () => {
+    if (!confirm(`Delete bot ${bot.name}? Its directory and data will be removed.`)) return;
+    try {
+      await api(`/api/bots/${encodeURIComponent(bot.name)}`, { method: "DELETE" });
+      await panelStatus(main);
+    } catch (e) {
+      status.textContent = e.message;
+      status.className = "err";
+    }
+  };
+
+  return el(
+    "div",
+    { class: "card" },
+    el("strong", {}, bot.name),
+    " ",
+    el("span", { class: "badge" }, bot.model),
+    bot.unread > 0 ? el("span", { class: "badge err" }, `${bot.unread} unread`) : null,
+    el("div", { class: "dim" }, `${bot.sessions} session(s)`),
+    el("div", { class: "label" }, "SOUL"),
+    soulArea,
+    el("div", { class: "bot-actions" }, renameInput, save, del, status),
+  );
+}
+
+function botCreateForm(main) {
+  const nameInput = el("input", { type: "text", placeholder: "new bot name" });
+  const soulArea = el("textarea", { class: "soul-input", rows: 5, placeholder: "optional SOUL text" });
+  const status = el("div", { class: "dim" });
+  const create = el("button", {}, "Create bot");
+  create.onclick = async () => {
+    const body = { name: nameInput.value };
+    if (soulArea.value.trim()) body.soul = soulArea.value;
+    try {
+      await apiJson("/api/bots", { method: "POST", body: JSON.stringify(body) });
+      status.textContent = "created";
+      status.className = "ok";
+      await panelStatus(main);
+    } catch (e) {
+      status.textContent = e.message;
+      status.className = "err";
+    }
+  };
+  return el(
+    "div",
+    { class: "card" },
+    el("div", { class: "label" }, "new bot"),
+    nameInput,
+    soulArea,
+    el("div", { class: "bot-actions" }, create, status),
+  );
 }
 
 async function panelSessions(main) {

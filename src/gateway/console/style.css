@@ -150,3 +150,9 @@ input, select {
 
 .login-box { max-width: 420px; margin: 15vh auto; text-align: center; }
 .login-box input { width: 100%; margin: 16px 0; }
+
+/* bot management (SOUL editor) */
+.bot-actions { display: flex; gap: 8px; margin-top: 6px; align-items: center; flex-wrap: wrap; }
+.bot-actions .rename-input { flex: 1; min-width: 140px; }
+.soul-input { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; font-size: 12px; margin-top: 6px; }
+.label { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-top: 8px; }
