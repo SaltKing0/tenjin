@@ -1,8 +1,10 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { join } from "node:path";
-import type { Provider } from "../provider/types";
-import type { ChatMessage } from "../provider/types";
+import type { ChatMessage, Provider } from "../provider/types";
+import { ProviderRegistry } from "../provider/registry";
+import { resolveModelRef, formatModelRef, type ModelRef } from "../config/models";
+import { ConfigError } from "../config/types";
 import type { ToolDef } from "../tools/registry";
 import type { HarnessConfig } from "../config/loader";
 import { Budget, formatUSD } from "../agent/budget";
@@ -24,7 +26,9 @@ const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 
 export interface ReplOptions {
   config: HarnessConfig;
-  provider: Provider;
+  registry: ProviderRegistry;
+  defaultRef: ModelRef;
+  cheapRef: ModelRef | null;
   system: string;
   tools: ToolDef[];
   cwd: string;
@@ -43,6 +47,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     budget: new Budget(opts.config.budgetUSD, opts.config.pricing),
     logger: opts.logger,
     sessionId: opts.sessionId,
+    active: opts.defaultRef,
   };
   state.budget.spentUSD = opts.initialSpentUSD ?? 0;
   const sessionAllowed = new Set<string>();
@@ -64,11 +69,11 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     t: "session_start",
     id: opts.sessionId,
     ts: now(),
-    provider: opts.provider.name,
-    model: opts.config.model,
+    provider: state.active.provider,
+    model: state.active.model,
   });
 
-  printBanner(opts);
+  printBanner(opts, state);
 
   try {
     while (true) {
@@ -95,8 +100,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       stdout.write("\n");
       try {
         const result = await runAgentTurn({
-          provider: opts.provider,
-          model: opts.config.model,
+          provider: activeProvider(opts, state),
+          model: state.active.model,
           system: opts.system,
           tools: opts.tools,
           messages: state.messages,
@@ -145,6 +150,11 @@ interface ReplState {
   budget: Budget;
   logger: SessionLog | undefined;
   sessionId: string;
+  active: ModelRef;
+}
+
+function activeProvider(opts: ReplOptions, state: ReplState): Provider {
+  return opts.registry.get(state.active.provider);
 }
 
 async function handleCommand(
@@ -187,14 +197,27 @@ async function handleCommand(
       }
       return;
     }
-    case "/model":
-      if (rest[0]) {
-        opts.config.model = rest[0];
-        stdout.write(dim(`model → ${rest[0]} (this session)\n`));
-      } else {
-        stdout.write(dim(`${opts.provider.name}:${opts.config.model}\n`));
+    case "/model": {
+      if (!rest[0]) {
+        stdout.write(dim(`${formatModelRef(state.active)}${opts.cheapRef ? dim("  (tiers: default, cheap)") : ""}\n`));
+        return;
+      }
+      const arg = rest[0];
+      try {
+        if (arg === "default") {
+          state.active = opts.defaultRef;
+        } else if (arg === "cheap") {
+          if (!opts.cheapRef) throw new ConfigError("no cheap tier configured (set models.cheap)");
+          state.active = opts.cheapRef;
+        } else {
+          state.active = resolveModelRef(rest.join(" "), opts.config.provider);
+        }
+        stdout.write(dim(`model → ${formatModelRef(state.active)}\n`));
+      } catch (e) {
+        stdout.write(red(`${(e as Error).message}\n`));
       }
       return;
+    }
     case "/tools":
       for (const t of opts.tools) {
         stdout.write(dim(`${t.name.padEnd(12)} ${t.group}${sessionAllowed.has(t.name) ? " (approved this session)" : ""}\n`));
@@ -352,10 +375,10 @@ function logEvent(logger: EventLogger | undefined, event: SessionEvent): void {
   logger?.append(event);
 }
 
-function printBanner(opts: ReplOptions): void {
+function printBanner(opts: ReplOptions, state: ReplState): void {
   stdout.write(
     bold(`Tenjin v${VERSION}`) +
-      dim(` · ${opts.provider.name}:${opts.config.model}`) +
+      dim(` · ${state.active.provider}:${state.active.model}`) +
       "\n",
   );
   stdout.write(

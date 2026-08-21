@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -33,16 +33,15 @@ describe("e2e: CLI against fake anthropic server", () => {
 
   test("full REPL session: banner, streamed reply, usage line, session log written", async () => {
     home = mkdtempSync(join(tmpdir(), "tj-e2e-"));
-    let chatCalls = 0;
+    const modelsSeen: string[] = [];
 
     server = Bun.serve({
       port: 0,
       async fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === "/v1/messages" && req.method === "POST") {
-          chatCalls++;
           const body = (await req.json()) as any;
-          expect(body.model).toBe("mock-model");
+          modelsSeen.push(body.model);
           expect(body.stream).toBe(true);
           return new Response(chatResponse(REPLY_TEXT), {
             headers: { "content-type": "text/event-stream" },
@@ -93,7 +92,7 @@ describe("e2e: CLI against fake anthropic server", () => {
     expect(stdout).toContain("in 12 out 7");
     expect(stdout).toContain("memory on");
 
-    expect(chatCalls).toBeGreaterThanOrEqual(1);
+    expect(modelsSeen).toContain("mock-model");
 
     const sessionsDir = join(home, "sessions");
     expect(existsSync(sessionsDir)).toBe(true);
@@ -112,5 +111,73 @@ describe("e2e: CLI against fake anthropic server", () => {
     const assistantMsgs = events.filter((e) => e.t === "message" && e.role === "assistant");
     expect(assistantMsgs.length).toBeGreaterThanOrEqual(1);
     expect(events.some((e) => e.t === "usage" && e.inputTokens === 12)).toBe(true);
+  }, 25_000);
+
+  test("tier routing: summarizer uses cheap model, chat uses default", async () => {
+    home = mkdtempSync(join(tmpdir(), "tj-e2e-tier-"));
+    const modelsSeen: string[] = [];
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/v1/messages" && req.method === "POST") {
+          const body = (await req.json()) as any;
+          modelsSeen.push(body.model);
+          return new Response(chatResponse("summary or reply"), {
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+
+    mkdirSync(join(home, "sessions"), { recursive: true });
+    const priorId = "20260101-0000-prior";
+    writeFileSync(
+      join(home, "sessions", `${priorId}.jsonl`),
+      [
+        JSON.stringify({ t: "session_start", id: priorId, ts: "t", provider: "anthropic", model: "mock-model" }),
+        JSON.stringify({ t: "message", role: "user", content: "worked on the auth refactor", ts: "t" }),
+        JSON.stringify({ t: "message", role: "assistant", content: [{ type: "text", text: "done" }], ts: "t" }),
+      ].join("\n") + "\n",
+    );
+    writeFileSync(
+      join(home, "config.yaml"),
+      "provider: anthropic\nmodel: mock-model\nmemory:\n  enabled: true\n  vector:\n    enabled: false\nmodels:\n  cheap: anthropic:mock-cheap\n",
+    );
+
+    const proc = Bun.spawn(["bun", "run", "src/index.ts"], {
+      cwd: join(import.meta.dir, ".."),
+      env: {
+        ...process.env,
+        TENJIN_HOME: home,
+        ANTHROPIC_API_KEY: "dummy-key",
+        ANTHROPIC_BASE_URL: `http://localhost:${server.port}/v1`,
+      },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    proc.stdin.write("/exit\n");
+    await proc.stdin.flush();
+    proc.stdin.end();
+
+    const exitCode = await new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("tier e2e timed out")), 20_000);
+      proc.exited.then((code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+
+    expect(exitCode).toBe(0);
+    expect(modelsSeen).toContain("mock-cheap");
+    expect(modelsSeen).not.toContain("mock-model");
+
+    const summariesDir = join(home, "memory", "summaries");
+    expect(existsSync(summariesDir)).toBe(true);
+    expect(readdirSync(summariesDir).some((f) => f.startsWith(priorId))).toBe(true);
   }, 25_000);
 });

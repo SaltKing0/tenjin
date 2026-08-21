@@ -12,7 +12,8 @@ import {
   type HarnessConfig,
 } from "./config/loader";
 import { createProvider } from "./provider/factory";
-import type { Provider } from "./provider/types";
+import { ProviderRegistry } from "./provider/registry";
+import { defaultModelRef, cheapModelRef, type ModelRef } from "./config/models";
 import { loadSoul, loadAgentsMd, buildSystemPrompt } from "./agent/prompt";
 import { Budget, formatUSD, pricingFor } from "./agent/budget";
 import { runAgentTurn } from "./agent/loop";
@@ -37,7 +38,9 @@ import { PRODUCT } from "./version";
 
 interface AppContext {
   config: HarnessConfig;
-  provider: Provider;
+  registry: ProviderRegistry;
+  defaultRef: ModelRef;
+  cheapRef: ModelRef | null;
   system: string;
   tools: ToolDef[];
   cwd: string;
@@ -69,7 +72,9 @@ async function main(): Promise<number> {
     const { config } = loadConfig(cwd, home, { skipModelCheck: !!cli.model });
     applyOverrides(config, cli);
     validateConfig(config);
-    const provider = createProvider(config);
+    const registry = new ProviderRegistry(config.providers?.openai?.baseUrl);
+    const defaultRef = defaultModelRef(config);
+    const cheapRef = cheapModelRef(config);
 
     const memDir = memoryDir(home);
     const embeddings = vectorEnabled(config)
@@ -77,11 +82,12 @@ async function main(): Promise<number> {
       : null;
     if (memoryEnabled(config) && cli.print === undefined && !cli.fork && !cli.resume) {
       try {
+        const sumRef = cheapRef ?? defaultRef;
         const report = await generatePendingSummaries({
           sessionsDirPath: sessionsDir(home),
           memoryDirPath: memDir,
-          provider,
-          model: config.model,
+          provider: registry.get(sumRef.provider),
+          model: sumRef.model,
           maxTokens: config.maxTokens,
           projectPath: cwd,
         });
@@ -134,7 +140,7 @@ async function main(): Promise<number> {
       tools.push(createRememberTool({ memoryDirPath: memDir }));
       tools.push(createRecallTool({ memoryDirPath: memDir, projectPath: cwd, embeddings }));
     }
-    const ctx: AppContext = { config, provider, system, tools, cwd };
+    const ctx: AppContext = { config, registry, defaultRef, cheapRef, system, tools, cwd };
 
     if (cli.print !== undefined) {
       return await oneShot(ctx, cli.print);
@@ -191,7 +197,10 @@ async function continueSession(
 }
 
 function applyOverrides(config: HarnessConfig, cli: CliArgs): void {
-  if (cli.model) config.model = cli.model;
+  if (cli.model) {
+    config.model = cli.model;
+    if (config.models) delete config.models.default;
+  }
   if (cli.provider) {
     if (cli.provider !== "anthropic" && cli.provider !== "openai") {
       throw new ConfigError(`--provider must be anthropic or openai`);
@@ -209,8 +218,8 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
   let deniedOnce = false;
 
   const result = await runAgentTurn({
-    provider: ctx.provider,
-    model: ctx.config.model,
+    provider: ctx.registry.get(ctx.defaultRef.provider),
+    model: ctx.defaultRef.model,
     system: ctx.system,
     tools: ctx.tools,
     messages,
