@@ -369,6 +369,15 @@ memory:
 #   #   enabled: true
 #   #   defaultBot: mybot
 #   #   allowedUsers: []       # REQUIRED: allowlist of Telegram user ids
+#   jobs:                      # scheduled prompts to a bot (see docs/architecture.md)
+#     - name: daily-digest
+#       bot: researcher
+#       prompt: "Summarize today's changes."
+#       cron: "0 9 * * *"      # or every: "4h"; a schedule: "0 9 * * *" string or
+#       tz: Europe/Berlin      #   schedule: {cron: ...} mapping also work
+#       postTo: telegram       # optional channel to route the result to
+#       timeoutMs: 300000      # optional hard cap per run (ms)
+#       policy: full           # optional tool policy (read-only | full)
 `;
 
 const SOUL_TEMPLATE = `# SOUL

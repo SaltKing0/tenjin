@@ -69,7 +69,7 @@ telegram:
 routines:                   # scheduled prompts that run as THIS bot (registered at gateway boot)
   - name: nightly-digest
     prompt: "Summarize today's findings into memory."
-    cron: "0 2 * * *"       # or every: "4h"; optional tz, policy, timeoutMs, postTo
+    cron: "0 2 * * *"       # or every: "4h"; schedule: "0 2 * * *" string / schedule: {cron: ...} mapping also work
     policy: read-only
 heartbeat:                  # recurring heartbeat for this bot (per-bot interval)
   every: 30m

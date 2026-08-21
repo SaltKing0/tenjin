@@ -115,6 +115,70 @@ function parseTimeZone(raw: string | undefined): string | undefined {
   return name;
 }
 
+const readStr = (v: unknown): string | undefined =>
+  typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+
+function readTz(v: unknown, label: string): string | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "string") {
+    throw new ConfigError(`${label} tz must be an IANA time zone name`);
+  }
+  return v.trim() !== "" ? v.trim() : undefined;
+}
+
+/**
+ * Normalize the schedule of a raw job/routine entry into `{every, cron, tz}`.
+ *
+ * Accepts three equivalent shapes, so a nested `schedule:` mapping or a bare
+ * cron string no longer fails with a misleading "needs exactly one of every|cron":
+ *   - flat keys on the entry:      `every:` / `cron:` / `tz:`
+ *   - a nested `schedule` mapping: `schedule: { every:…, cron:…, tz:… }`
+ *   - a `schedule` flat string:    `schedule: "0 9 * * *"` → treated as `cron`
+ *
+ * Flat keys win when both a flat key and a `schedule` field are present (avoids
+ * a surprising double-schedule). Throws a ConfigError naming the entry and
+ * echoing the received value when the `schedule` field itself is malformed.
+ * The empty-result case (no `every`/`cron` at all) is left for `parseSchedule`.
+ */
+export function extractScheduleSpec(
+  entry: { every?: unknown; cron?: unknown; tz?: unknown; schedule?: unknown },
+  label: string,
+): { every?: string; cron?: string; tz?: string } {
+  let every = readStr(entry.every);
+  let cron = readStr(entry.cron);
+  let tz = readTz(entry.tz, label);
+
+  const raw = entry.schedule;
+  if (raw !== undefined && raw !== null) {
+    // Always validate the shape, even when flat keys win, so a malformed
+    // `schedule` value is never silently ignored.
+    if (typeof raw !== "string" && (typeof raw !== "object" || Array.isArray(raw))) {
+      throw new ConfigError(
+        `${label} schedule must be a mapping or a cron string — got ${JSON.stringify(raw)}`,
+      );
+    }
+    // Flat keys are canonical; only fall back to the nested field when the
+    // entry has no flat `every`/`cron` of its own.
+    if (every === undefined && cron === undefined) {
+      if (typeof raw === "string") {
+        const s = raw.trim();
+        if (s === "") {
+          throw new ConfigError(
+            `${label} schedule is empty — expected a cron expression or a mapping`,
+          );
+        }
+        cron = s;
+      } else {
+        const s = raw as Record<string, unknown>;
+        every = readStr(s.every);
+        cron = readStr(s.cron);
+        if (tz === undefined) tz = readTz(s.tz, label);
+      }
+    }
+  }
+  return { every, cron, tz };
+}
+
 export function parseSchedule(spec: {
   every?: string;
   cron?: string;
@@ -123,7 +187,9 @@ export function parseSchedule(spec: {
   const hasEvery = spec.every !== undefined && spec.every !== "";
   const hasCron = spec.cron !== undefined && spec.cron !== "";
   if (hasEvery === hasCron) {
-    throw new ConfigError("schedule needs exactly one of `every` or `cron`");
+    throw new ConfigError(
+      `schedule needs exactly one of \`every\` or \`cron\` — got schedule: ${JSON.stringify(spec)}`,
+    );
   }
   const tz = parseTimeZone(spec.tz);
   if (hasEvery) {

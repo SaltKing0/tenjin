@@ -412,6 +412,12 @@ gateway:
 - **`jobs`** — scheduled prompts to a bot on a cron or `every` schedule
   (`postTo` routes the result to a channel). Optional `tz` (IANA name) interprets
   cron fields in that zone, including across DST; omitted `tz` keeps server local time.
+  The schedule can be written three equivalent ways (flat keys are canonical):
+  `cron:`/`every:`/`tz:` directly on the job, a nested `schedule:` mapping
+  (`schedule: {cron:…, every:…, tz:…}`), or a bare `schedule: "0 9 * * *"`
+  string (shorthand for `cron`). When both a flat key and a `schedule:` field are
+  present the flat keys win; a malformed `schedule:` value is rejected with the
+  received shape rather than silently ignored.
   Optional per-job `timeoutMs` (ms) sets a hard cap on a single run — a hung
   provider call is released after this so it can't pin the job slot forever.
   Optional per-job `policy` (`read-only` | `full`) sets the job's tool policy;
