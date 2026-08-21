@@ -296,8 +296,14 @@ export class SecurityGuard {
     // Resolve symlinks so a link inside the root pointing outside is caught.
     const real = this.resolveReal(abs);
 
-    const roots = [effRoot, ...this.allowedPaths];
-    if (!this.isInside(normalized, roots) || !this.isInside(real, roots)) {
+    // Compare in BOTH spaces: the plain-resolved path guards against `..`
+    // traversal / absolute escapes, and the realpath-resolved path against
+    // symlink escapes. Each side is checked against roots resolved the same
+    // way, so a root that itself lives under a symlink (macOS /tmp → /private/tmp,
+    // /var → /private/var) does not false-positive on every in-root access.
+    const plainRoots = [effRoot, ...this.allowedPaths];
+    const realRoots = plainRoots.map((r) => this.resolveReal(r));
+    if (!this.isInside(normalized, plainRoots) || !this.isInside(real, realRoots)) {
       return { blocked: true, reason: "outside workspace", target: raw };
     }
     return { blocked: false };

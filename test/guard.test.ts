@@ -287,6 +287,17 @@ describe("SecurityGuard workspace confinement", () => {
     expect(r.blocked).toBe(false);
   });
 
+  test("allows in-root access when the workspace root itself is behind a symlink", () => {
+    // Replicates macOS /tmp -> /private/tmp: the root path is not the canonical
+    // path, so realpath(target) lands in a different lexical tree than `root`.
+    const alias = join(base, "alias");
+    symlinkSync(base, alias);
+    const linkedRoot = join(alias, "ws");
+    const guard = new SecurityGuard([], undefined, { workspaceRoot: linkedRoot });
+    const r = guard.checkTool("read_file", { path: join(linkedRoot, "inside.txt") }, linkedRoot);
+    expect(r.blocked).toBe(false);
+  });
+
   test("blocks symlink that escapes the workspace", () => {
     symlinkSync(join(outside, "secret.txt"), join(root, "evil.txt"));
     const guard = new SecurityGuard([], undefined, { workspaceRoot: root });
