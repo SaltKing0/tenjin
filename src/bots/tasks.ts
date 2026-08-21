@@ -64,7 +64,7 @@ export function listTasks(home: string, bot: string): BotTask[] {
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
-/** Read a task for status purposes across all bots (task ids are unique). */
+/** Read a single persisted task (by target bot + task id). */
 export function readTaskForStatus(home: string, bot: string, taskId: string): BotTask | null {
   return readTask(home, bot, taskId);
 }

@@ -8,6 +8,8 @@ import {
   createAskBotAsyncTool,
   createBotTaskStatusTool,
   listTasks,
+  startAsyncTask,
+  readTaskForStatus,
   type BotTask,
 } from "../src/bots/tasks";
 import type { ChatRequest, ChatResponse, Provider } from "../src/provider/types";
@@ -166,11 +168,6 @@ describe("ask_bot_async", () => {
  * Test helpers — reach into the module to start a task and await it,
  * and to poll persisted status when a timeout must elapse.
  * ------------------------------------------------------------------ */
-
-import {
-  startAsyncTask,
-  readTaskForStatus,
-} from "../src/bots/tasks";
 
 function startAsyncForTest(provider: Provider) {
   return startAsyncTask(
