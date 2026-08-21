@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getSettings, applySettings, detectModels } from "../src/gateway/settings";
+import { getSettings, applySettings, detectModels, DetectTimeoutError } from "../src/gateway/settings";
 import { loadConfig, providersFile } from "../src/config/loader";
 import { ProviderRegistry } from "../src/provider/registry";
 import type { HarnessConfig } from "../src/config/types";
@@ -166,8 +166,34 @@ describe("detectModels", () => {
     });
     try {
       await expect(
-        detectModels({ provider: "openai", baseUrl: `http://localhost:${server.port}/v1`, apiKey: "bad" }),
+        detectModels({ provider: "openai", baseUrl: `http://localhost:${server.port}/v1`, apiKey: "sk-test" }),
       ).rejects.toThrow(/401/);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("hanging server times out after injected timeoutMs", async () => {
+    // HTTP server that accepts connections but never responds
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Promise<Response>(() => {
+          // never resolve
+        }),
+    });
+    try {
+      const t = 150; // quick timeout
+      const started = Date.now();
+      await expect(
+        detectModels(
+          { provider: "openai", baseUrl: `http://127.0.0.1:${server.port}/v1`, apiKey: "sk-test" },
+          t,
+        ),
+      ).rejects.toThrow(DetectTimeoutError);
+      const elapsed = Date.now() - started;
+      expect(elapsed).toBeGreaterThanOrEqual(t - 50);
+      expect(elapsed).toBeLessThan(t * 4); // generous upper bound
     } finally {
       server.stop(true);
     }
@@ -237,6 +263,54 @@ describe("live-apply through gateway objects", () => {
       expect(reloaded.model).toBe("console-model");
     } finally {
       server?.stop();
+    }
+  });
+
+  test("detect endpoint returns 504 with provider hint on timeout", async () => {
+    const { startHttpServer } = await import("../src/gateway/http");
+    const { createConsoleApi } = await import("../src/gateway/console-api");
+    const { AuditLog } = await import("../src/audit/log");
+
+    const { deps, registry } = setup();
+    // upstream that never responds
+    const upstream = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Promise<Response>(() => {
+          // never resolve
+        }),
+    });
+    let server: any = null;
+    try {
+      server = startHttpServer({
+        config: { port: 0, host: "127.0.0.1", token: "t" },
+        handleMessage: async () => null,
+        status: () => ({}),
+        api: createConsoleApi({
+          home,
+          cwd: home,
+          config: deps.config,
+          registry,
+          audit: new AuditLog(join(home, "audit.jsonl")),
+        }),
+      });
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/settings/detect`, {
+        method: "POST",
+        headers: { authorization: "Bearer t", "content-type": "application/json" },
+        body: JSON.stringify({
+          provider: "openai",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          apiKey: "sk-test",
+          timeoutMs: 150,
+        }),
+      });
+      expect(res.status).toBe(504);
+      const body = (await res.json()) as { error?: string };
+      expect(body.error).toContain("openai /models");
+      expect(body.error).toContain("timed out");
+    } finally {
+      server?.stop();
+      upstream.stop(true);
     }
   });
 });
