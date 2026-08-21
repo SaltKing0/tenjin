@@ -10,8 +10,12 @@ import {
   listTasks,
   startAsyncTask,
   readTaskForStatus,
+  writeTask,
+  findTaskById,
   type BotTask,
+  type AsyncTaskDeps,
 } from "../src/bots/tasks";
+import { listMessages } from "../src/bots/inbox";
 import type { ChatRequest, ChatResponse, Provider } from "../src/provider/types";
 import type { HarnessConfig, ProviderName } from "../src/config/types";
 
@@ -161,6 +165,134 @@ describe("ask_bot_async", () => {
     const r = await call(makeStatusTool(), "bot_task_status", { task_id: "nope-123" });
     expect(r.ok).toBe(false);
     expect(r.output).toContain("unknown task");
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Delegation chains (#128): dependsOn, notifyBot, cycle rejection,
+ * dependency-timeout cascade.
+ * ------------------------------------------------------------------ */
+
+function deps(provider: Provider, over: Partial<AsyncTaskDeps> = {}): AsyncTaskDeps {
+  return {
+    home,
+    fromBot: "writer",
+    cwd: home,
+    getProvider: () => provider,
+    globalConfig: globalConfig(),
+    defaultTimeoutMs: 5000,
+    ...over,
+  };
+}
+
+/** Provider that records every request and answers with a fixed reply. */
+function capturingProvider(reply: string): Provider & { requests: ChatRequest[] } {
+  const requests: ChatRequest[] = [];
+  return {
+    name: "capture",
+    requests,
+    async chat(req: ChatRequest): Promise<ChatResponse> {
+      requests.push(req);
+      return {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: reply }],
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    },
+  };
+}
+
+describe("delegation chains", () => {
+  test("dependsOn waits for the dependency and injects its result into the prompt", async () => {
+    const dep = startAsyncTask(deps(delayedProvider(0, "RESULT_A")), {
+      targetBot: "researcher",
+      message: "step A",
+    });
+    const depFinal = await dep.settled;
+    expect(depFinal.status).toBe("done");
+    expect(depFinal.result).toContain("RESULT_A");
+
+    const capture = capturingProvider("CHAIN_ANSWER");
+    const chain = startAsyncTask(deps(capture), {
+      targetBot: "researcher",
+      message: "step B",
+      dependsOn: dep.task_id,
+    });
+    const chainFinal = await chain.settled;
+    expect(chainFinal.status).toBe("done");
+    expect(chainFinal.result).toContain("CHAIN_ANSWER");
+
+    // the dependency's result was placed into the dependent's prompt
+    const userMsg = capture.requests[0]?.messages[0]?.content;
+    expect(String(userMsg)).toContain("RESULT_A");
+    expect(String(userMsg)).toContain("step B");
+  });
+
+  test("a cycle is rejected at creation", () => {
+    // Fabricate two persisted tasks that reference each other via dependsOn.
+    const base = {
+      bot: "researcher",
+      message: "x",
+      status: "pending" as const,
+      timeoutMs: 1000,
+      createdAt: new Date().toISOString(),
+    };
+    writeTask(home, "researcher", { ...base, id: "T1", dependsOn: "T2" });
+    writeTask(home, "researcher", { ...base, id: "T2", dependsOn: "T1" });
+
+    expect(() =>
+      startAsyncTask(deps(delayedProvider(0, "x")), {
+        targetBot: "researcher",
+        message: "m",
+        dependsOn: "T1",
+      }),
+    ).toThrow(/circular dependency/);
+  });
+
+  test("an unknown dependency is rejected", () => {
+    expect(() =>
+      startAsyncTask(deps(delayedProvider(0, "x")), {
+        targetBot: "researcher",
+        message: "m",
+        dependsOn: "does-not-exist",
+      }),
+    ).toThrow(/unknown dependency/);
+  });
+
+  test("a dependency timeout cascades to the dependent task", async () => {
+    // dependency hangs and times out on its own
+    const dep = startAsyncTask(deps(hangProvider(), { defaultTimeoutMs: 30 }), {
+      targetBot: "researcher",
+      message: "never finishes",
+      timeoutMs: 30,
+    });
+    const depFinal = await dep.settled;
+    expect(depFinal.status).toBe("error");
+
+    // dependent sees the failed dependency and fails instead of running
+    const chain = startAsyncTask(deps(delayedProvider(0, "SHOULD NOT RUN")), {
+      targetBot: "researcher",
+      message: "after dep",
+      dependsOn: dep.task_id,
+    });
+    const chainFinal = await chain.settled;
+    expect(chainFinal.status).toBe("error");
+    expect(chainFinal.error).toMatch(/dependency/);
+  });
+
+  test("notifyBot writes a completion message to that bot's inbox", async () => {
+    const started = startAsyncTask(deps(delayedProvider(0, "HELLO_NOTIFY")), {
+      targetBot: "researcher",
+      message: "ping",
+      notifyBot: "writer",
+    });
+    const final = await started.settled;
+    expect(final.status).toBe("done");
+
+    const notes = listMessages(join(botDir(home, "writer"), "inbox"));
+    const note = notes.find((m) => m.from === "researcher");
+    expect(note).toBeTruthy();
+    expect(note!.body).toContain("HELLO_NOTIFY");
   });
 });
 
