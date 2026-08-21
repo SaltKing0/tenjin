@@ -10,6 +10,7 @@ import {
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { emit } from "./events";
+import { Redactor } from "../security/redact";
 
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
 
@@ -46,17 +47,25 @@ export function createRequest(
     tool: string;
     inputSummary?: string;
     input?: unknown;
+    /** Mask secrets in the stored input/summary before they reach disk / notices. */
+    redactor?: Redactor;
   },
 ): ApprovalRequest {
   mkdirSync(approvalsDir(home), { recursive: true });
+  // #177: approvals must not bypass the redaction layer. The full tool input
+  // (and the summary, when a full input is missing) is masked before it lands
+  // on disk or in an outbound notice — matching session/audit redaction.
+  const redactor = fields.redactor ?? new Redactor();
   const rawInput = fields.input !== undefined ? fields.input : fields.inputSummary ?? "";
-  const summarySource = fields.inputSummary ?? summarizeInput(rawInput);
+  const maskedInput = redactor.redactValue(rawInput);
+  const summarySource = fields.inputSummary ?? summarizeInput(maskedInput);
+  const maskedSummary = redactor.redact(summarySource);
   const req: ApprovalRequest = {
     id: randomUUID().slice(0, 8),
     bot: fields.bot,
     tool: fields.tool,
-    inputSummary: summarySource.replace(/\s+/g, " ").trim().slice(0, 300),
-    input: rawInput,
+    inputSummary: maskedSummary.replace(/\s+/g, " ").trim().slice(0, 300),
+    input: maskedInput,
     ts: new Date().toISOString(),
     status: "pending",
   };

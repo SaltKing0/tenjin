@@ -152,15 +152,20 @@ export function createMessageHandler(deps: HandlerDeps) {
     if (deps.allowWrites) {
       approve = async (toolName: string, group: "read" | "write", input: unknown) => {
         if (group === "read") return true;
+        const redactor = Redactor.fromConfig(deps.config.security);
         const req = createRequest(deps.home, {
           bot: botName,
           tool: toolName,
           input,
+          redactor,
         });
         const notice =
           `Approval needed [${req.id}]\nbot: ${botName}\ntool: ${toolName}\n${req.inputSummary}\nReply /approve ${req.id} or /deny ${req.id}`;
+        // #177: never ship a raw secret to Telegram/Slack/Webhook — the summary
+        // is already redacted at creation; additionally mask the full notice.
+        const maskedNotice = redactor.redact(notice);
         if (ctx.chatId !== undefined && deps.notifyApproval) {
-          await deps.notifyApproval(ctx.chatId, notice);
+          await deps.notifyApproval(ctx.chatId, maskedNotice);
         } else {
           deps.log(`approval requested [${req.id}] (${toolName}) — no channel to notify`);
         }

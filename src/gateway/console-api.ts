@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { HarnessConfig } from "../config/types";
 import { ConfigError } from "../config/types";
+import { Redactor } from "../security/redact";
 import type { ProviderRegistry } from "../provider/registry";
 import {
   listBots,
@@ -550,10 +551,17 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
       if (id === "bulk") return json({ error: "not found" }, 404);
       const found = getRequest(deps.home, id);
       if (!found) return json({ error: "not found" }, 404);
+      // #177: never return raw secrets. New records are redacted at creation,
+      // but older ones (or records written before redaction was added) could
+      // still carry the full input — mask before responding.
+      const redactor = Redactor.fromConfig(deps.config.security);
+      const maskedInput = redactor.redactValue(found.input ?? found.inputSummary ?? "");
+      const maskedSummary = redactor.redact(found.inputSummary ?? "");
       return json({
         ...found,
-        input: found.input ?? found.inputSummary,
-        diff: approvalDiff(found.tool, found.input, deps.cwd),
+        input: maskedInput,
+        inputSummary: maskedSummary,
+        diff: approvalDiff(found.tool, maskedInput, deps.cwd),
       });
     }
     if (approvalMatch && req.method === "POST") {
