@@ -170,6 +170,22 @@ tenjin audit --bot researcher
 or from the web console's `/api/audit`. Because audit strings pass through the
 redactor, the trail is both complete and free of plaintext secrets.
 
+## 6. Secrets at rest & backups
+
+API keys are encrypted under a machine-local secret stored in a 0600 keyfile,
+`.tenjin-keyring` in the home (`src/security/keyring.ts`). This encryption is
+opt-in via `tenjin keyring init`; without a keyfile `providers.yaml` stays
+plaintext exactly as before.
+
+Backups never carry key material: `providers.yaml`, `secrets/` and
+`.tenjin-keyring` are excluded from `tenjin backup`, and `tenjin restore`
+refuses to write any of them back even if a foreign archive happens to contain
+them. Restoring the keyring therefore never happens through a backup — moving
+a home to a new machine is an **out-of-band** step: run `tenjin keyring init`
+on the new machine and re-save the encrypted keys (e.g. re-add each provider
+with its key), never by copying `.tenjin-keyring` (a backup would also bypass
+the 0600 protection and clobber a fresher machine-local secret).
+
 ## Summary
 
 | Control | Config key | Default | What it stops |

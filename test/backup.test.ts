@@ -54,6 +54,8 @@ function buildHome(root: string): string {
   writeFileSync(join(root, "providers.yaml"), "providers:\n  openai:\n    apiKey: sk-SECRETLIVE\n");
   mkdirSync(join(root, "secrets"), { recursive: true });
   writeFileSync(join(root, "secrets/key"), "hunter2\n");
+  // machine-local AES secret behind #132 — must never travel either
+  writeFileSync(join(root, ".tenjin-keyring"), "KEYRING-SECRET-0f3a9c\n");
   // a path longer than 100 chars exercises the USTAR prefix field
   const longRel = `sessions/deep/${"x".repeat(140)}/log.jsonl`;
   mkdirSync(join(root, longRel.split("/").slice(0, -1).join("/")), { recursive: true });
@@ -102,6 +104,8 @@ test("backup writes an archive that excludes secrets", () => {
   // secret paths never backed up
   expect(res.files.some((f) => f === "providers.yaml")).toBe(false);
   expect(res.files.some((f) => f.startsWith("secrets/"))).toBe(false);
+  // the machine-local keyring never travels either
+  expect(res.files.some((f) => f === ".tenjin-keyring")).toBe(false);
   // data is present
   for (const f of [
     "config.yaml",
@@ -117,6 +121,7 @@ test("backup writes an archive that excludes secrets", () => {
   const rawTar = gunzipSync(readFileSync(outFile));
   expect(rawTar.includes(Buffer.from("sk-SECRETLIVE"))).toBe(false);
   expect(rawTar.includes(Buffer.from("hunter2"))).toBe(false);
+  expect(rawTar.includes(Buffer.from("KEYRING-SECRET-0f3a9c"))).toBe(false);
 });
 
 test("roundtrip backup -> restore reproduces the home without secrets", () => {
@@ -143,6 +148,41 @@ test("roundtrip backup -> restore reproduces the home without secrets", () => {
   // secrets are never written back, even when the source has them
   expect(existsSync(join(target, "providers.yaml"))).toBe(false);
   expect(existsSync(join(target, "secrets"))).toBe(false);
+  expect(existsSync(join(target, ".tenjin-keyring"))).toBe(false);
+});
+
+test("restore never overwrites a machine-local keyring from a foreign archive", () => {
+  // the target machine already has its own keyring with a different secret
+  mkdirSync(target, { recursive: true });
+  writeFileSync(join(target, ".tenjin-keyring"), "FRESHER-KEYRING-9c42\n");
+  writeFileSync(join(target, "config.yaml"), "local-config\n");
+
+  // craft an archive that smuggles a stale keyring and a provider key
+  const meta: BackupMeta = {
+    format: BACKUP_FORMAT,
+    version: BACKUP_CONTAINER_VERSION,
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+    createdAt: new Date().toISOString(),
+    files: [".tenjin-keyring", "sessions/s1/events.jsonl"],
+  };
+  const archive = join(tmpdir(), `k-${Math.random().toString(36).slice(2)}.tar.gz`);
+  writeFileSync(
+    archive,
+    craftArchive(meta, {
+      ".tenjin-keyring": Buffer.from("STALE-KEYRING-deadbeef\n"),
+      "sessions/s1/events.jsonl": Buffer.from('{"t":"session_start"}\n'),
+    }),
+  );
+
+  restoreHome(target, archive);
+
+  // the fresher local keyring survives untouched, so encrypted keys stay readable
+  expect(readFileSync(join(target, ".tenjin-keyring"), "utf8")).toBe("FRESHER-KEYRING-9c42\n");
+  // but the legitimate non-secret data from the archive is restored
+  expect(readFileSync(join(target, "sessions/s1/events.jsonl"), "utf8")).toBe(
+    '{"t":"session_start"}\n',
+  );
+  rmSync(archive, { force: true });
 });
 
 test("restore rejects non-gzip and archives without a manifest", () => {
