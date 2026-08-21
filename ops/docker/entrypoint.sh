@@ -18,8 +18,11 @@ cd "${TENJIN_APP_DIR:-/app}"
 export TENJIN_HOME="${TENJIN_HOME:-/data}"
 mkdir -p "$TENJIN_HOME"
 
-# #239 fail closed: no gateway with a missing/example REST token.
-sh check-token.sh
+# #239 fail closed: no gateway with a missing/example REST token. Resolve the
+# guard relative to this script (not the cwd) so it works regardless of
+# TENJIN_APP_DIR / the mount layout.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+sh "$SCRIPT_DIR/check-token.sh"
 
 # Resolve the seed bot name. ENV override wins; otherwise read the first
 # top-level `defaultBot:` from the mounted config.yaml (ignoring comments);

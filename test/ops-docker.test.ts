@@ -31,7 +31,9 @@ describe("docker compose host binding (#239)", () => {
 
   test("entrypoint fails closed before starting the gateway (#239)", () => {
     const entrypoint = readFileSync(resolve(OPS_DIR, "entrypoint.sh"), "utf8");
-    expect(entrypoint).toContain("sh check-token.sh");
+    // The guard is invoked (resolved relative to the script path so it works
+    // under any TENJIN_APP_DIR / mount layout).
+    expect(entrypoint).toContain("check-token.sh");
   });
 });
 

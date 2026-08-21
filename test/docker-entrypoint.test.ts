@@ -57,6 +57,9 @@ exit 0
       TENJIN_HOME: home,
       TENJIN_APP_DIR: appDir,
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      // The entrypoint (since #239) fail-closes without a strong GATEWAY_TOKEN —
+      // give the test a non-example one so it reaches the seeding logic.
+      GATEWAY_TOKEN: "entrypoint-test-token",
     };
     const res = Bun.spawnSync([ENTRYPOINT, ...cmd], { env });
     return {
@@ -96,6 +99,7 @@ exit 0
       TENJIN_APP_DIR: appDir,
       TENJIN_DEFAULT_BOT: "fromenv",
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      GATEWAY_TOKEN: "entrypoint-test-token",
     };
     const res = Bun.spawnSync([ENTRYPOINT, "echo", "UP"], { env });
     expect(res.exitCode).toBe(0);
