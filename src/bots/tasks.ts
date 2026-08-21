@@ -12,6 +12,7 @@ import { formatUSD } from "../agent/budget";
 import { sendMessage } from "./inbox";
 import type { ToolDef } from "../tools/registry";
 import type { Budget } from "../agent/budget";
+import type { EffortLevel } from "../agent/effort";
 
 /**
  * Async delegation: fire-and-forget `ask_bot` with a task id, persisted status
@@ -41,6 +42,8 @@ export interface BotTask {
   dependsOn?: string;
   /** #128: bot inbox notified on completion instead of only the caller. */
   notifyBot?: string;
+  /** #142: effort dial; overrides the target bot's configured effort. */
+  effort?: EffortLevel;
 }
 
 export const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
@@ -181,6 +184,9 @@ function notifyCompletion(home: string, task: BotTask): void {
  * `dependsOn` is set the run is deferred until that task is `done`.
  */
 export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): StartedTask {
+  /** #142: effort dial; overrides the target bot's configured effort. */
+  effort?: EffortLevel;
+}): StartedTask {
   const targetName = String(args.targetBot ?? "").trim();
   if (targetName === deps.fromBot) {
     throw new ConfigError("cannot delegate to yourself");
@@ -188,6 +194,8 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
   const profile = resolveBot(deps.home, targetName);
   const message = String(args.message ?? "").trim();
   if (!message) throw new ConfigError("message must not be empty");
+  // #142: a per-task effort overrides the bot's configured effort.
+  const effort = args.effort ?? profile.config.effort;
 
   // #128: notifyBot must be a real, distinct bot (its inbox is written on completion).
   const notifyBot = args.notifyBot ? String(args.notifyBot).trim() : "";
@@ -292,6 +300,7 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
         sessionLogDir: profile.sessionsDir,
         sessionBot: profile.name,
         signal: controller.signal,
+        effort,
       });
 
       const meta = `[delegated to ${profile.name} (${ref.provider}:${ref.model}), ${formatUSD(result.costUSD)}]`;
@@ -332,6 +341,7 @@ export function createAskBotAsyncTool(deps: AsyncTaskDeps): ToolDef {
         timeoutMs: { type: "number", description: "Optional per-task timeout in ms" },
         dependsOn: { type: "string", description: "Optional task_id this task waits for before starting" },
         notifyBot: { type: "string", description: "Optional bot inbox to notify on completion" },
+        effort: { type: "string", description: "Optional effort level: low/medium/high/max (overrides the bot's)" },
       },
       required: ["bot", "message"],
     },
@@ -342,6 +352,7 @@ export function createAskBotAsyncTool(deps: AsyncTaskDeps): ToolDef {
         timeoutMs: args.timeoutMs == null ? undefined : Number(args.timeoutMs),
         dependsOn: args.dependsOn == null ? undefined : String(args.dependsOn).trim(),
         notifyBot: args.notifyBot == null ? undefined : String(args.notifyBot).trim(),
+        effort: args.effort == null ? undefined : (args.effort as EffortLevel),
       });
       return JSON.stringify({ task_id: started.task_id, status: "pending" });
     },

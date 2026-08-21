@@ -57,6 +57,7 @@ Per-bot `~/.tenjin/bots/<name>/config.yaml`:
 ```yaml
 model: openai:gpt-4o-mini   # override the default model for this bot
 budgetUSD: 2                # cap this bot's spend; falls back to global budgetUSD
+effort: medium              # dial run limits: low | medium | high | max (tokens, iterations; low = read-only)
 security:
   policy: read-only         # cap tools: none | read-only | full (never upgrades the caller)
   blockedPatterns:          # extra globs, unioned with the global guard

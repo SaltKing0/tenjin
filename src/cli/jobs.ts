@@ -214,6 +214,7 @@ export async function runJob(
       sessionBot: profile.name,
       guard: guardForBot(deps.config.security, profile.config.security, undefined),
       paranoid: resolveParanoid(deps.config.security, profile.config.security),
+      effort: profile.config.effort,
       redactor: Redactor.fromConfig(deps.config.security),
       audit: deps.audit,
     });

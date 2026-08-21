@@ -14,6 +14,7 @@ import { resolveModelRef, defaultModelRef, type ModelRef } from "../config/model
 import { sanitizeSkillName } from "../skills/loader";
 import { parseSchedule, parseEvery } from "../gateway/schedule";
 import type { ToolPolicy } from "../agent/headless";
+import { isEffortLevel, EFFORT_LEVELS, type EffortLevel } from "../agent/effort";
 
 export function botsDir(home: string): string {
   return join(home, "bots");
@@ -59,6 +60,8 @@ export interface BotConfig {
   telegram?: BotTelegramConfig;
   routines?: BotRoutineConfig[];
   heartbeat?: BotHeartbeatConfig;
+  /** #142: low/medium/high/max effort dial for this bot's runs. */
+  effort?: EffortLevel;
 }
 
 export interface BotProfile {
@@ -215,6 +218,12 @@ function parseBotConfig(raw: Record<string, unknown>): BotConfig {
   if (routines) cfg.routines = routines;
   const heartbeat = parseBotHeartbeat(raw.heartbeat);
   if (heartbeat) cfg.heartbeat = heartbeat;
+  if (raw.effort !== undefined) {
+    if (!isEffortLevel(raw.effort)) {
+      throw new ConfigError(`bot effort must be one of: ${EFFORT_LEVELS.join(", ")}`);
+    }
+    cfg.effort = raw.effort;
+  }
   return cfg;
 }
 

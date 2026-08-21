@@ -71,14 +71,17 @@ export interface AgentTurnOptions {
   signal?: AbortSignal;
   /** Resolved context-window guard (#101); runs before each provider call. */
   contextGuard?: import("../session/context").ContextGuardConfig | null;
+  /** Override MAX_ITERATIONS (e.g. per effort level). */
+  maxIterations?: number;
 }
 
 export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> {
   const totals: Usage = { inputTokens: 0, outputTokens: 0 };
   let costUSD = 0;
   let lastText = "";
+  const maxIterations = opts.maxIterations ?? MAX_ITERATIONS;
 
-  for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+  for (let iteration = 0; iteration < maxIterations; iteration++) {
     if (opts.budget.exhausted) {
       opts.audit?.("budget_halt", `halted at ${opts.budget.spentUSD.toFixed(4)} USD`, opts.correlationId);
       return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText };
