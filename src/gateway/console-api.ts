@@ -9,6 +9,7 @@ import { renderTrajectory } from "../session/trajectory";
 import { aggregateSpend } from "../audit/spend";
 import { AuditLog } from "../audit/log";
 import { approvalsDir, getRequest, resolveRequest } from "./approvals";
+import { getSettings, applySettings, detectModels } from "./settings";
 import { sessionsDir } from "../config/loader";
 
 export interface ConsoleApiDeps {
@@ -34,6 +35,50 @@ function json(data: unknown, status = 200): Response {
 export function createConsoleApi(deps: ConsoleApiDeps) {
   return async (req: Request, url: URL): Promise<Response | null> => {
     const path = url.pathname;
+
+    if (path === "/api/settings" && req.method === "GET") {
+      return json(getSettings({ home: deps.home, config: deps.config, registry: deps.registry }));
+    }
+
+    if (path === "/api/settings" && req.method === "POST") {
+      let body: Parameters<typeof applySettings>[1];
+      try {
+        body = (await req.json()) as typeof body;
+      } catch {
+        return json({ error: "invalid json" }, 400);
+      }
+      try {
+        const settingsDeps = {
+          home: deps.home,
+          config: deps.config,
+          registry: deps.registry,
+          audit: (detail: string) => deps.audit.append("settings_changed", "console", detail),
+        };
+        applySettings(settingsDeps, body);
+        return json({ ok: true, settings: getSettings(settingsDeps) });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 400);
+      }
+    }
+
+    if (path === "/api/settings/detect" && req.method === "POST") {
+      let body: { provider?: unknown; baseUrl?: unknown; apiKey?: unknown };
+      try {
+        body = (await req.json()) as typeof body;
+      } catch {
+        return json({ error: "invalid json" }, 400);
+      }
+      try {
+        const models = await detectModels({
+          provider: String(body.provider ?? ""),
+          baseUrl: body.baseUrl ? String(body.baseUrl) : undefined,
+          apiKey: body.apiKey ? String(body.apiKey) : undefined,
+        });
+        return json({ models });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 400);
+      }
+    }
 
     if (path === "/api/bots" && req.method === "GET") {
       const bots = listBots(deps.home).map((name) => {

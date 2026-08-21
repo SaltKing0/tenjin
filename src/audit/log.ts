@@ -9,7 +9,8 @@ export type AuditKind =
   | "channel_reject"
   | "delegation"
   | "gateway_msg"
-  | "data_delete";
+  | "data_delete"
+  | "settings_changed";
 
 export interface AuditEvent {
   ts: string;
