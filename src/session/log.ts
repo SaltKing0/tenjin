@@ -15,6 +15,7 @@ export interface SessionSummary {
   path: string;
   mtimeMs: number;
   preview: string;
+  parentId?: string;
 }
 
 export class SessionLog {
@@ -46,6 +47,33 @@ export class SessionLog {
     return SessionLog.open(join(dir, match));
   }
 
+  static fork(sourceDir: string, sourceIdPrefix: string, uptoEvent?: number): SessionLog {
+    const source = SessionLog.resolve(sourceDir, sourceIdPrefix);
+    const events = source.events();
+    const count =
+      uptoEvent === undefined
+        ? events.length
+        : Math.max(0, Math.min(uptoEvent, events.length));
+
+    const forked = SessionLog.create(sourceDir);
+    const sourceStart = events.find((e) => e.t === "session_start");
+    const start = sourceStart?.t === "session_start" ? sourceStart : undefined;
+
+    forked.append({
+      t: "session_start",
+      id: forked.id,
+      ts: new Date().toISOString(),
+      provider: start?.provider ?? "",
+      model: start?.model ?? "",
+      parent: { id: source.id, uptoEvent: count },
+    });
+    for (const event of events.slice(0, count)) {
+      if (event.t === "session_start") continue;
+      forked.append(event);
+    }
+    return forked;
+  }
+
   static list(dir: string): SessionSummary[] {
     if (!existsSync(dir)) return [];
     const summaries: SessionSummary[] = [];
@@ -58,11 +86,13 @@ export class SessionLog {
       } catch {
         continue;
       }
+      const meta = scanMeta(path);
       summaries.push({
         id: idFromPath(path),
         path,
         mtimeMs,
-        preview: firstUserMessage(path),
+        preview: meta.preview,
+        parentId: meta.parentId,
       });
     }
     return summaries.sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -98,16 +128,22 @@ function idFromPath(path: string): string {
   return base.replace(/\.jsonl$/, "");
 }
 
-function firstUserMessage(path: string): string {
+function scanMeta(path: string): { preview: string; parentId?: string } {
+  let preview = "(no user messages)";
+  let parentId: string | undefined;
   try {
     for (const line of readFileSync(path, "utf8").split("\n")) {
       if (!line.trim()) continue;
       try {
         const e = JSON.parse(line) as SessionEvent;
-        if (e.t === "message" && e.role === "user") {
-          const text = typeof e.content === "string" ? e.content : "[blocks]";
-          return text.length > 60 ? `${text.slice(0, 60)}…` : text;
+        if (e.t === "session_start" && e.parent && parentId === undefined) {
+          parentId = e.parent.id;
         }
+        if (preview === "(no user messages)" && e.t === "message" && e.role === "user") {
+          const text = typeof e.content === "string" ? e.content : "[blocks]";
+          preview = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+        }
+        if (preview !== "(no user messages)" && parentId !== undefined) break;
       } catch {
         continue;
       }
@@ -115,5 +151,5 @@ function firstUserMessage(path: string): string {
   } catch {
     // unreadable
   }
-  return "(no user messages)";
+  return { preview, parentId };
 }

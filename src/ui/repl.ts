@@ -196,7 +196,8 @@ async function handleCommand(
       }
       for (const s of all.slice(0, 15)) {
         const when = new Date(s.mtimeMs).toISOString().replace("T", " ").slice(0, 16);
-        stdout.write(`${s.id}  ${dim(`${when}  ${s.preview}`)}\n`);
+        const lineage = s.parentId ? dim(` ↳ forked from ${s.parentId}`) : "";
+        stdout.write(`${s.id}  ${dim(`${when}  ${s.preview}`)}${lineage}\n`);
       }
       return;
     }

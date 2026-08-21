@@ -1,7 +1,19 @@
 import type { ChatMessage, ContentBlock, Role } from "../provider/types";
 
+export interface SessionParent {
+  id: string;
+  uptoEvent: number;
+}
+
 export type SessionEvent =
-  | { t: "session_start"; id: string; ts: string; provider: string; model: string }
+  | {
+      t: "session_start";
+      id: string;
+      ts: string;
+      provider: string;
+      model: string;
+      parent?: SessionParent;
+    }
   | { t: "message"; role: Role; content: string | ContentBlock[]; ts: string }
   | { t: "tool_call"; id: string; name: string; input: unknown; ts: string }
   | { t: "tool_result"; id: string; name: string; ok: boolean; output: string; ts: string }
