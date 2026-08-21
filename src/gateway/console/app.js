@@ -13,6 +13,13 @@ import { lastRunStatus, runStatusView, historyTones } from "./job-status.js";
 import { panelGroups } from "./sidebar-groups.js";
 
 import { connectionView } from "./topbar-state.js";
+import {
+  approvalBadgeText,
+  approvalBadgeClass,
+  browserTitle,
+  approvalLine,
+  approvalAge,
+} from "./approval-badge.js";
 
 const $app = document.getElementById("app");
 
@@ -31,6 +38,11 @@ let token = localStorage.getItem("tenjin_token") || "";
 let suppressFirstRun = false;
 let currentBot = localStorage.getItem("tenjin_bot") || "solo";
 let bots = [];
+// #296: live pending-approval counter for the TopBar (SSE-driven), mirrored to
+// the document title so a pending cross-surface approval is visible anywhere.
+let approvalCount = 0;
+let approvalBadgeEl = null;
+let approvalDropdown = null;
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -1027,6 +1039,82 @@ function approvalActionButtons(req, onDone) {
   );
 }
 
+// #296: resolve a pending approval from the dropdown. Small wrapper shared by
+// the TopBar dropdown and the Approvals panel so one approve/deny works in both.
+async function resolveApproval(id, action) {
+  await apiJson(`/api/approvals/${id}`, {
+    method: "POST",
+    body: JSON.stringify({ action }),
+  });
+}
+
+// #296: fetch pending approvals, update the TopBar badge + document title, and
+// rebuild the dropdown body. Called on render and on every approval SSE event.
+async function refreshApprovalBadge() {
+  let pending = [];
+  try {
+    const data = await apiJson("/api/approvals");
+    pending = data.pending || [];
+  } catch {
+    pending = [];
+  }
+  approvalCount = pending.length;
+  if (approvalBadgeEl) {
+    approvalBadgeEl.textContent = approvalBadgeText(approvalCount);
+    approvalBadgeEl.className = approvalBadgeClass(approvalCount);
+    approvalBadgeEl.title = approvalCount > 0 ? `${approvalCount} pending approval${approvalCount === 1 ? "" : "s"}` : "no pending approvals";
+  }
+  document.title = browserTitle(approvalCount);
+  if (approvalDropdown) buildApprovalDropdown(approvalDropdown, pending);
+  return pending;
+}
+
+// #296: render the dropdown listing pending approvals with inline approve/deny
+// and a link into the Approvals panel. `host` is the dropdown container.
+function buildApprovalDropdown(host, pending) {
+  host.replaceChildren();
+  if (pending.length === 0) {
+    host.append(el("div", { class: "dim", style: "padding:8px" }, "nothing pending"));
+    return;
+  }
+  const now = Date.now();
+  for (const req of pending) {
+    const row = el(
+      "div",
+      { class: "approval-dd-item" },
+      el("div", {}, approvalLine(req), el("span", { class: "dim" }, ` · ${approvalAge(req.ts, now)}`)),
+      el(
+        "div",
+        { style: "display:flex; gap:6px; margin-top:6px" },
+        el(
+          "button",
+          {
+            class: "primary",
+            onclick: async () => {
+              await resolveApproval(req.id, "approve");
+              refreshApprovalBadge();
+            },
+          },
+          "approve",
+        ),
+        el(
+          "button",
+          {
+            class: "danger",
+            onclick: async () => {
+              await resolveApproval(req.id, "deny");
+              refreshApprovalBadge();
+            },
+          },
+          "deny",
+        ),
+      ),
+    );
+    host.append(row);
+  }
+  host.append(el("a", { class: "approval-dd-all", href: "#approvals" }, "all approvals →"));
+}
+
 async function panelApprovals(main) {
   main.replaceChildren(el("h1", {}, "Approvals"));
   const container = el("div");
@@ -1355,7 +1443,23 @@ function buildTopBar() {
       budget.textContent = "budget n/a";
     });
   const docs = el("a", { class: "topbar-docs", href: DOCS_URL, target: "_blank", rel: "noopener" }, "docs");
-  const bar = el("div", { class: "topbar" }, sseIndicator, botSel, budget, docs);
+
+  // #296: live pending-approval badge + dropdown in the TopBar.
+  approvalDropdown = el("div", { class: "approval-dd", style: "display:none" });
+  approvalBadgeEl = el(
+    "button",
+    {
+      class: "topbar-approvals idle",
+      title: "no pending approvals",
+      onclick: () => {
+        const open = approvalDropdown.style.display !== "none";
+        approvalDropdown.style.display = open ? "none" : "block";
+        if (!open) refreshApprovalBadge();
+      },
+    },
+    approvalBadgeText(0),
+  );
+  const bar = el("div", { class: "topbar" }, sseIndicator, botSel, approvalBadgeEl, approvalDropdown, budget, docs);
   setSseUi();
   return bar;
 }
@@ -1509,7 +1613,12 @@ async function render() {
   if (!sseStarted) {
     sseStarted = true;
     connectEvents();
+    // #296: badge + title stay live as approvals are created/resolved anywhere
+    // (Jobs, Telegram, delegations) — not just when the Approvals panel is open.
+    onEvent("approval.created", refreshApprovalBadge);
+    onEvent("approval.resolved", refreshApprovalBadge);
   }
+  refreshApprovalBadge();
   try {
     await panel[2](main);
     prepareTables(main);

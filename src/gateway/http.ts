@@ -51,6 +51,8 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
 
   "/console/sidebar-groups.js": { file: "sidebar-groups.js", type: "application/javascript; charset=utf-8" },
   "/console/job-status.js": { file: "job-status.js", type: "application/javascript; charset=utf-8" },
+
+  "/console/approval-badge.js": { file: "approval-badge.js", type: "application/javascript; charset=utf-8" },
   "/console/style.css": { file: "style.css", type: "text/css; charset=utf-8" },
 };
 
