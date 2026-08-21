@@ -7,9 +7,9 @@ import { dispatch } from "../src/tools/registry";
 import { readTool } from "../src/tools/read";
 import { bashTool } from "../src/tools/bash";
 import { globTool } from "../src/tools/glob";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 describe("SecurityGuard path matching", () => {
   const guard = new SecurityGuard([...DEFAULT_BLOCKED_PATTERNS]);
@@ -158,5 +158,87 @@ describe("dispatch integration", () => {
     const guard = new SecurityGuard([".env"]);
     const r = await dispatch([globTool], "glob", { pattern: "*.env" }, { cwd: dir, guard });
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("SecurityGuard workspace confinement", () => {
+  let base: string;
+  let root: string;
+  let outside: string;
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "tj-ws-"));
+    root = join(base, "ws");
+    outside = join(base, "out");
+    mkdirSync(root, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(root, "inside.txt"), "inside data");
+    writeFileSync(join(outside, "secret.txt"), "outside data");
+  });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+
+  test("blocks .. traversal out of workspace root", () => {
+    const guard = new SecurityGuard([], undefined, { workspaceRoot: root });
+    const r = guard.checkTool("read_file", { path: "../out/secret.txt" }, root);
+    expect(r.blocked).toBe(true);
+    expect(r.reason).toBe("outside workspace");
+  });
+
+  test("blocks normalized traversal across slashes", () => {
+    const guard = new SecurityGuard([], undefined, { workspaceRoot: root });
+    // double slash + dot segments are normalized by path.resolve regardless
+    const r = guard.checkTool("read_file", { path: "sub/../..//out/secret.txt" }, root);
+    expect(r.blocked).toBe(true);
+  });
+
+  test("blocks absolute path outside workspace root", () => {
+    const guard = new SecurityGuard([], undefined, { workspaceRoot: root });
+    const r = guard.checkTool("read_file", { path: join(outside, "secret.txt") }, root);
+    expect(r.blocked).toBe(true);
+    expect(r.target).toBe(join(outside, "secret.txt"));
+  });
+
+  test("allows absolute path inside workspace", () => {
+    const guard = new SecurityGuard([], undefined, { workspaceRoot: root });
+    const r = guard.checkTool("read_file", { path: join(root, "inside.txt") }, root);
+    expect(r.blocked).toBe(false);
+  });
+
+  test("blocks symlink that escapes the workspace", () => {
+    symlinkSync(join(outside, "secret.txt"), join(root, "evil.txt"));
+    const guard = new SecurityGuard([], undefined, { workspaceRoot: root });
+    const r = guard.checkTool("read_file", { path: "evil.txt" }, root);
+    expect(r.blocked).toBe(true);
+  });
+
+  test("allowedPaths escape hatch permits external dirs", () => {
+    const guard = new SecurityGuard([], undefined, { workspaceRoot: root, allowedPaths: [outside] });
+    const r = guard.checkTool("read_file", { path: join(outside, "secret.txt") }, root);
+    expect(r.blocked).toBe(false);
+  });
+
+  test("defaults workspace root to cwd when not configured", () => {
+    const guard = new SecurityGuard([]);
+    const r = guard.checkTool("write_file", { path: "../out/secret.txt" }, root);
+    expect(r.blocked).toBe(true);
+  });
+
+  test("no cwd and no workspaceRoot skips confinement", () => {
+    const guard = new SecurityGuard([]);
+    expect(guard.checkTool("read_file", { path: "/etc/passwd" }).blocked).toBe(false);
+  });
+
+  test("dispatch integration blocks external absolute read", async () => {
+    const blocks: string[] = [];
+    const guard = new SecurityGuard([], (d) => blocks.push(d), { workspaceRoot: root });
+    const r = await dispatch(
+      [readTool],
+      "read_file",
+      { path: join(outside, "secret.txt") },
+      { cwd: root, guard },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.output).toContain("Blocked by security policy");
+    expect(blocks).toHaveLength(1);
   });
 });

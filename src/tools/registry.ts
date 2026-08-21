@@ -49,12 +49,15 @@ export async function dispatch(
     return { ok: false, output: `Missing required argument(s): ${missing.join(", ")}` };
   }
   if (ctx.guard) {
-    const guardResult = ctx.guard.checkTool(name, args);
+    const guardResult = ctx.guard.checkTool(name, args, ctx.cwd);
     if (guardResult.blocked) {
-      ctx.guard.onBlock?.(`${name} blocked by pattern "${guardResult.pattern}" target="${guardResult.target}"`);
+      const why = guardResult.pattern
+        ? `matches pattern "${guardResult.pattern}"`
+        : (guardResult.reason ? `rejected: ${guardResult.reason}` : "rejected by policy");
+      ctx.guard.onBlock?.(`${name} blocked (${why}) target="${guardResult.target ?? ""}"`);
       return {
         ok: false,
-        output: `Blocked by security policy: matches pattern "${guardResult.pattern}". Ask the user how to proceed.`,
+        output: `Blocked by security policy: ${why}. Ask the user how to proceed.`,
       };
     }
   }
