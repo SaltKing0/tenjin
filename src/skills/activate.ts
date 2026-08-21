@@ -46,6 +46,10 @@ export function createUseSkillTool(deps: {
 export function summarizeSkills(skills: Skill[]): string {
   if (skills.length === 0) return "no skills installed";
   return skills
-    .map((s) => `${s.name.padEnd(20)} ${s.source.padEnd(7)} ${s.description}`)
+    .map((s) =>
+      s.broken
+        ? `${s.name.padEnd(20)} ${s.source.padEnd(7)} [broken: ${s.broken}]`
+        : `${s.name.padEnd(20)} ${s.source.padEnd(7)} ${s.description}`,
+    )
     .join("\n");
 }

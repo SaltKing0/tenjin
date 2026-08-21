@@ -19,6 +19,7 @@ import { listSummaries } from "../memory/summaries";
 import { listSkills } from "../skills/loader";
 import { createUseSkillTool, summarizeSkills } from "../skills/activate";
 import { createSaveSkillTool } from "../tools/skill-writer";
+import { createListSkillsTool } from "../tools/skill-lister";
 
 export type ToolPolicy = "read-only" | "none" | "full";
 
@@ -61,6 +62,7 @@ export function toolsForPolicy(policy: ToolPolicy, skill?: SkillDirs): ToolDef[]
   const skillTools: ToolDef[] = [];
   if (skill && policy !== "none") {
     skillTools.push(createUseSkillTool({ home: skill.home, projectDir: skill.projectDir }));
+    skillTools.push(createListSkillsTool({ home: skill.home, projectDir: skill.projectDir }));
     if (policy === "full") {
       skillTools.push(createSaveSkillTool({ projectDir: skill.projectDir }));
     }

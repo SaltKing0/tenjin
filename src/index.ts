@@ -35,6 +35,7 @@ import { vectorEnabled } from "./config/loader";
 import { createRecallTool, createRememberTool, readFacts } from "./tools/memory";
 import { createUseSkillTool } from "./skills/activate";
 import { createSaveSkillTool } from "./tools/skill-writer";
+import { createListSkillsTool } from "./tools/skill-lister";
 import {
   resolveBot,
   botModelRef,
@@ -266,6 +267,7 @@ async function main(): Promise<number> {
     }
     tools.push(createUseSkillTool({ home, projectDir: cwd }));
     tools.push(createSaveSkillTool({ projectDir: cwd }));
+    tools.push(createListSkillsTool({ home, projectDir: cwd }));
     if (profile) {
       tools.push(createSendMessageTool({ home, fromBot: profile.name, policy: inboxPolicy }));
       tools.push(createCheckInboxTool({ profile, policy: inboxPolicy }));

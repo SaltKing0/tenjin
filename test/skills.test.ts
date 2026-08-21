@@ -11,6 +11,7 @@ import {
   skillTemplate,
 } from "../src/skills/loader";
 import { createSaveSkillTool } from "../src/tools/skill-writer";
+import { createListSkillsTool } from "../src/tools/skill-lister";
 import { buildSkillsSection, createUseSkillTool, summarizeSkills } from "../src/skills/activate";
 import { dispatch } from "../src/tools/registry";
 
@@ -68,14 +69,37 @@ test("getSkill returns null for unknown names", () => {
   expect(getSkill(home, project, "ghost")).toBeNull();
 });
 
-test("malformed skills are skipped silently", () => {
+test("malformed skills are surfaced as broken instead of skipped", () => {
   const dir = join(home, "skills", "broken");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), "no frontmatter");
   const dir2 = join(home, "skills", "noname");
   mkdirSync(dir2, { recursive: true });
   writeFileSync(join(dir2, "SKILL.md"), "---\ndescription: no name\n---\nbody");
-  expect(listSkills(home, project)).toEqual([]);
+
+  const all = listSkills(home, project);
+  expect(all).toHaveLength(2);
+  const names = all.map((s) => s.name).sort();
+  expect(names).toEqual(["broken", "noname"]);
+  for (const s of all) {
+    expect(s.broken).toBeTruthy();
+    expect(s.path).toContain("SKILL.md");
+    expect(s.source).toBe("global");
+  }
+  expect(all.find((s) => s.name === "broken")?.broken).toContain("frontmatter");
+  expect(all.find((s) => s.name === "noname")?.broken).toContain("name");
+});
+
+test("broken skills cannot be loaded via getSkill", () => {
+  const dir = join(home, "skills", "broken");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "SKILL.md"), "no frontmatter");
+  const healthyDir = join(home, "skills", "healthy");
+  mkdirSync(healthyDir, { recursive: true });
+  writeFileSync(join(healthyDir, "SKILL.md"), '---\nname: "healthy"\ndescription: "ok"\n---\nbody');
+
+  expect(getSkill(home, project, "broken")).toBeNull();
+  expect(getSkill(home, project, "healthy")?.name).toBe("healthy");
 });
 
 test("empty dirs yield empty list", () => {
@@ -210,6 +234,42 @@ test("summarizeSkills formats listing lines", () => {
   expect(lines[0]).toContain("global");
   expect(lines[0]).toContain("First one");
   expect(summarizeSkills([])).toBe("no skills installed");
+});
+
+test("summarizeSkills marks broken skills", () => {
+  const dir = join(home, "skills", "bad");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "SKILL.md"), "no frontmatter");
+  const summary = summarizeSkills(listSkills(home, project));
+  expect(summary).toContain("bad");
+  expect(summary).toContain("broken");
+  expect(summary).toContain("frontmatter");
+});
+
+describe("list_skills tool", () => {
+  const makeTool = () =>
+    createListSkillsTool({ home, projectDir: project });
+
+  test("returns metadata lines for installed skills", async () => {
+    writeSkill(home, "bun-testing", 'name: "bun-testing"\ndescription: "How tests work"', undefined, "global");
+    writeSkill(project, "deploy", 'name: "deploy"\ndescription: "Deploy steps"', undefined, "project");
+    const r = await dispatch([makeTool()], "list_skills", {}, { cwd: project });
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("bun-testing");
+    expect(r.output).toContain("How tests work");
+    expect(r.output).toContain("deploy");
+    expect(r.output).toContain("project");
+  });
+
+  test("reports broken skills instead of hiding them", async () => {
+    const dir = join(home, "skills", "broken");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "no frontmatter");
+    const r = await dispatch([makeTool()], "list_skills", {}, { cwd: project });
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("broken");
+    expect(r.output).toContain("broken: ");
+  });
 });
 
 describe("save_skill tool", () => {
