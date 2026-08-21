@@ -28,6 +28,43 @@ export interface WorkspaceOptions {
   allowedPaths?: string[];
 }
 
+export const GUARD_DISABLED_WARNING =
+  "WARNING: security guard is DISABLED (security.disabled: true). Path and command policy is not enforced. Re-enable in config.yaml.";
+
+export function isGuardDisabled(
+  security?: { disabled?: boolean } | null,
+): boolean {
+  return security?.disabled === true;
+}
+
+export interface GuardStatus {
+  state: "active" | "disabled";
+  blockedEvents: number;
+}
+
+export function buildGuardStatus(
+  security: { disabled?: boolean } | undefined,
+  blockedEvents: number,
+): GuardStatus {
+  return {
+    state: isGuardDisabled(security) ? "disabled" : "active",
+    blockedEvents,
+  };
+}
+
+/** Log + audit when `security.disabled` is set. Returns whether a warning was emitted. */
+export function announceGuardDisabled(opts: {
+  security?: { disabled?: boolean };
+  log: (line: string) => void;
+  audit?: { append(kind: "guard_disabled", actor: string, detail: string): void };
+  actor?: string;
+}): boolean {
+  if (!isGuardDisabled(opts.security)) return false;
+  opts.log(GUARD_DISABLED_WARNING);
+  opts.audit?.append("guard_disabled", opts.actor ?? "boot", GUARD_DISABLED_WARNING);
+  return true;
+}
+
 function globToSource(pattern: string): string {
   return pattern
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")

@@ -47,7 +47,11 @@ import {
 import { createSendMessageTool, createCheckInboxTool } from "./bots/tools";
 import { createAskBotTool } from "./bots/delegate";
 import { Gateway } from "./gateway/gateway";
-import { SecurityGuard } from "./security/guard";
+import {
+  SecurityGuard,
+  announceGuardDisabled,
+  buildGuardStatus,
+} from "./security/guard";
 import { Redactor } from "./security/redact";
 import { AuditLog, formatAudit, auditPath } from "./audit/log";
 import { aggregateSpend, renderSpend } from "./audit/spend";
@@ -143,6 +147,12 @@ async function main(): Promise<number> {
     const profile = cli.bot ? resolveBot(home, cli.bot) : null;
     applyOverrides(config, cli);
     validateConfig(config);
+    const audit = new AuditLog(auditPath(home));
+    announceGuardDisabled({
+      security: config.security,
+      log: (line) => stdout.write(`${line}\n`),
+      audit,
+    });
     if (profile) {
       mkdirSync(profile.sessionsDir, { recursive: true });
       mkdirSync(profile.memoryDir, { recursive: true });
@@ -252,7 +262,6 @@ async function main(): Promise<number> {
       tools.push(createSendMessageTool({ home, fromBot: profile.name, policy: inboxPolicy }));
       tools.push(createCheckInboxTool({ profile, policy: inboxPolicy }));
     }
-    const audit = new AuditLog(auditPath(home));
     const guard = SecurityGuard.fromConfig(config.security, (detail) =>
       audit.append("tool_block", "user", detail),
     );
@@ -403,6 +412,11 @@ async function gatewayCommand(args: string[]): Promise<number> {
     process.on("SIGTERM", () => controller.abort());
     const log = (l: string) => stdout.write(`${l}\n`);
     const audit = new AuditLog(auditPath(home));
+    announceGuardDisabled({
+      security: config.security,
+      log,
+      audit,
+    });
     const guard = SecurityGuard.fromConfig(config.security, (detail) =>
       audit.append("tool_block", "gateway", detail),
     );
@@ -515,6 +529,10 @@ async function gatewayCommand(args: string[]): Promise<number> {
             nextDueMs: j.nextDueMs,
           })),
           channels: Object.keys(channels),
+          guard: buildGuardStatus(
+            config.security,
+            audit.query({ kind: "tool_block" }).length,
+          ),
         }),
         api: createConsoleApi({ home, cwd, config, registry, audit }),
         streamChat: async (req) => {
@@ -658,6 +676,11 @@ function doctorCommand(): number {
     if (vectorEnabled(config)) {
       if (process.env.OPENAI_API_KEY) add("ok", "vector memory ready");
       else add("warn", "vector memory on but no OPENAI_API_KEY", "recall will be unavailable");
+    }
+    if (config.security?.disabled) {
+      add("warn", "security guard DISABLED", "security.disabled: true — tools run without policy");
+    } else {
+      add("ok", "security guard active");
     }
     if (config.gateway && typeof config.gateway === "object") {
       const tg = (config.gateway as Record<string, unknown>).telegram;

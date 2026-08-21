@@ -2,7 +2,12 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   DEFAULT_BLOCKED_PATTERNS,
   SecurityGuard,
+  GUARD_DISABLED_WARNING,
+  isGuardDisabled,
+  buildGuardStatus,
+  announceGuardDisabled,
 } from "../src/security/guard";
+import { AuditLog } from "../src/audit/log";
 import { dispatch } from "../src/tools/registry";
 import { readTool } from "../src/tools/read";
 import { bashTool } from "../src/tools/bash";
@@ -240,5 +245,68 @@ describe("SecurityGuard workspace confinement", () => {
     expect(r.ok).toBe(false);
     expect(r.output).toContain("Blocked by security policy");
     expect(blocks).toHaveLength(1);
+  });
+});
+
+describe("guard disabled announcement", () => {
+  test("isGuardDisabled is true only for disabled: true", () => {
+    expect(isGuardDisabled({ disabled: true })).toBe(true);
+    expect(isGuardDisabled({ disabled: false })).toBe(false);
+    expect(isGuardDisabled({})).toBe(false);
+    expect(isGuardDisabled(undefined)).toBe(false);
+  });
+
+  test("buildGuardStatus reports disabled vs active plus block count", () => {
+    expect(buildGuardStatus({ disabled: true }, 0)).toEqual({
+      state: "disabled",
+      blockedEvents: 0,
+    });
+    expect(buildGuardStatus(undefined, 4)).toEqual({
+      state: "active",
+      blockedEvents: 4,
+    });
+  });
+
+  test("announceGuardDisabled logs and audits when disabled", () => {
+    const lines: string[] = [];
+    const dir = mkdtempSync(join(tmpdir(), "tj-guard-ann-"));
+    try {
+      const audit = new AuditLog(join(dir, "audit.jsonl"));
+      const warned = announceGuardDisabled({
+        security: { disabled: true },
+        log: (line) => lines.push(line),
+        audit,
+        actor: "boot",
+      });
+      expect(warned).toBe(true);
+      expect(lines).toEqual([GUARD_DISABLED_WARNING]);
+      expect(GUARD_DISABLED_WARNING).toMatch(/DISABLED/i);
+      expect(GUARD_DISABLED_WARNING).toContain("security.disabled");
+      const events = audit.query({ kind: "guard_disabled" });
+      expect(events).toHaveLength(1);
+      expect(events[0]?.actor).toBe("boot");
+      expect(events[0]?.detail).toBe(GUARD_DISABLED_WARNING);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("announceGuardDisabled is a no-op when the guard is on", () => {
+    const lines: string[] = [];
+    const dir = mkdtempSync(join(tmpdir(), "tj-guard-ann-"));
+    try {
+      const audit = new AuditLog(join(dir, "audit.jsonl"));
+      expect(
+        announceGuardDisabled({
+          security: { disabled: false },
+          log: (line) => lines.push(line),
+          audit,
+        }),
+      ).toBe(false);
+      expect(lines).toEqual([]);
+      expect(audit.query()).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
