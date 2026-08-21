@@ -75,7 +75,35 @@ body {
 .sidebar-bots .badge { font-size: 10px; white-space: nowrap; }
 
 
-.main { flex: 1; padding: 24px; max-width: 1100px; overflow-wrap: anywhere; }
+.main { flex: 1; padding: 24px; overflow-wrap: anywhere; }
+/* #281: content container — every panel child is centered and capped at 1200px
+   (full width below that), so panels read as one consistent, centered column. */
+.main > * {
+  width: 100%;
+  max-width: 1200px;
+  margin-left: auto;
+  margin-right: auto;
+}
+/* #281: at wide widths, panels that are lists of cards (bots / jobs / approvals)
+   lay out as a 2-column grid (only once there are 3+ cards, so a lone create
+   form + editor stays full-width); non-card children span the width. */
+@media (min-width: 1200px) {
+  .main:has(> .card + .card + .card) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .main:has(> .card + .card + .card) > .card {
+    width: calc(50% - 6px);
+    max-width: 1200px;
+    margin-bottom: 0;
+  }
+  .main:has(> .card + .card + .card) > :not(.card) {
+    flex: 1 1 100%;
+    max-width: 1200px;
+  }
+}
 
 /* #256: slim persistent top bar + offline banner, spanning every panel. */
 .topbar {
