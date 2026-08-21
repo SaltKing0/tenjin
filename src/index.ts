@@ -589,7 +589,17 @@ async function gatewayCommand(args: string[]): Promise<number> {
             audit.query({ kind: "tool_block" }).length,
           ),
         }),
-        api: createConsoleApi({ home, cwd, config, registry, audit }),
+        api: createConsoleApi({
+          home,
+          cwd,
+          config,
+          registry,
+          audit,
+          jobs: {
+            list: () => gateway.listJobs(),
+            runNow: (name) => gateway.runNow(name),
+          },
+        }),
         streamChat: async (req) => {
           if (!telegramHandle) return null;
           let body: { text?: unknown; bot?: unknown };

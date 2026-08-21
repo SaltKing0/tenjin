@@ -305,6 +305,72 @@ describe("Gateway execution", () => {
     expect(logs.some((l) => l.includes('not available'))).toBe(true);
   });
 
+  test("runNow executes immediately, records lastRun, and does not advance nextDue", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: { jobs: [{ name: "digest", bot: "worker", prompt: "make digest", every: "1h" }] },
+      }),
+      registry: { get: () => mockProvider("NOW") } as never,
+    });
+    const job = gw.jobs[0];
+    if (!job) throw new Error("missing job");
+    const before = job.nextDueMs;
+
+    const result = await gw.runNow("digest");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.text).toBe("NOW");
+    expect(job.nextDueMs).toBe(before);
+    expect(job.lastRun?.stopReason).toBe("end_turn");
+    expect(job.running).toBe(false);
+
+    const listed = gw.listJobs();
+    expect(listed[0]?.name).toBe("digest");
+    expect(listed[0]?.policy).toBe("read-only");
+    expect(listed[0]?.every).toBe("1h");
+    expect(listed[0]?.lastRun?.stopReason).toBe("end_turn");
+    expect(listed[0]?.nextDueMs).toBe(before);
+  });
+
+  test("runNow returns not_found / busy without starting a second run", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: { jobs: [{ name: "digest", bot: "worker", prompt: "p", every: "1h" }] },
+      }),
+      registry: {
+        get: () => ({
+          name: "mock",
+          async chat(): Promise<ChatResponse> {
+            await gate;
+            return {
+              stopReason: "end_turn",
+              content: [{ type: "text", text: "ok" }],
+              usage: { inputTokens: 1, outputTokens: 1 },
+            };
+          },
+        }),
+      } as never,
+    });
+
+    expect((await gw.runNow("nope")).ok).toBe(false);
+    const first = gw.runNow("digest");
+    for (let i = 0; i < 50 && !gw.jobs[0]?.running; i++) await Bun.sleep(5);
+    const busy = await gw.runNow("digest");
+    expect(busy.ok).toBe(false);
+    if (busy.ok) throw new Error("unreachable");
+    expect(busy.code).toBe("busy");
+    release();
+    expect((await first).ok).toBe(true);
+  });
+
   test("dry-run describe lists channels and jobs", () => {
     const gw = new Gateway({
       home,

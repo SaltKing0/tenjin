@@ -2,7 +2,7 @@ import type { HarnessConfig } from "../config/types";
 import { ConfigError } from "../config/types";
 import { ProviderRegistry } from "../provider/registry";
 import { resolveBot, botModelRef, botBudgetUSD, type BotProfile } from "../bots/profile";
-import { runHeadless, capPolicy, type HeadlessOptions } from "../agent/headless";
+import { runHeadless, capPolicy, type HeadlessOptions, type HeadlessResult } from "../agent/headless";
 import { guardForBot } from "../security/guard";
 import { formatUSD } from "../agent/budget";
 import { parseSchedule, nextRun, type Schedule } from "./schedule";
@@ -16,6 +16,37 @@ import { createRememberTool } from "../tools/memory";
 import { formatInbox, inboxPolicyFromConfig, markRead, unreadMessages } from "../bots/inbox";
 import type { ToolDef } from "../tools/registry";
 
+export interface JobLastRun {
+  atMs: number;
+  stopReason: string;
+  costUSD: number;
+  error?: string;
+}
+
+export interface JobView {
+  name: string;
+  bot: string;
+  prompt: string;
+  cron: string | null;
+  every: string | null;
+  policy: "read-only" | "full";
+  lastRun: {
+    at: string;
+    stopReason: string;
+    costUSD: number;
+    error?: string;
+  } | null;
+  nextDue: string;
+  nextDueMs: number;
+  running: boolean;
+  kind: "job" | "heartbeat";
+  postTo?: string;
+}
+
+export type JobRunResult =
+  | { ok: true; name: string; stopReason: string; costUSD: number; text: string }
+  | { ok: false; name?: string; error: string; code: "not_found" | "busy" | "failed" };
+
 export interface ScheduledJob {
   name: string;
   botName: string;
@@ -25,6 +56,7 @@ export interface ScheduledJob {
   nextDueMs: number;
   running: boolean;
   kind: "job" | "heartbeat";
+  lastRun: JobLastRun | null;
 }
 
 export interface GatewayDeps {
@@ -51,6 +83,7 @@ export function buildJobs(settings: GatewaySettings, fromMs: number): ScheduledJ
     nextDueMs: nextRun(parseSchedule(j.scheduleSpec), fromMs),
     running: false,
     kind: "job" as const,
+    lastRun: null,
   }));
   if (settings.heartbeat) {
     const hb = settings.heartbeat;
@@ -63,9 +96,39 @@ export function buildJobs(settings: GatewaySettings, fromMs: number): ScheduledJ
       nextDueMs: nextRun(schedule, fromMs),
       running: false,
       kind: "heartbeat",
+      lastRun: null,
     });
   }
   return jobs;
+}
+
+/** Snapshot a live (or config-built) job for the console API. */
+export function jobView(job: ScheduledJob): JobView {
+  return {
+    name: job.name,
+    bot: job.botName,
+    prompt: job.prompt,
+    cron: job.schedule.kind === "cron" ? job.schedule.expr.raw : null,
+    every: job.schedule.kind === "every" ? job.schedule.raw : null,
+    policy: "read-only",
+    lastRun: job.lastRun
+      ? {
+          at: new Date(job.lastRun.atMs).toISOString(),
+          stopReason: job.lastRun.stopReason,
+          costUSD: job.lastRun.costUSD,
+          ...(job.lastRun.error ? { error: job.lastRun.error } : {}),
+        }
+      : null,
+    nextDue: new Date(job.nextDueMs).toISOString(),
+    nextDueMs: job.nextDueMs,
+    running: job.running,
+    kind: job.kind,
+    ...(job.postTo ? { postTo: job.postTo } : {}),
+  };
+}
+
+export function listConfiguredJobs(rawGateway: unknown, fromMs = Date.now()): JobView[] {
+  return buildJobs(parseGatewaySettings(rawGateway), fromMs).map(jobView);
 }
 
 export function dueJobs(jobs: ScheduledJob[], nowMs: number): ScheduledJob[] {
@@ -113,6 +176,38 @@ export class Gateway {
     return lines;
   }
 
+  listJobs(): JobView[] {
+    return this.jobs.map(jobView);
+  }
+
+  /**
+   * Run a job immediately. Does not advance `nextDueMs` — cron stays on
+   * its existing cadence. Returns a structured result rather than throwing
+   * for unknown/busy jobs so the HTTP layer can map status codes.
+   */
+  async runNow(name: string): Promise<JobRunResult> {
+    const job = this.jobs.find((j) => j.name === name);
+    if (!job) return { ok: false, error: `unknown job "${name}"`, code: "not_found" };
+    if (job.running) {
+      return { ok: false, name, error: `job "${name}" is already running`, code: "busy" };
+    }
+    job.running = true;
+    try {
+      const result = await this.execute(job);
+      return {
+        ok: true,
+        name,
+        stopReason: result.stopReason,
+        costUSD: result.costUSD,
+        text: result.text,
+      };
+    } catch (e) {
+      return { ok: false, name, error: (e as Error).message, code: "failed" };
+    } finally {
+      job.running = false;
+    }
+  }
+
   async fireDue(nowMs: number): Promise<void> {
     for (const job of dueJobs(this.jobs, nowMs)) {
       job.running = true;
@@ -125,87 +220,105 @@ export class Gateway {
     }
   }
 
-  private async execute(job: ScheduledJob): Promise<void> {
+  private async execute(job: ScheduledJob): Promise<HeadlessResult> {
     this.log(`job ${job.name} start (bot=${job.botName})`);
-    const profile = resolveBot(this.deps.home, job.botName);
-    const ref = botModelRef(profile, this.deps.config);
+    try {
+      const profile = resolveBot(this.deps.home, job.botName);
+      const ref = botModelRef(profile, this.deps.config);
 
-    let message = job.prompt;
-    let extraTools: ToolDef[] | undefined;
-    let approve: HeadlessOptions["approve"];
-    if (job.kind === "heartbeat") {
-      const inboxPolicy = inboxPolicyFromConfig(this.deps.config.inbox);
-      const unread = unreadMessages(profile.inboxDir, inboxPolicy);
-      const inboxPart =
-        unread.length > 0
-          ? `You have ${unread.length} unread message(s):\n${formatInbox(unread)}\n`
-          : "Your inbox is empty.\n";
-      message =
-        `Heartbeat check. ${inboxPart}` +
-        `If a message needs a reply, answer the sender with send_message. ` +
-        `Briefly note anything actionable; if nothing needs attention reply with just "ok".`;
-      if (unread.length > 0) {
-        markRead(
-          profile.inboxDir,
-          unread.map((m) => m.id),
-        );
+      let message = job.prompt;
+      let extraTools: ToolDef[] | undefined;
+      let approve: HeadlessOptions["approve"];
+      if (job.kind === "heartbeat") {
+        const inboxPolicy = inboxPolicyFromConfig(this.deps.config.inbox);
+        const unread = unreadMessages(profile.inboxDir, inboxPolicy);
+        const inboxPart =
+          unread.length > 0
+            ? `You have ${unread.length} unread message(s):\n${formatInbox(unread)}\n`
+            : "Your inbox is empty.\n";
+        message =
+          `Heartbeat check. ${inboxPart}` +
+          `If a message needs a reply, answer the sender with send_message. ` +
+          `Briefly note anything actionable; if nothing needs attention reply with just "ok".`;
+        if (unread.length > 0) {
+          markRead(
+            profile.inboxDir,
+            unread.map((m) => m.id),
+          );
+        }
+        const tools: ToolDef[] = [
+          createCheckInboxTool({ profile, policy: inboxPolicy }),
+          createSendMessageTool({ home: this.deps.home, fromBot: profile.name, policy: inboxPolicy }),
+          createRememberTool({ memoryDirPath: profile.memoryDir }),
+        ];
+        extraTools = tools;
+        // The heartbeat is fully autonomous: allow its own tools, keep read access.
+        approve = async (name, group) =>
+          group === "read" || tools.some((t) => t.name === name);
       }
-      const tools: ToolDef[] = [
-        createCheckInboxTool({ profile, policy: inboxPolicy }),
-        createSendMessageTool({ home: this.deps.home, fromBot: profile.name, policy: inboxPolicy }),
-        createRememberTool({ memoryDirPath: profile.memoryDir }),
-      ];
-      extraTools = tools;
-      // The heartbeat is fully autonomous: allow its own tools, keep read access.
-      approve = async (name, group) =>
-        group === "read" || tools.some((t) => t.name === name);
-    }
 
-    const result = await runHeadless({
-      provider: this.deps.registry.get(ref.provider),
-      model: ref.model,
-      soulText: profile.soulText,
-      cwd: this.deps.cwd,
-      message,
-      maxTokens: this.deps.config.maxTokens,
-      capUSD: botBudgetUSD(profile, this.deps.config.budgetUSD),
-      pricing: this.deps.config.pricing,
-      policy: capPolicy("read-only", profile.config.security?.policy),
-      denyTools: profile.config.security?.denyTools,
-      extraTools,
-      approve,
-      home: this.deps.home,
-      memoryDir: profile.memoryDir,
-      sessionLogDir: profile.sessionsDir,
-      sessionBot: profile.name,
-      guard: guardForBot(
-        this.deps.config.security,
-        profile.config.security,
-        this.deps.guard?.onBlock,
-      ),
-      redactor: Redactor.fromConfig(this.deps.config.security),
-    });
-    this.log(
-      `job ${job.name} done (${result.stopReason}, ${formatUSD(result.costUSD)})`,
-    );
+      const result = await runHeadless({
+        provider: this.deps.registry.get(ref.provider),
+        model: ref.model,
+        soulText: profile.soulText,
+        cwd: this.deps.cwd,
+        message,
+        maxTokens: this.deps.config.maxTokens,
+        capUSD: botBudgetUSD(profile, this.deps.config.budgetUSD),
+        pricing: this.deps.config.pricing,
+        policy: capPolicy("read-only", profile.config.security?.policy),
+        denyTools: profile.config.security?.denyTools,
+        extraTools,
+        approve,
+        home: this.deps.home,
+        memoryDir: profile.memoryDir,
+        sessionLogDir: profile.sessionsDir,
+        sessionBot: profile.name,
+        guard: guardForBot(
+          this.deps.config.security,
+          profile.config.security,
+          this.deps.guard?.onBlock,
+        ),
+        redactor: Redactor.fromConfig(this.deps.config.security),
+      });
+      job.lastRun = {
+        atMs: Date.now(),
+        stopReason: result.stopReason,
+        costUSD: result.costUSD,
+      };
+      this.log(
+        `job ${job.name} done (${result.stopReason}, ${formatUSD(result.costUSD)})`,
+      );
 
-    // #37: fold the bot's just-finished session into its memory summary when
-    // gateway-driven summaries are enabled. Best-effort — never fails the job.
-    await this.summarizeAfterRun(profile, ref);
+      // #37: fold the bot’s just-finished session into its memory summary when
+      // gateway-driven summaries are enabled. Best-effort — never fails the job.
+      await this.summarizeAfterRun(profile, ref);
 
-    const output = result.text.trim();
-    if (!output) {
-      this.log(`job ${job.name}: no output`);
-      return;
-    }
-    if (job.postTo) {
-      const post = this.deps.channels?.[job.postTo];
-      if (!post) {
-        this.log(`job ${job.name}: postTo channel "${job.postTo}" not available`);
-        return;
+      const output = result.text.trim();
+      if (!output) {
+        this.log(`job ${job.name}: no output`);
+        return result;
       }
-      await post(output);
-      this.log(`job ${job.name}: posted to ${job.postTo}`);
+      if (job.postTo) {
+        const post = this.deps.channels?.[job.postTo];
+        if (!post) {
+          this.log(`job ${job.name}: postTo channel "${job.postTo}" not available`);
+          return result;
+        }
+        await post(output);
+        this.log(`job ${job.name}: posted to ${job.postTo}`);
+      }
+      return result;
+    } catch (e) {
+      if (!job.lastRun) {
+        job.lastRun = {
+          atMs: Date.now(),
+          stopReason: "error",
+          costUSD: 0,
+          error: (e as Error).message,
+        };
+      }
+      throw e;
     }
   }
 
