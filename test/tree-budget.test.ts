@@ -91,6 +91,44 @@ describe("TreeBudget (#154)", () => {
   });
 });
 
+describe("TreeBudget.continueFrom (#184)", () => {
+  test("continues the used counter from a persisted snapshot", () => {
+    const tb = TreeBudget.continueFrom({ maxIterations: 5, usedIterations: 3 })!;
+    expect(tb.maxIterations).toBe(5);
+    expect(tb.usedIterations).toBe(3);
+    // only the remaining 2 iterations are available before the cap trips
+    expect(tb.consumeIteration()).toBe(true); // -> 4
+    expect(tb.consumeIteration()).toBe(true); // -> 5
+    expect(tb.consumeIteration()).toBe(false); // -> 6 > 5
+    expect(tb.stopped).toBe(true);
+  });
+
+  test("carries over a used USD snapshot", () => {
+    const tb = TreeBudget.continueFrom({ maxUsd: 1, usedUsd: 0.8 })!;
+    expect(tb.usedUSD).toBeCloseTo(0.8);
+    tb.addUsd(0.1);
+    expect(tb.stopped).toBe(false);
+    tb.addUsd(0.2);
+    expect(tb.stopped).toBe(true);
+  });
+
+  test("an already-exhausted snapshot returns a stopped budget", () => {
+    const tb = TreeBudget.continueFrom({ maxIterations: 3, usedIterations: 3 })!;
+    expect(tb.stopped).toBe(true);
+    expect(tb.consumeIteration()).toBe(false);
+  });
+
+  test("returns undefined when the snapshot carries no cap", () => {
+    expect(TreeBudget.continueFrom({})).toBeUndefined();
+    expect(TreeBudget.continueFrom({ maxIterations: 0, maxUsd: 0 })).toBeUndefined();
+  });
+
+  test("clamps malformed negative counters to zero", () => {
+    const tb = TreeBudget.continueFrom({ maxIterations: 4, usedIterations: -2 })!;
+    expect(tb.usedIterations).toBe(0);
+  });
+});
+
 describe("delegation-tree budget in the agent loop (#154)", () => {
   test("a shared budget stops the run with a clear reason once the cap is hit", async () => {
     const tb = new TreeBudget(2, 0);

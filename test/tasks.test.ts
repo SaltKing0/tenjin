@@ -17,6 +17,8 @@ import {
   type AsyncTaskDeps,
 } from "../src/bots/tasks";
 import { listMessages } from "../src/bots/inbox";
+import { runAgentTurn } from "../src/agent/loop";
+import { TreeBudget, createBudget } from "../src/agent/budget";
 import type { ChatRequest, ChatResponse, Provider } from "../src/provider/types";
 import type { HarnessConfig, ProviderName } from "../src/config/types";
 
@@ -566,6 +568,107 @@ describe("task delegation tree budget (#154)", () => {
     // the partial text produced before the stop is preserved, not discarded
     expect(task.result).toContain("PARTIAL RESULT before budget stop");
     expect(calls.n).toBe(1);
+  });
+
+  test("a dependency-chain successor continues the persisted tree snapshot instead of restarting at 0 (#184)", async () => {
+    // Task A runs with a per-task cap but completes within it, persisting a
+    // snapshot (max=3, used=2).
+    const ca = { n: 0 };
+    const singleToolThenDone: Provider = {
+      name: "one-tool",
+      async chat(): Promise<ChatResponse> {
+        ca.n += 1;
+        if (ca.n === 1) {
+          return {
+            stopReason: "tool_use",
+            content: [{ type: "tool_use", id: "tc", name: "read_file", input: { path: "." } }],
+            usage: { inputTokens: 1, outputTokens: 1 },
+          };
+        }
+        return {
+          stopReason: "end_turn",
+          content: [{ type: "text", text: "ok" }],
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      },
+    } as unknown as Provider;
+    const a = startAsyncTask(deps(singleToolThenDone), {
+      targetBot: "researcher",
+      message: "a",
+      maxTreeIterations: 3,
+    });
+    const ta = await a.settled;
+    expect(ta.status).toBe("done");
+    expect(ta.treeMaxIterations).toBe(3);
+    expect(ta.treeUsedIterations).toBe(2);
+
+    // Task B continues the chain "across a process boundary": no in-memory
+    // budget is inherited — only A's persisted snapshot on disk. It must pick
+    // up A's counter (only 1 of 3 iterations remain) instead of starting fresh.
+    const cb = { n: 0 };
+    const b = startAsyncTask(deps(toolCallingProvider(cb)), {
+      targetBot: "researcher",
+      message: "b",
+      dependsOn: ta.id,
+    });
+    const tb = await b.settled;
+    expect(tb.status).toBe("error");
+    expect(tb.error).toContain("delegation tree budget exhausted");
+    // B squeezed out exactly the 1 remaining iteration, then the cap tripped —
+    // it did NOT run uncapped.
+    expect(cb.n).toBe(1);
+    expect(tb.treeMaxIterations).toBe(3);
+    expect(tb.treeUsedIterations ?? 0).toBeGreaterThan(2);
+  });
+
+  test("an interactive (REPL) turn seeded from config.maxTreeIterations caps its ask_bot_async delegate (#184)", async () => {
+    const turnCalls = { n: 0 };
+    const turnProvider: Provider = {
+      name: "repl-turn",
+      async chat(): Promise<ChatResponse> {
+        turnCalls.n += 1;
+        if (turnCalls.n === 1) {
+          return {
+            stopReason: "tool_use",
+            content: [
+              { type: "tool_use", id: "a1", name: "ask_bot_async", input: { bot: "researcher", message: "m" } },
+            ],
+            usage: { inputTokens: 5, outputTokens: 3 },
+          };
+        }
+        return {
+          stopReason: "end_turn",
+          content: [{ type: "text", text: "DONE" }],
+          usage: { inputTokens: 5, outputTokens: 3 },
+        };
+      },
+    } as unknown as Provider;
+
+    // repl.ts derives the interactive turn's delegation-tree budget from
+    // config.maxTreeIterations; replicate that exact wiring here.
+    const treeBudget = new TreeBudget(3, 0);
+    const res = await runAgentTurn({
+      provider: turnProvider,
+      model: "m",
+      system: "s",
+      tools: [createAskBotAsyncTool(deps(toolCallingProvider({ n: 0 })))],
+      messages: [{ role: "user", content: "go" }],
+      budget: createBudget(5, undefined),
+      maxTokens: 512,
+      treeBudget,
+      cwd: home,
+      approve: async () => true,
+    });
+    expect(res.stopReason).toBe("end_turn");
+
+    // the delegate started during the turn inherited the same capped budget
+    const tasks = listTasks(home, "researcher");
+    expect(tasks.length).toBe(1);
+    const task = tasks[0];
+    expect(task).toBeTruthy();
+    const final = await waitForStatus(home, "researcher", task!.id, 5000);
+    expect(final.treeMaxIterations).toBe(3);
+    expect(final.error).toContain("delegation tree budget exhausted");
   });
 });
 
