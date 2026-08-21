@@ -311,6 +311,20 @@ describe("audit time filter + export", () => {
   });
 });
 
+test("audit endpoint filters by correlationId", async () => {
+  const log = new AuditLog(join(home, "audit.jsonl"));
+  log.append("delegation", "writer", "ask_bot -> researcher", "writer", "chain-1");
+  log.append("write_exec", "user", "write_file succeeded", undefined, "chain-1");
+  log.append("delegation", "writer", "other", undefined, "chain-2");
+  const base = startServer();
+
+  const res = await fetch(`${base}/api/audit?correlationId=chain-1`, { headers: auth });
+  const data = (await res.json()) as any;
+  const kinds = data.events.map((e: any) => e.kind);
+  expect(kinds).toEqual(["delegation", "write_exec"]);
+  expect(data.events.every((e: any) => e.correlationId === "chain-1")).toBe(true);
+});
+
 describe("approvals endpoints", () => {
   test("pending list + resolve via POST", async () => {
     const req = createRequest(home, { bot: "researcher", tool: "write_file", inputSummary: "foo.txt" });

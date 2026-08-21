@@ -67,6 +67,8 @@ function auditQueryFromUrl(
   if (kindParam) opts.kind = kindParam as AuditKind;
   if (tailParam) opts.tail = Number(tailParam);
   else if (defaultTail !== undefined) opts.tail = defaultTail;
+  const correlationParam = url.searchParams.get("correlationId");
+  if (correlationParam) opts.correlationId = correlationParam;
   return { opts };
 }
 

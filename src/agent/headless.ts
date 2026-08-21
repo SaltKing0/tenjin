@@ -40,7 +40,9 @@ export interface HeadlessOptions {
   sessionBot?: string;
   guard?: import("../security/guard").SecurityGuard | null;
   redactor?: Redactor | null;
-  audit?: (kind: "write_exec" | "budget_halt", detail: string) => void;
+  audit?: (kind: "write_exec" | "budget_halt", detail: string, correlationId?: string) => void;
+  /** Shared id threaded into this run's audit events (e.g. a delegation correlation id). */
+  correlationId?: string;
   approve?: (toolName: string, group: "read" | "write", input: unknown) => Promise<boolean>;
   onTextDelta?: (delta: string) => void;
 }
@@ -118,8 +120,9 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       opts.approve ??
       (async (_name, group) => group === "read"),
     guard: opts.guard,
-    onTextDelta: opts.onTextDelta,
     audit: opts.audit,
+    correlationId: opts.correlationId,
+    onTextDelta: opts.onTextDelta,
     onEvent: logger
       ? (e: TurnEvent) => {
           const ts = new Date().toISOString();

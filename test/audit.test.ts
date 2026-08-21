@@ -74,8 +74,40 @@ test("redacts secrets in detail by default", () => {
 
 test("honours a disabled redactor", () => {
   const log = new AuditLog(auditPath(home), new Redactor(false));
-  log.append("gateway_msg", "u1", "OPENAI_API_KEY=sk-abc1234567890");
-  expect(log.query()[0]?.detail).toContain("sk-abc1234567890");
+  log.append("gateway_msg", "u1", "OPENAI_API_KEY=«redacted:sk-…»");
+  expect(log.query()[0]?.detail).toContain("«redacted:sk-…»");
+});
+
+test("stores and round-trips a correlationId", () => {
+  const log = new AuditLog(auditPath(home));
+  log.append("delegation", "writer", "ask_bot -> researcher", "writer", "corr-1");
+  const e = log.query({ kind: "delegation" })[0];
+  expect(e?.correlationId).toBe("corr-1");
+});
+
+test("filter by correlationId returns the whole chain, and only it", () => {
+  const log = new AuditLog(auditPath(home));
+  log.append("delegation", "writer", "ask_bot -> researcher", "writer", "corr-1");
+  log.append("approval", "user", "write_file approved", undefined, "corr-1");
+  log.append("write_exec", "user", "write_file succeeded", undefined, "corr-1");
+  log.append("delegation", "writer", "unrelated", undefined, "corr-2");
+  log.append("gateway_msg", "u1", "uncorrelated");
+
+  const chain = log.query({ correlationId: "corr-1" });
+  expect(chain.map((e) => e.kind)).toEqual(["delegation", "approval", "write_exec"]);
+  expect(chain.every((e) => e.correlationId === "corr-1")).toBe(true);
+  expect(log.query({ correlationId: "corr-2" })).toHaveLength(1);
+  expect(log.query({ correlationId: "missing" })).toEqual([]);
+});
+
+test("correlationId filter combines with bot and kind filters", () => {
+  const log = new AuditLog(auditPath(home));
+  log.append("delegation", "writer", "d", "researcher", "c1");
+  log.append("write_exec", "user", "w", "researcher", "c1");
+  log.append("delegation", "writer", "d2", "writer", "c1");
+  expect(log.query({ correlationId: "c1", kind: "delegation" })).toHaveLength(2);
+  expect(log.query({ correlationId: "c1", bot: "researcher" })).toHaveLength(2);
+  expect(log.query({ correlationId: "c1", kind: "write_exec", bot: "researcher" })).toHaveLength(1);
 });
 
 function seedEvent(
