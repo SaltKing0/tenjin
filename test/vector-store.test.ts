@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +8,7 @@ import {
   cosineSimilarity,
   searchChunks,
   indexedSessionIds,
+  VectorStore,
   type VectorChunk,
 } from "../src/memory/vector-store";
 
@@ -157,4 +158,118 @@ test("indexedSessionIds collects distinct sessions", () => {
     chunk({ sessionId: "b" }),
   ]);
   expect([...ids].sort()).toEqual(["a", "b"]);
+});
+
+describe("VectorStore", () => {
+  test("open loads the whole file into memory once", () => {
+    appendChunks(file, [chunk({ id: "a" }), chunk({ id: "b", sessionId: "s2" })]);
+    const store = VectorStore.open(file);
+    expect(store.size).toBe(2);
+    expect([...store.sessionsIndexed()].sort()).toEqual(["s1", "s2"]);
+  });
+
+  test("add buffers without touching the file; search sees pending chunks", () => {
+    const store = new VectorStore(file);
+    store.add(chunk({ id: "pending" }));
+    expect(existsSync(file)).toBe(false);
+    const { hits } = store.search({ query: [1, 0, 0], topK: 10 });
+    expect(hits.map((h) => h.chunk.id)).toEqual(["pending"]);
+  });
+
+  test("flush persists buffered chunks to the file", () => {
+    const store = new VectorStore(file);
+    store.add(chunk({ id: "a" }));
+    store.flush();
+    expect(loadChunks(file).map((c) => c.id)).toEqual(["a"]);
+  });
+
+  test("auto-flush writes to file once the buffer threshold is reached", () => {
+    const store = new VectorStore(file, [], 3);
+    store.addAll([chunk({ id: "a" }), chunk({ id: "b" }), chunk({ id: "c" })]);
+    expect(loadChunks(file)).toHaveLength(3);
+    expect(store.size).toBe(3);
+  });
+
+  test("flush with an empty buffer is a no-op", () => {
+    const store = new VectorStore(file);
+    store.flush();
+    expect(existsSync(file)).toBe(false);
+  });
+
+  test("dimension-blocked search is behavior-identical to a full scan", () => {
+    const corpus = [
+      chunk({ id: "match", embedding: [1, 0, 0], embedModel: "text-embedding-3-small" }),
+      chunk({ id: "legacy", embedding: [0.9, 0.1, 0], embedModel: undefined }),
+      chunk({ id: "other-model", embedding: [0.5, 0.5, 0], embedModel: "text-embedding-3-large" }),
+      chunk({ id: "dirty-1536", embedding: new Array(1536).fill(0.01) }),
+    ];
+    appendChunks(file, corpus);
+    const store = VectorStore.open(file);
+    const full = searchChunks(corpus, {
+      query: [1, 0, 0],
+      topK: 10,
+      embedModel: "text-embedding-3-small",
+    });
+    const viaStore = store.search({
+      query: [1, 0, 0],
+      topK: 10,
+      embedModel: "text-embedding-3-small",
+    });
+    expect(viaStore.hits.map((h) => h.chunk.id)).toEqual(full.hits.map((h) => h.chunk.id));
+    expect(viaStore.skipped).toBe(full.skipped);
+  });
+
+  test("compact keeps the latest revision of a duplicated id and rewrites the file", () => {
+    appendChunks(file, [
+      chunk({ id: "auth", text: "old", created: "2026-08-20T00:00:00Z" }),
+      chunk({ id: "auth", text: "new", created: "2026-08-21T00:00:00Z" }),
+      chunk({ id: "garden", text: "garden" }),
+    ]);
+    const store = VectorStore.open(file);
+    const report = store.compact();
+    expect(report.before).toBe(3);
+    expect(report.after).toBe(2);
+    expect(report.removed).toBe(1);
+    expect(report.rewritten).toBe(true);
+    expect(store.size).toBe(2);
+    const persisted = loadChunks(file);
+    expect(persisted.filter((c) => c.id === "auth")).toHaveLength(1);
+    expect(persisted.find((c) => c.id === "auth")!.text).toBe("new");
+  });
+
+  test("compact is a no-op (no rewrite) when there are no duplicates", () => {
+    appendChunks(file, [chunk({ id: "a" }), chunk({ id: "b" })]);
+    const store = VectorStore.open(file);
+    const report = store.compact();
+    expect(report.removed).toBe(0);
+    expect(report.rewritten).toBe(false);
+  });
+
+  test("recall results are identical before and after compaction", () => {
+    // A stale revision (zero vector) is already filtered by minScore, so compaction
+    // removing it must not change what recall returns.
+    appendChunks(file, [
+      chunk({ id: "auth", text: "fix auth bug", embedding: [1, 0, 0], created: "2026-08-21T00:00:00Z" }),
+      chunk({ id: "auth", text: "stale note", embedding: [0, 0, 0], created: "2026-08-20T00:00:00Z" }),
+      chunk({ id: "garden", text: "garden tips", embedding: [0, 1, 0] }),
+    ]);
+    const before = VectorStore.open(file).search({ query: [1, 0, 0], topK: 5, minScore: 0.5 });
+    const store = VectorStore.open(file);
+    store.compact();
+    const after = store.search({ query: [1, 0, 0], topK: 5, minScore: 0.5 });
+    expect(after.hits.map((h) => h.chunk.id)).toEqual(before.hits.map((h) => h.chunk.id));
+    expect(after.skipped).toBe(before.skipped);
+  });
+
+  test("compaction bounds file growth", () => {
+    const many = Array.from({ length: 50 }, () =>
+      chunk({ id: "dup", created: "2026-08-21T00:00:00Z" }),
+    );
+    appendChunks(file, many);
+    const sizeBefore = statSync(file).size;
+    const store = VectorStore.open(file);
+    store.compact();
+    expect(statSync(file).size).toBeLessThan(sizeBefore);
+    expect(loadChunks(file)).toHaveLength(1);
+  });
 });
