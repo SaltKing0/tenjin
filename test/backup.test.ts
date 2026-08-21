@@ -8,7 +8,7 @@ import {
   existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import {
   backupHome,
@@ -16,11 +16,12 @@ import {
   BACKUP_META_FILE,
   BACKUP_FORMAT,
   BACKUP_CONTAINER_VERSION,
+  buildExportTarArgs,
   type BackupMeta,
 } from "../src/backup";
 import { ConfigError } from "../src/config/types";
 import { CONFIG_SCHEMA_VERSION } from "../src/config/loader";
-
+import { spawnSync } from "node:child_process";
 let home: string;
 let target: string;
 let outFile: string;
@@ -238,4 +239,28 @@ test("restore rejects traversal / absolute paths before writing", () => {
   // nothing was written outside the target
   expect(existsSync(join(tmpdir(), "evil"))).toBe(false);
   rmSync(malicious, { force: true });
+});
+
+// #307: the portable `tenjin export` archive must not carry secrets — the same
+// exclusion list backupHome uses (providers.yaml, secrets/, .tenjin-keyring).
+test("tenjin export archive excludes secrets from the portable tar (#307)", () => {
+  const root = mkdtempSync(join(tmpdir(), "tenjin-export-src-"));
+  const out = join(tmpdir(), `tenjin-exp-${Math.random().toString(36).slice(2)}.tar.gz`);
+  try {
+    buildHome(root); // config + sessions + memory + bots + skills + secrets
+    const args = buildExportTarArgs(out, dirname(root), basename(root));
+    const run = spawnSync("tar", args);
+    expect(run.status).toBe(0);
+    const list = spawnSync("tar", ["-tzf", out]);
+    const listing = list.stdout.toString();
+    // normal content is exported…
+    expect(listing).toContain(`${basename(root)}/config.yaml`);
+    // …but the secrets never are
+    expect(listing).not.toContain("providers.yaml");
+    expect(listing).not.toContain(`${basename(root)}/secrets`);
+    expect(listing).not.toContain(".tenjin-keyring");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(out, { force: true });
+  }
 });

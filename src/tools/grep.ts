@@ -52,6 +52,11 @@ export const grepTool: ToolDef = {
     await walk(ctx.cwd, ctx.cwd, async (rel, abs) => {
       if (results.length >= max) return;
       if (fileFilter && !fileFilter.match(basename(rel))) return;
+      // #307: grep must not exfiltrate files the security guard blocks for
+      // read_file (.env, *.pem, *credentials*, …). checkText matches the
+      // relative path against the blocked-pattern table (base + full forms),
+      // so grepping a blocked file is skipped just like reading it is.
+      if (ctx.guard?.checkText(rel).blocked) return;
       const buf = await readFile(abs).catch(() => null);
       if (!buf || buf.byteLength > MAX_FILE_BYTES) return;
       if (buf.subarray(0, 8192).includes(0)) return;

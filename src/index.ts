@@ -107,7 +107,7 @@ import { parseArgs, HELP, type CliArgs } from "./cli/args";
 import { listJobs, addJob, removeJob, findJob, runJob, renderJob } from "./cli/jobs";
 import { runOnboard, usage as onboardUsage } from "./cli/onboard";
 import { PRODUCT, VERSION } from "./version";
-import { backupHome, restoreHome } from "./backup";
+import { backupHome, restoreHome, buildExportTarArgs } from "./backup";
 
 interface AppContext {
   config: HarnessConfig;
@@ -1622,7 +1622,9 @@ function exportCommand(args: string[]): number {
   if (!out) out = `tenjin-export-${new Date().toISOString().slice(0, 10)}.tar.gz`;
   const parent = dirname(home);
   const name = basename(home);
-  const result = spawnSync("tar", ["-czf", resolve(out), "-C", parent, name]);
+  // #307: reuse the backup exclusion list so portable exports never carry
+  // providers.yaml (API keys), secrets/, or the machine-local .tenjin-keyring.
+  const result = spawnSync("tar", buildExportTarArgs(resolve(out), parent, name));
   if (result.status !== 0) {
     stdout.write(`export failed: ${result.stderr?.toString().slice(0, 300)}\n`);
     return 1;

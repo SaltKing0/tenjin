@@ -49,6 +49,23 @@ export interface BackupMeta {
  */
 const BACKUP_EXCLUDES = new Set(["providers.yaml", "secrets", ".tenjin-keyring"]);
 
+/**
+ * Build the `tar` argv for a portable whole-home export (the `tenjin export`
+ * CLI command). Mirrors `BACKUP_EXCLUDES` so the same secrets that never enter
+ * a backup also never enter an export archive. Because `tar -C parent name`
+ * stores members as `name/<entry>`, each exclude is prefixed with the member
+ * root so the pattern matches the stored path (GNU tar will then skip the
+ * whole `name/secrets` tree by excluding its directory entry).
+ */
+export function buildExportTarArgs(out: string, parent: string, name: string): string[] {
+  const excludes = [...BACKUP_EXCLUDES];
+  if (excludes.includes("secrets")) excludes.push("secrets/*");
+  const args = ["-czf", out, "-C", parent];
+  for (const ex of excludes) args.push("--exclude", `${name}/${ex}`);
+  args.push(name);
+  return args;
+}
+
 interface TarEntry {
   name: string;
   type: "file" | "dir";
