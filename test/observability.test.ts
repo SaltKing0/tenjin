@@ -12,7 +12,7 @@ import {
   buildHealth,
   buildMetrics,
 } from "../src/gateway/observability";
-import { ProviderStats, monitoredProvider } from "../src/provider/stats";
+import { ProviderStats, monitoredProvider, PROVIDER_STALE_MS } from "../src/provider/stats";
 import { ProviderRegistry } from "../src/provider/registry";
 import { createRequest } from "../src/gateway/approvals";
 import type { ChatRequest, Provider } from "../src/provider/types";
@@ -74,6 +74,23 @@ describe("ProviderStats", () => {
     const s = new ProviderStats();
     expect(s.total()).toBe(0);
     expect(s.reachability()).toEqual({});
+  });
+
+  test("stale success degrades up to null after the staleness threshold (#194)", () => {
+    const s = new ProviderStats();
+    s.recordSuccess("anthropic");
+    expect(s.reachability().anthropic!.up).toBe(true);
+    // A very old success (beyond PROVIDER_STALE_MS) must report unknown, not up.
+    const stale = s.reachability(Date.now() + PROVIDER_STALE_MS + 1000);
+    expect(stale.anthropic!.up).toBeNull();
+  });
+
+  test("stale error degrades up to null after the staleness threshold (#194)", () => {
+    const s = new ProviderStats();
+    s.recordError("openai");
+    expect(s.reachability().openai!.up).toBe(false);
+    const stale = s.reachability(Date.now() + PROVIDER_STALE_MS + 1000);
+    expect(stale.openai!.up).toBeNull();
   });
 
   test("monitoredProvider records success and rethrows errors", async () => {

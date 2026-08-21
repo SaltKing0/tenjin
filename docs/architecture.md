@@ -155,7 +155,11 @@ The console is token-gated and per-IP rate-limited (see [`src/gateway/http.ts`](
 spend/session counts from disk and the gateway's live provider-outcome counter
 ([`src/provider/stats.ts`](../src/provider/stats.ts)), which the provider
 registry updates on every chat call — so provider reachability is answered from
-cached data instead of a per-request probe. Both endpoints require the same
+cached data instead of a per-request probe. Cached reachability expires: a
+provider whose most recent outcome is older than `PROVIDER_STALE_MS` (10 min)
+reports `up: null` rather than a stale success. Spend is aggregated to each
+usage event's UTC day, so a session spanning midnight is attributed to the
+correct days instead of its start day (#194). Both endpoints require the same
 `gateway.listen.token` bearer token as the rest of the API.
 
 ## Tools
