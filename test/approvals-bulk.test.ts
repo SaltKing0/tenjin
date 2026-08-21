@@ -174,4 +174,45 @@ describe("approval diff data", () => {
   });
 });
 
+describe("approval redaction (#177)", () => {
+  test("createRequest stores a redacted input + summary on disk (no secret leak)", () => {
+    const secret = "sk-abcdefghijklmnop1234567890";
+    const r = createRequest(home, {
+      bot: "researcher",
+      tool: "bash",
+      input: { command: `curl -H "Authorization: Bearer ${secret}" https://x` },
+    });
+    // in-memory record is masked
+    expect(JSON.stringify(r.input)).not.toContain("sk-abcdefghijklmnop");
+    expect(r.inputSummary).not.toContain("sk-abcdefghijklmnop");
+    expect(r.inputSummary).toContain("[REDACTED]");
+    // the notice body (built from inputSummary) is therefore masked too
+    expect(`Approval needed [${r.id}] ${r.inputSummary}`).not.toContain("sk-abcdefghijklmnop");
+
+    // disk file is masked as well
+    const { readFileSync } = require("node:fs") as typeof import("node:fs");
+    const disk = readFileSync(join(home, "approvals", `${r.id}.json`), "utf8");
+    expect(disk).not.toContain("sk-abcdefghijklmnop");
+    expect(disk).toContain("[REDACTED]");
+  });
+
+  test("GET /api/approvals/:id returns a redacted input", async () => {
+    const audit = new AuditLog(join(home, "audit.jsonl"));
+    const base = start(audit);
+    const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+    const r = createRequest(home, {
+      bot: "researcher",
+      tool: "bash",
+      input: { command: `SECRET=${secret}` },
+    });
+    const res = await fetch(`${base}/api/approvals/${r.id}`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(JSON.stringify(data)).not.toContain("ghp_abcdefghijklmnop");
+    expect(JSON.stringify(data)).toContain("[REDACTED]");
+  });
+});
+
 void mkdirSync;
