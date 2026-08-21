@@ -253,26 +253,29 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
 
   const settled = (async (): Promise<BotTask> => {
     const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(),
-      timeoutMs > 0 ? timeoutMs : DEFAULT_TASK_TIMEOUT_MS,
-    );
+    // #182: budget the dependency-wait phase and the run phase separately.
+    const duration = timeoutMs > 0 ? timeoutMs : DEFAULT_TASK_TIMEOUT_MS;
+    let timer = setTimeout(() => controller.abort(), duration);
     try {
       // #128: wait for the dependency before starting.
       let runMessage = message;
       if (dependsOnId) {
-        const deadline = Date.now() + (timeoutMs > 0 ? timeoutMs : DEFAULT_TASK_TIMEOUT_MS);
+        const deadline = Date.now() + duration;
         const dep = await waitForTask(deps.home, dependsOnId, controller, deadline);
         if (!dep || dep.status !== "done") {
           task.status = "error";
           task.error = controller.signal.aborted
-            ? `timed out waiting for dependency task ${dependsOnId} (after ${timeoutMs}ms)`
+            ? `timed out waiting for dependency task ${dependsOnId} (after ${duration}ms)`
             : dep?.status === "error"
               ? `dependency task ${dependsOnId} failed: ${dep.error ?? "error"}`
               : `dependency task ${dependsOnId} did not complete`;
           task.finishedAt = new Date().toISOString();
           return task; // persisted + notified in finally
         }
+        // Dependency resolved within budget — reset the timer so the run phase
+        // gets its own full budget instead of whatever the wait left over (#182).
+        clearTimeout(timer);
+        timer = setTimeout(() => controller.abort(), duration);
         runMessage =
           `Result from dependency task ${dependsOnId} (${dep.bot}):\n${dep.result ?? "(no result)"}\n\n` +
           `Now handle the original request:\n${message}`;
@@ -352,7 +355,7 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
     } catch (err) {
       task.status = "error";
       task.error = controller.signal.aborted
-        ? `timeout after ${timeoutMs}ms`
+        ? `timeout during run after ${duration}ms`
         : `delegation failed: ${(err as Error).message}`;
       task.finishedAt = new Date().toISOString();
     } finally {
