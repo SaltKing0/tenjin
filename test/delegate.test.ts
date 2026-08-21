@@ -265,7 +265,7 @@ describe("ask_bot", () => {
     writeFileSync(join(home, "bots", "researcher", "config.yaml"), "budgetUSD: 0.005\n");
     const log = new AuditLog(auditPath(home));
     const audit = (
-      kind: "delegation" | "write_exec" | "budget_halt",
+      kind: "delegation" | "write_exec" | "budget_halt" | "prompt_injection",
       detail: string,
       correlationId?: string,
     ) => log.append(kind, "user", detail, undefined, correlationId);
