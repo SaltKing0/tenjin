@@ -15,7 +15,10 @@ export interface HarnessConfig {
   budgetUSD: number;
   approval: Record<string, ApprovalMode>;
   pricing?: PricingOverride;
-  providers?: { openai?: { baseUrl?: string } };
+  providers?: {
+    openai?: { baseUrl?: string; apiKey?: string };
+    anthropic?: { apiKey?: string };
+  };
   models?: { default?: string; cheap?: string };
   gateway?: unknown;
   security?: { blockedPatterns?: string[]; disabled?: boolean };

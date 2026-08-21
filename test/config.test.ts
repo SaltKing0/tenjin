@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,8 @@ import {
   tenjinHome,
   memoryEnabled,
   vectorEnabled,
+  providersFile,
+  writeProvidersYaml,
 } from "../src/config/loader";
 
 let home: string;
@@ -146,5 +148,43 @@ describe("memory flags", () => {
       false,
     );
     expect(vectorEnabled(cfg({ memory: { vector: { enabled: true } } }))).toBe(true);
+  });
+});
+
+describe("providers.yaml (console-managed)", () => {
+  test("overrides global config, project still wins", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: from-global\n");
+    writeFileSync(
+      join(home, "providers.yaml"),
+      'models:\n  default: openai:from-managed\n',
+    );
+    const { config } = loadConfig(project, home);
+    expect(config.models?.default).toBe("openai:from-managed");
+  });
+
+  test("provider api keys flow through merge", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "providers.yaml"),
+      'providers:\n  anthropic:\n    apiKey: "sk-test-123"\n',
+    );
+    const { config } = loadConfig(project, home, { skipModelCheck: true });
+    expect(config.providers?.anthropic?.apiKey).toBe("sk-test-123");
+  });
+
+  test("writeProvidersYaml writes 0600 with both sections", () => {
+    writeProvidersYaml(home, {
+      providers: { anthropic: { apiKey: "sk-live" } },
+      models: { default: "anthropic:m" },
+    });
+    const raw = readFileSync(providersFile(home), "utf8");
+    expect(raw).toContain("sk-live");
+    expect(raw).toContain("Managed by the Tenjin web console");
+    const mode = require("node:fs").statSync(providersFile(home)).mode & 0o777;
+    expect(mode).toBe(0o600);
+    const { config } = loadConfig(project, home);
+    expect(config.providers?.anthropic?.apiKey).toBe("sk-live");
+    expect(config.models?.default).toBe("anthropic:m");
   });
 });

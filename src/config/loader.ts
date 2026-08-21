@@ -82,6 +82,25 @@ export function vectorEnabled(cfg: HarnessConfig): boolean {
   return memoryEnabled(cfg) && cfg.memory?.vector?.enabled !== false;
 }
 
+export function providersFile(home = tenjinHome()): string {
+  return join(home, "providers.yaml");
+}
+
+export function writeProvidersYaml(
+  home: string,
+  data: { providers?: unknown; models?: unknown },
+): void {
+  const doc: Record<string, unknown> = {};
+  if (data.providers) doc.providers = data.providers;
+  if (data.models) doc.models = data.models;
+  const path = providersFile(home);
+  writeFileSync(
+    path,
+    `# Managed by the Tenjin web console — safe to delete\n${YAML.stringify(doc)}`,
+    { mode: 0o600 },
+  );
+}
+
 export function ensureGlobalDir(home = tenjinHome()): { created: boolean } {
   mkdirSync(join(home, "sessions"), { recursive: true });
   const cfgPath = join(home, "config.yaml");
@@ -127,14 +146,17 @@ export function loadConfig(
   opts: { skipModelCheck?: boolean } = {},
 ): LoadedConfig {
   const globalPath = join(home, "config.yaml");
+  const managedPath = providersFile(home);
   const projectPath = join(projectDir, ".tenjin", "config.yaml");
 
   const globalCfg = parseYamlFile(globalPath);
+  const managedCfg = parseYamlFile(managedPath);
   const projectCfg = parseYamlFile(projectPath);
 
   const merged: HarnessConfig = {
     ...DEFAULTS,
     ...globalCfg,
+    ...managedCfg,
     ...projectCfg,
     approval: mergeApproval(mergeApproval(DEFAULTS.approval, globalCfg), projectCfg),
   };
@@ -160,7 +182,9 @@ function validate(cfg: HarnessConfig, globalPath: string, skipModelCheck: boolea
       `provider must be "anthropic" or "openai", got "${cfg.provider}"`,
     );
   }
-  if (!skipModelCheck && (!cfg.model || typeof cfg.model !== "string")) {
+  const hasLegacyModel = !!cfg.model && typeof cfg.model === "string";
+  const hasTierModel = !!cfg.models?.default?.trim();
+  if (!skipModelCheck && !hasLegacyModel && !hasTierModel) {
     throw new ConfigError(
       `No model configured. Set \`model\` in ${globalPath} or pass --model.\n` +
         `Examples: claude-sonnet-4-5, gpt-4o, deepseek-chat`,
