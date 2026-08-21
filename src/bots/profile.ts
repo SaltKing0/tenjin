@@ -72,6 +72,7 @@ export interface BotProfile {
   sessionsDir: string;
   memoryDir: string;
   inboxDir: string;
+  tasksDir: string;
 }
 
 function parseStringList(value: unknown, label: string): string[] {
@@ -304,6 +305,7 @@ export function resolveBot(home: string, name: string): BotProfile {
     sessionsDir: join(root, "sessions"),
     memoryDir: join(root, "memory"),
     inboxDir: join(root, "inbox"),
+    tasksDir: join(root, "tasks"),
   };
 }
 
