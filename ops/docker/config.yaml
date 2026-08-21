@@ -14,6 +14,9 @@ gateway:
   listen:
     host: 0.0.0.0
     port: 3000
+    # #239: this example token MUST be replaced with a strong, unique value that
+    # matches GATEWAY_TOKEN in .env. The container's entrypoint refuses to boot
+    # while this is the well-known 'dev-local-token' (fail closed).
     token: dev-local-token   # <- set a strong, unique value here
 
   # Channels: uncomment and configure to connect the gateway to a channel.

@@ -21,13 +21,18 @@ services:
     restart: unless-stopped
     ports:
       # Map the container's 3000 (gateway.listen.port in config.yaml) to the
-      # host. Change TENJIN_PORT in .env to expose a different host port.
-      - "${TENJIN_PORT:-3000}:3000"
+      # host. The host BIND defaults to 127.0.0.1 (#239) so the gateway is not
+      # silently exposed on every interface; to publish it publicly (behind a
+      # reverse proxy or an explicit network boundary) set TENJIN_BIND=0.0.0.0
+      # in .env — do so deliberately, and only with a real GATEWAY_TOKEN.
+      - "${TENJIN_BIND:-127.0.0.1}:${TENJIN_PORT:-3000}:3000"
     environment:
       TENJIN_HOME: /data
       # Must equal `gateway.listen.token` in config.yaml — used by the
-      # HEALTHCHECK against /api/health.
-      GATEWAY_TOKEN: "${GATEWAY_TOKEN:-dev-local-token}"
+      # HEALTHCHECK against /api/health. No default here: entrypoint.sh refuses
+      # to boot with an unset or example token (#239), so the operator MUST set
+      # a strong, unique value in .env.
+      GATEWAY_TOKEN: "${GATEWAY_TOKEN:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"

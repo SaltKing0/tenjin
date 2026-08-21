@@ -116,12 +116,18 @@ environment, never baked into the image.
 
 ```sh
 cd ops/docker
-cp .env.example .env        # fill in GATEWAY_TOKEN + any API keys / channel tokens
+cp .env.example .env        # REQUIRED: set GATEWAY_TOKEN + any API keys / channel tokens
+openssl rand -hex 32        # suggest using this to generate GATEWAY_TOKEN
 # set the same token as `gateway.listen.token` in config.yaml
 docker compose up -d --build
 docker compose ps           # wait for "healthy"
-curl -H "Authorization: Bearer $GATEWAY_TOKEN" http://localhost:3000/api/health
+curl -H "Authorization: Bearer <GATEWAY_TOKEN>" http://127.0.0.1:3000/api/health
 ```
+
+The gateway binds to `127.0.0.1` by default and **refuses to start** unless
+`GATEWAY_TOKEN` is set to a strong, non-example value (entrypoint fail-closed,
+#239) — so a `docker compose up` without a configured `.env` cannot silently
+expose a known-token gateway.
 
 That's it. On first boot the entrypoint seeds a `default` bot into the fresh
 home volume so the gateway (which needs a bot for the web console) starts
@@ -132,6 +138,33 @@ channels and the console token can be edited without rebuilding the image:
 # edit ./config.yaml, then:
 docker compose restart
 ```
+
+### Exposing the gateway publicly (reverse proxy, recommended)
+
+By default the gateway listens on `127.0.0.1` only, which is the safe choice for
+remote access via SSH tunnel or a reverse proxy running on the same host. If you
+really need to publish it, put TLS-terminating reverse proxy (Caddy, Nginx,
+Traefik) in front and let it forward to the container's local port — do **not**
+bind `0.0.0.0` directly to the open internet.
+
+```sh
+# in ops/docker/.env — deliberate, public exposure:
+TENJIN_BIND=0.0.0.0
+docker compose up -d --build
+```
+
+Example Caddy config on the host, forwarding to the gateway:
+
+```caddyfile
+ai.example.com {
+    reverse_proxy 127.0.0.1:3000
+    header_up Authorization "{http.request.header.Authorization}"
+}
+```
+
+A deployed gateway behind an internet-facing proxy still needs a strong
+`GATEWAY_TOKEN` — the console and REST API are token-gated regardless of how it
+is reached.
 
 State — sessions, memory, the audit log and any provider keys — persists in the
 named `tenjin-home` volume. To connect Telegram, set `TELEGRAM_BOT_TOKEN` in

@@ -34,7 +34,8 @@ USER 1000:1000
 ENV TENJIN_HOME=/data
 
 COPY --chown=1000:1000 ops/docker/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+COPY --chown=1000:1000 ops/docker/check-token.sh /app/check-token.sh
+RUN chmod +x /app/entrypoint.sh /app/check-token.sh
 
 EXPOSE 3000
 
