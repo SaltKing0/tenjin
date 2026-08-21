@@ -1,4 +1,7 @@
 import { describe, test, expect } from "bun:test";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runArena } from "../src/arena";
 import type {
   ChatRequest,
@@ -6,6 +9,7 @@ import type {
   Provider,
 } from "../src/provider/types";
 import { resolveModelRef } from "../src/config/models";
+import { SecurityGuard } from "../src/security/guard";
 
 const endTurn = (text: string, usage = { inputTokens: 100, outputTokens: 10 }): ChatResponse => ({
   stopReason: "end_turn",
@@ -243,5 +247,43 @@ describe("arena judge (#152)", () => {
     expect(r.judge?.error).toContain("judge api down");
     expect(r.judge?.ranking).toEqual([]);
     expect(r.candidates).toHaveLength(2);
+  });
+});
+
+describe("arena security guard (#178)", () => {
+  test("arena run passes a SecurityGuard so read_file on .env is blocked", async () => {
+    const work = mkdtempSync(join(tmpdir(), "tj-arena-guard-"));
+    try {
+      writeFileSync(join(work, ".env"), "DB_PASSWORD=supersecret");
+      let blocks = 0;
+      const guard = SecurityGuard.fromConfig({ workspaceRoot: work }, () => {
+        blocks++;
+      });
+      const p = scriptProvider("p", [
+        {
+          stopReason: "tool_use",
+          content: [
+            { type: "tool_use", id: "t1", name: "read_file", input: { path: ".env" } },
+          ],
+          usage: { inputTokens: 100, outputTokens: 10 },
+        },
+        endTurn("after the blocked read"),
+      ]);
+      const r = await runArena({
+        entries: [{ ref: refA, provider: p }],
+        message: "read .env",
+        cwd: work,
+        maxTokens: 512,
+        capUSD: 5,
+        guard,
+      });
+      expect(r.candidates[0]!.error).toBeUndefined();
+      // the guard was consulted and the .env read was blocked
+      expect(blocks).toBeGreaterThan(0);
+      // the secret from .env never leaked into the candidate's visible text
+      expect(r.candidates[0]!.text ?? "").not.toContain("supersecret");
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
   });
 });
