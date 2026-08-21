@@ -287,6 +287,17 @@ test("console serves the sidebar-bots module (#276)", async () => {
   expect(body).toContain("botSectionItems");
 });
 
+test("console serves the sidebar-groups module (#287)", async () => {
+  const base = start({
+    consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
+  });
+  const res = await fetch(`${base}/console/sidebar-groups.js`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("application/javascript");
+  const body = await res.text();
+  expect(body).toContain("panelGroups");
+});
+
 test("console serves the tables module (#258)", async () => {
   const base = start({
     consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
