@@ -136,3 +136,99 @@ describe("session replay events", () => {
     expect(js).toContain("openReplay");
   });
 });
+
+describe("session lineage tree (#131)", () => {
+  const sessionsDir = () => join(home, "bots", "researcher", "sessions");
+
+  test("GET /api/sessions/:id/tree follows fork-of-fork ancestry to the root", async () => {
+    seedSession("researcher", "sess1"); // root — no parent
+    const dir = sessionsDir();
+    const b = SessionLog.fork(dir, "sess1");
+    const c = SessionLog.fork(dir, b.id);
+
+    const base = startServer();
+    const res = await fetch(`${base}/api/sessions/${c.id}/tree?bot=researcher`, { headers: auth });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      id: string;
+      depth: number;
+      lineage: Array<{
+        id: string;
+        parentId: string | null;
+        uptoEvent: number | null;
+        isFork: boolean;
+        compressionCount: number;
+      }>;
+    };
+    expect(body.id).toBe(c.id);
+    expect(body.depth).toBe(3);
+    // newest first: child → parent → root
+    expect(body.lineage.map((n) => n.id)).toEqual([c.id, b.id, "sess1"]);
+    expect(body.lineage[0]?.parentId).toBe(b.id);
+    expect(body.lineage[0]?.isFork).toBe(true);
+    expect(body.lineage[0]?.uptoEvent).toBeGreaterThan(0);
+    expect(body.lineage[1]?.parentId).toBe("sess1");
+    expect(body.lineage[1]?.isFork).toBe(true);
+    expect(body.lineage[2]).toEqual(
+      expect.objectContaining({ id: "sess1", parentId: null, isFork: false, uptoEvent: null }),
+    );
+  });
+
+  test("tree marks compression events per node, not inherited", async () => {
+    seedSession("researcher", "sess1");
+    const dir = sessionsDir();
+    // Root records one compression.
+    SessionLog.resolve(dir, "sess1").append({
+      t: "compression",
+      beforeTokens: 100,
+      afterTokens: 60,
+      elidedTokens: 40,
+      ts: "t-root",
+    });
+    // Fork, then record a different compression in the child only.
+    const b = SessionLog.fork(dir, "sess1");
+    SessionLog.open(join(dir, `${b.id}.jsonl`)).append({
+      t: "compression",
+      beforeTokens: 200,
+      afterTokens: 120,
+      elidedTokens: 80,
+      ts: "t-child",
+    });
+
+    const base = startServer();
+    const res = await fetch(`${base}/api/sessions/${b.id}/tree?bot=researcher`, { headers: auth });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as unknown as {
+      lineage: Array<{
+        id: string;
+        compressionCount: number;
+        compressions: Array<{ beforeTokens: number; elidedTokens: number; ts: string }>;
+      }>;
+    };
+    // child carries only its own compression…
+    expect(body.lineage[0]?.id).toBe(b.id);
+    expect(body.lineage[0]?.compressionCount).toBe(1);
+    expect(body.lineage[0]?.compressions[0]).toEqual(
+      expect.objectContaining({ beforeTokens: 200, afterTokens: 120, elidedTokens: 80, ts: "t-child" }),
+    );
+    // …and the root's compression stays with the root, not folded into the child.
+    expect(body.lineage[1]?.id).toBe("sess1");
+    expect(body.lineage[1]?.compressionCount).toBe(1);
+    expect(body.lineage[1]?.compressions[0]?.ts).toBe("t-root");
+  });
+
+  test("GET /api/sessions/:id/tree for unknown session is 404", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/sessions/ghost/tree?bot=researcher`, { headers: auth });
+    expect(res.status).toBe(404);
+  });
+
+  test("console replay wires the lineage breadcrumb endpoint", () => {
+    const js = readFileSync(
+      join(import.meta.dir, "..", "src", "gateway", "console", "app.js"),
+      "utf8",
+    );
+    expect(js).toContain("/tree?bot=");
+    expect(js).toContain("lineage");
+  });
+});
