@@ -134,6 +134,7 @@ describe("bot messaging tools", () => {
         sessionsDir: "",
         memoryDir: "",
         inboxDir,
+        tasksDir: join(home, "bots", "researcher", "tasks"),
       },
       policy,
     });
@@ -155,6 +156,7 @@ describe("bot messaging tools", () => {
         sessionsDir: "",
         memoryDir: "",
         inboxDir: join(home, "bots", "researcher", "inbox"),
+        tasksDir: join(home, "bots", "researcher", "tasks"),
       },
     });
 

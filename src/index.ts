@@ -1621,25 +1621,33 @@ async function forgetCommand(args: string[]): Promise<number> {
   let bot: string | null = null;
   let sessions = false;
   let memory = false;
+  let inbox = false;
+  let tasks = false;
   let all = false;
   let yes = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--bot") bot = args[++i] ?? null;
     else if (args[i] === "--sessions") sessions = true;
     else if (args[i] === "--memory") memory = true;
+    else if (args[i] === "--inbox") inbox = true;
+    else if (args[i] === "--tasks") tasks = true;
     else if (args[i] === "--all") all = true;
     else if (args[i] === "--yes") yes = true;
   }
   if (!bot) {
-    stdout.write("usage: tenjin forget --bot <name> [--sessions|--memory|--all] [--yes]\n");
+    stdout.write(
+      "usage: tenjin forget --bot <name> [--sessions|--memory|--inbox|--tasks|--all] [--yes]\n",
+    );
     return 2;
   }
   const profile = resolveBot(home, bot);
   const targets: string[] = [];
   if (all || sessions) targets.push(profile.sessionsDir);
   if (all || memory) targets.push(profile.memoryDir);
+  if (all || inbox) targets.push(profile.inboxDir);
+  if (all || tasks) targets.push(profile.tasksDir);
   if (targets.length === 0) {
-    stdout.write("nothing selected — pass --sessions, --memory, or --all\n");
+    stdout.write("nothing selected — pass --sessions, --memory, --inbox, --tasks, or --all\n");
     return 2;
   }
 
