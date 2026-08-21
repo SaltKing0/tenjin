@@ -220,6 +220,23 @@ export interface StartTaskArgs {
   maxTreeUsd?: number;
 }
 
+/**
+ * #184: continue a delegation-tree budget from a dependency task's persisted
+ * snapshot. When a chain spans a process boundary (so no in-memory TreeBudget
+ * is inherited), a successor re-anchors to the dependency's carried counter
+ * instead of starting a fresh, uncapped tree.
+ */
+function continueTreeFromDependency(home: string, depId: string): TreeBudget | undefined {
+  const dep = findTaskById(home, depId);
+  if (!dep) return undefined;
+  return TreeBudget.continueFrom({
+    maxIterations: dep.treeMaxIterations,
+    usedIterations: dep.treeUsedIterations,
+    maxUsd: dep.treeMaxUsd,
+    usedUsd: dep.treeUsedUsd,
+  });
+}
+
 /** True when `dependsOnId` (directly or transitively) forms a cycle with `newId`. */
 function assertNoCycle(home: string, newId: string, dependsOnId: string): void {
   const seen = new Set<string>([dependsOnId]);
@@ -399,8 +416,14 @@ export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): Starte
       // #154: inherit the caller's shared tree budget, or start a fresh tree
       // for this task when a per-task cap is set (independent tasks that set
       // their own cap do not share a counter).
+      //
+      // #184: across a process boundary the in-memory TreeBudget object is
+      // unavailable, so a dependency-chain successor picks up the dependency's
+      // persisted tree snapshot as its new cap — the used counter carries over
+      // instead of restarting at 0.
       const tb =
         args.treeBudget ??
+        (dependsOnId ? continueTreeFromDependency(deps.home, dependsOnId) : undefined) ??
         (args.maxTreeIterations || args.maxTreeUsd
           ? new TreeBudget(args.maxTreeIterations ?? 0, args.maxTreeUsd ?? 0)
           : undefined);

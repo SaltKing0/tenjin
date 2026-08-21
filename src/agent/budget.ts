@@ -126,6 +126,40 @@ export class TreeBudget {
     readonly maxUSD: number,
   ) {}
 
+  /**
+   * #184: continue a delegation tree from a persisted snapshot. Across a
+   * process boundary the in-memory TreeBudget object is unavailable, so a
+   * chain that survives a restart carries its counter on a task's persisted
+   * fields (treeUsedIterations / treeMaxIterations / ...). Seed the new
+   * budget's used counters from that snapshot so a successor chain keeps
+   * counting instead of restarting at 0.
+   *
+   * Returns `undefined` when the snapshot carries no cap (a cap-less tree is
+   * left unbudgeted, matching how an in-process chain with no cap behaves).
+   */
+  static continueFrom(snapshot: {
+    maxIterations?: number;
+    usedIterations?: number;
+    maxUsd?: number;
+    usedUsd?: number;
+  }): TreeBudget | undefined {
+    const maxIterations = snapshot.maxIterations ?? 0;
+    const maxUsd = snapshot.maxUsd ?? 0;
+    if (maxIterations <= 0 && maxUsd <= 0) return undefined;
+    const tb = new TreeBudget(maxIterations, maxUsd);
+    tb.usedIterations = Math.max(0, snapshot.usedIterations ?? 0);
+    tb.usedUSD = Math.max(0, snapshot.usedUsd ?? 0);
+    // An already-exhausted tree stays stopped so a successor halts immediately
+    // (with a clear tree_budget_exceeded) instead of starting fresh work.
+    if (
+      (tb.hasIterationCap && tb.usedIterations >= tb.maxIterations) ||
+      (tb.hasUsdCap && tb.usedUSD >= tb.maxUSD)
+    ) {
+      tb.stopped = true;
+    }
+    return tb;
+  }
+
   get hasIterationCap(): boolean {
     return this.maxIterations > 0;
   }
