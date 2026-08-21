@@ -3,6 +3,7 @@
 
 import { renderMarkdown } from "./markdown.js";
 import { emptyStateFor } from "./empty-state.js";
+import { setupChecklist } from "./setup-checklist.js";
 
 const $app = document.getElementById("app");
 
@@ -41,6 +42,23 @@ function emptyStateCard(panel) {
   if (def.caption) parts.push(el("div", { class: "dim" }, def.caption));
   if (def.cta && def.hash) parts.push(el("a", { class: "primary", href: def.hash }, def.cta));
   return el("div", { class: "card empty-state" }, ...parts);
+}
+
+// #252: render the setup checklist (from /api/setup/state) with deep-links on
+// every still-missing item. Pure items come from setup-checklist.js.
+function renderSetupChecklist(state) {
+  const rows = setupChecklist(state).map((item) => {
+    const row = el(
+      "div",
+      { class: item.ok ? "setup-row ok" : "setup-row" },
+      el("span", { class: "setup-mark" }, item.ok ? "✓" : "✗"),
+      el("span", {}, item.label),
+      item.optional ? el("span", { class: "dim" }, " (optional)") : null,
+    );
+    if (!item.ok && item.hash) row.append(el("a", { class: "setup-link", href: item.hash }, "→"));
+    return row;
+  });
+  return el("div", { class: "card" }, ...rows);
 }
 
 async function api(path, opts = {}) {
@@ -187,6 +205,16 @@ async function panelStatus(main) {
     el("div", {}, `channels: ${(status.channels || []).join(", ") || "none"}`),
   );
   main.append(card);
+
+  // #252: what is still missing to use the console (model, bot, token, budget,
+  // optional channel) with deep-links into the relevant panel.
+  main.append(el("h2", {}, "setup"));
+  try {
+    const setup = await apiJson("/api/setup/state");
+    main.append(renderSetupChecklist(setup));
+  } catch {
+    main.append(el("div", { class: "dim" }, "setup state unavailable"));
+  }
 
   const guard = status.guard || {};
   const disabled = guard.state === "disabled";
