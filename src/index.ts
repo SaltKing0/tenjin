@@ -4,7 +4,7 @@ import { createInterface } from "node:readline/promises";
 import { dirname, basename, resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import {
   ensureGlobalDir,
   loadConfig,
@@ -65,6 +65,7 @@ import {
 } from "./security/guard";
 import { resolveParanoid } from "./security/injection";
 import { Redactor } from "./security/redact";
+import { initKeyring, keyringEnabled, keyringPath, ENC_PREFIX } from "./security/keyring";
 import { AuditLog, formatAudit, auditPath } from "./audit/log";
 import { aggregateSpend, renderSpend } from "./audit/spend";
 import { TelegramChannel } from "./gateway/telegram";
@@ -161,6 +162,9 @@ async function main(): Promise<number> {
 
   if (process.argv[2] === "team") {
     return teamCommand(process.argv.slice(3));
+  }
+  if (process.argv[2] === "keyring") {
+    return keyringCommand(process.argv.slice(3));
   }
 
   let cli: CliArgs;
@@ -571,6 +575,37 @@ function restoreCommand(args: string[]): number {
     stdout.write(`error: ${(e as Error).message}\n`);
     return 1;
   }
+}
+
+/** Manages the machine-local keyring for secrets at rest (#132). */
+function keyringCommand(args: string[]): number {
+  const home = tenjinHome();
+  const sub = args[0];
+  if (sub === "init") {
+    if (keyringEnabled(home)) {
+      stdout.write(`keyring already initialized (${keyringPath(home)})\n`);
+      return 0;
+    }
+    const p = initKeyring(home);
+    stdout.write(`keyring initialized at ${p} (0600, machine-local)\n`);
+    stdout.write("  existing plaintext keys are encrypted on their next save (re-enter or re-save via the console)\n");
+    return 0;
+  }
+  if (sub === "status") {
+    const provPath = join(home, "providers.yaml");
+    const on = keyringEnabled(home);
+    const raw = existsSync(provPath) ? readFileSync(provPath, "utf8") : "";
+    const plain = raw
+      .split("\n")
+      .some((l) => /^\s*apiKey:\s*\S/.test(l) && !l.includes(ENC_PREFIX));
+    stdout.write(`keyring: ${on ? "ENABLED" : "disabled (plaintext mode)"}\n`);
+    if (on) stdout.write(`  secret file: ${keyringPath(home)}\n`);
+    if (on && plain) stdout.write("  warning: providers.yaml still holds plaintext apiKeys — re-save to encrypt\n");
+    else if (on) stdout.write("  providers.yaml keys: encrypted at rest\n");
+    return 0;
+  }
+  stdout.write("usage: tenjin keyring init|status\n");
+  return 2;
 }
 
 async function arenaCommand(args: string[]): Promise<number> {
@@ -1313,6 +1348,24 @@ function doctorCommand(): number {
         add("ok", "gateway telegram token present or disabled");
       }
     }
+  }
+
+  const provPath = join(home, "providers.yaml");
+  const keyLines = (existsSync(provPath) ? readFileSync(provPath, "utf8") : "")
+    .split("\n")
+    .filter((l) => /^\s*apiKey:\s*\S/.test(l));
+  const plain = keyLines.some((l) => !l.includes(ENC_PREFIX));
+  const encrypted = keyLines.some((l) => l.includes(ENC_PREFIX));
+  if (keyLines.length === 0) {
+    add("ok", "no provider apiKeys stored", "none in providers.yaml");
+  } else if (plain) {
+    add(
+      "warn",
+      "provider apiKeys stored in plaintext",
+      encrypted ? "some keys still plaintext — re-save to encrypt all" : "`tenjin keyring init` then re-save to encrypt",
+    );
+  } else {
+    add("ok", "provider apiKeys encrypted at rest", "keyring active");
   }
 
   try {
