@@ -227,6 +227,55 @@ describe("SlackChannel (#106)", () => {
     ac.abort();
   });
 
+  // #200: a Slack redelivery of the same event_id must run the agent exactly once.
+  test("a redelivered event_id runs exactly once (idempotent)", async () => {
+    startFakeApi();
+    let runs = 0;
+    const ch = makeChannel();
+    active.push(ch);
+    ch.onMessage(async () => {
+      runs += 1;
+      return null;
+    });
+    const ac = new AbortController();
+    await ch.start(ac.signal);
+    const body = {
+      type: "event_callback",
+      event_id: "Ev-dup-1",
+      event: { type: "message", channel: "C123", user: "U1", text: "hello", ts: "1" },
+    };
+    await postEvent(ch, body);
+    await postEvent(ch, body); // Slack retries with the same event_id
+    await Bun.sleep(30);
+    expect(runs).toBe(1);
+    ac.abort();
+  });
+
+  // #200: the run is fire-and-forget — the 2xx ack goes out before a slow run ends.
+  test("a slow run does not block the 2xx ack", async () => {
+    startFakeApi();
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    let finished = false;
+    const ch = makeChannel();
+    active.push(ch);
+    ch.onMessage(async () => {
+      await gate;
+      finished = true;
+      return null;
+    });
+    const ac = new AbortController();
+    await ch.start(ac.signal);
+    const resPromise = postEvent(ch, messageEvent("C123", "slow"));
+    const ack = await Promise.race([resPromise, Bun.sleep(100).then(() => "TIMEOUT")]);
+    expect(ack).not.toBe("TIMEOUT"); // ack returned while the run is still blocked
+    release();
+    await resPromise;
+    await Bun.sleep(10);
+    expect(finished).toBe(true); // the background run still completed
+    ac.abort();
+  });
+
   test("e2e: real message handler runs the bot and posts the reply back to slack", async () => {
     startFakeApi();
     const home = mkdtempSync(join(tmpdir(), "tj-slk-"));
