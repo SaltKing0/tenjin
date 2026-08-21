@@ -6,6 +6,8 @@ import { createAskBotTool } from "../src/bots/delegate";
 import { createBot } from "../src/bots/profile";
 import { dispatch } from "../src/tools/registry";
 import { Budget } from "../src/agent/budget";
+import { SessionLog } from "../src/session/log";
+import { aggregateSpend } from "../src/audit/spend";
 import type { ChatRequest, ChatResponse, Provider } from "../src/provider/types";
 import type { HarnessConfig, ProviderName } from "../src/config/types";
 
@@ -164,5 +166,75 @@ describe("ask_bot", () => {
   test("empty message rejected", async () => {
     const r = await ask(makeTool(), { bot: "researcher", message: "   " });
     expect(r.ok).toBe(false);
+  });
+
+  test("writes a session log under the target bot", async () => {
+    const tool = makeTool();
+    const r = await ask(tool, { bot: "researcher", message: "what is auth.ts doing?" });
+    expect(r.ok).toBe(true);
+
+    const sessions = SessionLog.list(join(home, "bots", "researcher", "sessions"));
+    expect(sessions).toHaveLength(1);
+    const events = SessionLog.open(sessions[0]!.path).events();
+
+    const start = events.find((e) => e.t === "session_start");
+    expect(start?.t).toBe("session_start");
+    if (start?.t === "session_start") {
+      expect(start.bot).toBe("researcher");
+      expect(start.model).toBe("claude-sonnet-4-5");
+    }
+    expect(
+      events.some(
+        (e) => e.t === "message" && e.role === "user" && e.content === "what is auth.ts doing?",
+      ),
+    ).toBe(true);
+    expect(events.some((e) => e.t === "usage" && e.costUSD > 0)).toBe(true);
+  });
+
+  test("delegation spend appears under the target bot", async () => {
+    const tool = makeTool();
+    await ask(tool, { bot: "researcher", message: "summarize auth.ts" });
+
+    const rows = aggregateSpend(home);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.scope).toBe("researcher");
+    expect(rows[0]?.sessions).toBe(1);
+    expect(rows[0]?.inputTokens).toBe(1000);
+    expect(rows[0]?.outputTokens).toBe(500);
+    expect(rows[0]?.costUSD).toBeGreaterThan(0);
+    expect(rows[0]?.model).toContain("claude-sonnet-4-5");
+  });
+
+  test("rejected delegation does not write a session log", async () => {
+    await ask(makeTool({ fromBot: "researcher" }), {
+      bot: "researcher",
+      message: "x",
+    });
+    await ask(makeTool(), { bot: "ghost", message: "x" });
+    expect(SessionLog.list(join(home, "bots", "researcher", "sessions"))).toEqual([]);
+    expect(aggregateSpend(home)).toEqual([]);
+  });
+
+  test("budget-exhausted delegation still records session + spend", async () => {
+    writeFileSync(join(home, "bots", "researcher", "config.yaml"), "budgetUSD: 0.005\n");
+    const provider = scriptProvider([
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "t1", name: "read_file", input: { path: "x" } }],
+        usage: { inputTokens: 10_000_000, outputTokens: 0 },
+      },
+    ]);
+    const r = await ask(makeTool({ provider }), { bot: "researcher", message: "big job" });
+    expect(r.output).toContain("budget_exhausted");
+
+    const sessions = SessionLog.list(join(home, "bots", "researcher", "sessions"));
+    expect(sessions).toHaveLength(1);
+    const events = SessionLog.open(sessions[0]!.path).events();
+    expect(events.some((e) => e.t === "usage")).toBe(true);
+
+    const rows = aggregateSpend(home);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.scope).toBe("researcher");
+    expect(rows[0]?.costUSD).toBeGreaterThan(0);
   });
 });

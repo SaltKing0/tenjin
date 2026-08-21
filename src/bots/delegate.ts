@@ -61,6 +61,8 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
         pricing: deps.globalConfig.pricing,
         policy: "read-only",
         guard: deps.guard,
+        sessionLogDir: profile.sessionsDir,
+        sessionBot: profile.name,
       });
 
       const text = result.text;
