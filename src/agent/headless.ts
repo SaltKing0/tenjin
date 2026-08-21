@@ -60,6 +60,8 @@ export interface HeadlessOptions {
   extraTools?: ToolDef[];
   home?: string;
   memoryDir?: string;
+  /** Entries kept per learnings.md file (#204); defaults to DEFAULT_MAX_LEARNINGS. */
+  maxLearnings?: number;
   sessionLogDir?: string;
   sessionBot?: string;
   guard?: import("../security/guard").SecurityGuard | null;
@@ -188,6 +190,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         memoryDirPath: opts.memoryDir,
         projectPath: opts.cwd,
         sessionId: logger?.id,
+        maxEntries: opts.maxLearnings,
       }),
     );
   }

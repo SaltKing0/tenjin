@@ -13,6 +13,9 @@ export interface LearningEntry {
   created: string; // ISO date (YYYY-MM-DD)
 }
 
+/** Max entries kept per learnings.md file (#204). Oldest are dropped on overflow. */
+export const DEFAULT_MAX_LEARNINGS = 200;
+
 /** Sanitize a project path into a stable file slug ("/a/b" -> "a-b"). */
 function projectSlug(projectPath: string): string {
   const slug = projectPath
@@ -52,15 +55,37 @@ export function readLearnings(memoryDirPath: string, projectPath: string): Learn
 }
 
 /**
+ * Drop the oldest entries so at most `maxEntries` remain. "Oldest" = earliest
+ * `created` date; same-day ties break by file position (earlier = older),
+ * matching the append-chronological order the file is written in.
+ * Returns the survivors in their original relative order.
+ */
+function trimOldest(entries: LearningEntry[], maxEntries: number): LearningEntry[] {
+  if (entries.length <= maxEntries) return entries;
+  const keep = [...entries]
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => {
+      if (a.e.created !== b.e.created) return a.e.created < b.e.created ? -1 : 1;
+      return a.i - b.i;
+    })
+    .slice(entries.length - maxEntries)
+    .sort((a, b) => a.i - b.i)
+    .map((x) => x.e);
+  return keep;
+}
+
+/**
  * Persist a learning for this bot+project. If the same fact (case/whitespace
  * insensitive) already exists, its entry is replaced in place with the new
- * date/session; otherwise it is appended.
+ * date/session; otherwise it is appended. When the file would exceed
+ * `maxEntries` entries, the oldest are dropped (#204).
  */
 export function recordLearning(
   memoryDirPath: string,
   projectPath: string,
   fact: string,
   sessionId: string,
+  maxEntries: number = DEFAULT_MAX_LEARNINGS,
 ): { path: string; deduped: boolean } {
   const path = learningsPath(memoryDirPath, projectPath);
   mkdirSync(join(memoryDirPath, "learnings"), { recursive: true });
@@ -85,6 +110,6 @@ export function recordLearning(
   }
   if (!deduped) next.push(entry);
 
-  writeFileSync(path, `${next.map(renderLearning).join("\n")}\n`);
+  writeFileSync(path, `${trimOldest(next, maxEntries).map(renderLearning).join("\n")}\n`);
   return { path, deduped };
 }

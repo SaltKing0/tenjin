@@ -16,7 +16,9 @@ It is the reference harness this repository documents. Repo codename: `stealth`.
 - **Sessions, memory and skills** — every conversation is a durable session log;
   optional embeddings-backed recall, summonable skills, and per-bot facts. A
   distilled **learnings** tier (`record_learning`) persists durable takeaways
-  per bot+project, deduplicated and injected ahead of running summaries.
+  per bot+project, deduplicated and injected ahead of running summaries. The
+  per-file takeaway list is capped (oldest dropped first;
+  `memory.learnings.maxEntries`, default 200).
 - **Bots** — run multiple role-specific agents from one install, each with its
   own `SOUL.md`, model, budget, memory and inbox.
 - **Always-on gateway** — Telegram channel, scheduled jobs, heartbeats and a

@@ -12,6 +12,7 @@ import {
   vectorEnabled,
   providersFile,
   writeProvidersYaml,
+  type LoadedConfig,
   CONFIG_SCHEMA_VERSION,
   migrateConfig,
 } from "../src/config/loader";
@@ -220,6 +221,25 @@ describe("iss#67 schema validation", () => {
       console.warn = originalWarn;
     }
     expect(warns.some((w) => w.includes("memory.vector.whatev"))).toBe(true);
+  });
+
+  test("memory.learnings.maxEntries is a known field", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "config.yaml"),
+      "model: m\nmemory:\n  learnings:\n    maxEntries: 50\n",
+    );
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg: unknown) => warns.push(String(msg));
+    let parsed: LoadedConfig | undefined;
+    try {
+      parsed = loadConfig(project, home);
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(parsed?.config.memory?.learnings?.maxEntries).toBe(50);
+    expect(warns.some((w) => w.includes("memory.learnings.maxEntries"))).toBe(false);
   });
 
   test("wrong scalar type reports file + dotted path + expected/found", () => {

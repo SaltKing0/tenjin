@@ -329,7 +329,7 @@ async function main(): Promise<number> {
     ];
     if (memoryEnabled(config)) {
       tools.push(createRememberTool({ memoryDirPath: memDir }));
-      tools.push(createRecordLearningTool({ memoryDirPath: memDir, projectPath: cwd }));
+      tools.push(createRecordLearningTool({ memoryDirPath: memDir, projectPath: cwd, maxEntries: config.memory?.learnings?.maxEntries }));
       tools.push(createRecallTool({ memoryDirPath: memDir, projectPath: cwd, embeddings, store: vectorStore ?? undefined }));
     }
     tools.push(createUseSkillTool({ home, projectDir: cwd }));

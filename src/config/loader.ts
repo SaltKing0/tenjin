@@ -157,6 +157,12 @@ const SCHEMA: Record<string, FieldDef> = {
           onSessionEnd: { types: ["boolean"] },
         },
       },
+      learnings: {
+        types: ["mapping"],
+        children: {
+          maxEntries: { types: ["number"] },
+        },
+      },
     },
   },
   events: {

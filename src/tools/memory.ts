@@ -53,12 +53,14 @@ export function createRecordLearningTool(deps: {
   projectPath: string;
   /** Source session to attribute the learning to. When absent, "manual". */
   sessionId?: string;
+  /** Entries kept per learnings.md file (#204); defaults to DEFAULT_MAX_LEARNINGS. */
+  maxEntries?: number;
 }): ToolDef {
   return {
     name: "record_learning",
     group: "write",
     description:
-      "Distill a durable, deduplicated learning (fact plus source session) into long-term memory for this bot and project. Use near the end of a session to capture the 1-3 most important takeaways; recording the same fact again replaces the earlier entry.",
+      "Distill a durable, deduplicated learning (fact plus source session) into long-term memory for this bot and project. Use near the end of a session to capture the 1-3 most important takeaways; recording the same fact again replaces the earlier entry. The oldest entries are dropped if the file grows past its cap.",
     inputSchema: {
       type: "object",
       properties: {
@@ -77,6 +79,7 @@ export function createRecordLearningTool(deps: {
         deps.projectPath,
         learning,
         deps.sessionId ?? "manual",
+        deps.maxEntries,
       );
       return `Recorded learning${deduped ? " (replaced a duplicate)" : ""}: ${learning}`;
     },

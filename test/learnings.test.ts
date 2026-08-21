@@ -58,6 +58,28 @@ describe("recordLearning", () => {
     expect(readLearnings(dir, "/proj")).toHaveLength(2);
   });
 
+  test("capping: over-cap writes drop the oldest entries first", () => {
+    for (let i = 0; i < 5; i++) recordLearning(dir, "/proj", `fact ${i}`, `s${i}`);
+    // re-record with a cap of 3 — the three oldest facts must be dropped
+    recordLearning(dir, "/proj", "fact 5", "s5", 3);
+    const entries = readLearnings(dir, "/proj")!;
+    expect(entries).toHaveLength(3);
+    const facts = entries.map((e) => e.fact);
+    expect(facts).not.toContain("fact 0");
+    expect(facts).not.toContain("fact 1");
+    expect(facts).not.toContain("fact 2");
+    expect(facts).toEqual(["fact 3", "fact 4", "fact 5"]);
+  });
+
+  test("capping keeps newest entries when rewriting an existing file", () => {
+    for (let i = 0; i < 5; i++) recordLearning(dir, "/proj", `fact ${i}`, `s${i}`, 3);
+    const entries = readLearnings(dir, "/proj")!;
+    const facts = entries.map((e) => e.fact);
+    // only the 3 most recent survive
+    expect(entries).toHaveLength(3);
+    expect(facts).toEqual(["fact 2", "fact 3", "fact 4"]);
+  });
+
   test("projects are isolated per file", () => {
     recordLearning(dir, "/proj-a", "about a", "s1");
     recordLearning(dir, "/proj-b", "about b", "s2");
@@ -154,5 +176,25 @@ describe("buildMemorySection with learnings", () => {
     expect(
       buildMemorySection([], { currentProject: "/p", learnings: [] }),
     ).toBeNull();
+  });
+
+  test("learnings are prioritized newest-first within the tier", () => {
+    // All learnings together exceed maxTokens, so the budget must keep the
+    // newest ones and drop the oldest.
+    const long = "z".repeat(400); // ~100 tokens each line incl. prefix
+    const learnings = [
+      { fact: long, sessionId: "old", created: "2026-08-01" },
+      { fact: long, sessionId: "mid", created: "2026-08-10" },
+      { fact: long, sessionId: "new", created: "2026-08-20" },
+    ];
+    const section = buildMemorySection([], {
+      currentProject: "/p",
+      maxTokens: 260,
+      learnings,
+    });
+    expect(section).not.toBeNull();
+    // Newest learning survives; the oldest is dropped.
+    expect(section).toContain("(new):");
+    expect(section).not.toContain("(old):");
   });
 });
