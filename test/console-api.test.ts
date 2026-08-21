@@ -1,11 +1,12 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startHttpServer, type HttpServerHandle } from "../src/gateway/http";
 import { createConsoleApi } from "../src/gateway/console-api";
 import { createBot } from "../src/bots/profile";
 import { AuditLog } from "../src/audit/log";
+import type { AuditEvent, AuditKind } from "../src/audit/log";
 import { createRequest } from "../src/gateway/approvals";
 import type { HarnessConfig } from "../src/config/types";
 
@@ -144,6 +145,145 @@ test("audit endpoint filters by kind", async () => {
   const data = (await res.json()) as any;
   expect(data.events).toHaveLength(1);
   expect(data.events[0].detail).toContain(".env");
+});
+
+function seedAudit(
+  ts: string,
+  kind: AuditKind,
+  actor: string,
+  detail: string,
+  bot?: string,
+): void {
+  const event: AuditEvent = { ts, kind, actor, detail, ...(bot ? { bot } : {}) };
+  appendFileSync(join(home, "audit.jsonl"), `${JSON.stringify(event)}\n`);
+}
+
+const T_BEFORE = "2026-08-21T13:59:59.000Z";
+const T_FROM = "2026-08-21T14:00:00.000Z";
+const T_MID = "2026-08-21T14:30:00.000Z";
+const T_TO = "2026-08-21T15:00:00.000Z";
+const T_AFTER = "2026-08-21T15:00:01.000Z";
+
+function seedWindow(): void {
+  seedAudit(T_BEFORE, "gateway_msg", "u1", "before");
+  seedAudit(T_FROM, "tool_block", "guard", "from-bound", "researcher");
+  seedAudit(T_MID, "approval", "user", "inside", "researcher");
+  seedAudit(T_TO, "write_exec", "gateway", "to-bound");
+  seedAudit(T_AFTER, "budget_halt", "gateway", "after");
+}
+
+describe("audit time filter + export", () => {
+  test("GET /api/audit?from&to hits exactly the inclusive window", async () => {
+    seedWindow();
+    const base = startServer();
+    const res = await fetch(
+      `${base}/api/audit?from=${encodeURIComponent(T_FROM)}&to=${encodeURIComponent(T_TO)}`,
+      { headers: auth },
+    );
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { events: AuditEvent[] };
+    expect(data.events.map((e) => e.detail)).toEqual(["from-bound", "inside", "to-bound"]);
+  });
+
+  test("kind still intersects the time window", async () => {
+    seedWindow();
+    const base = startServer();
+    const res = await fetch(
+      `${base}/api/audit?kind=approval&from=${encodeURIComponent(T_FROM)}&to=${encodeURIComponent(T_TO)}`,
+      { headers: auth },
+    );
+    const data = (await res.json()) as { events: AuditEvent[] };
+    expect(data.events).toHaveLength(1);
+    expect(data.events[0]?.detail).toBe("inside");
+  });
+
+  test("invalid from/to returns 400", async () => {
+    const base = startServer();
+    const badFrom = await fetch(`${base}/api/audit?from=yesterday`, { headers: auth });
+    expect(badFrom.status).toBe(400);
+    expect(((await badFrom.json()) as { error: string }).error).toMatch(/from/i);
+    const badTo = await fetch(`${base}/api/audit?to=not-a-date`, { headers: auth });
+    expect(badTo.status).toBe(400);
+    expect(((await badTo.json()) as { error: string }).error).toMatch(/to/i);
+  });
+
+  test("JSON export is a download of every event in the window", async () => {
+    seedWindow();
+    const base = startServer();
+    const res = await fetch(
+      `${base}/api/audit/export?format=json&from=${encodeURIComponent(T_FROM)}&to=${encodeURIComponent(T_TO)}`,
+      { headers: auth },
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toMatch(/attachment/i);
+    expect(res.headers.get("content-disposition")).toMatch(/\.json/i);
+    expect(res.headers.get("content-type") ?? "").toContain("application/json");
+    const data = (await res.json()) as { events: AuditEvent[] };
+    expect(data.events.map((e) => e.detail)).toEqual(["from-bound", "inside", "to-bound"]);
+  });
+
+  test("markdown export contains every event in the window", async () => {
+    seedWindow();
+    const base = startServer();
+    const res = await fetch(
+      `${base}/api/audit/export?format=markdown&from=${encodeURIComponent(T_FROM)}&to=${encodeURIComponent(T_TO)}`,
+      { headers: auth },
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toMatch(/attachment/i);
+    expect(res.headers.get("content-disposition")).toMatch(/\.(md|markdown)/i);
+    const body = await res.text();
+    expect(body).toContain("events: 3");
+    expect(body).toContain("from-bound");
+    expect(body).toContain("inside");
+    expect(body).toContain("to-bound");
+    expect(body).not.toContain("before");
+    expect(body).not.toContain("after");
+  });
+
+  test("export returns the full window, not the list endpoint's default tail", async () => {
+    for (let i = 0; i < 120; i++) {
+      const ts = new Date(Date.parse(T_FROM) + i * 1000).toISOString();
+      seedAudit(ts, "gateway_msg", "u1", `msg ${i}`);
+    }
+    seedAudit(T_AFTER, "gateway_msg", "u1", "outside");
+    const base = startServer();
+    const list = await fetch(
+      `${base}/api/audit?from=${encodeURIComponent(T_FROM)}&to=${encodeURIComponent(T_TO)}`,
+      { headers: auth },
+    );
+    expect(((await list.json()) as { events: AuditEvent[] }).events).toHaveLength(100);
+    const exp = await fetch(
+      `${base}/api/audit/export?format=json&from=${encodeURIComponent(T_FROM)}&to=${encodeURIComponent(T_TO)}`,
+      { headers: auth },
+    );
+    const data = (await exp.json()) as { events: AuditEvent[] };
+    expect(data.events).toHaveLength(120);
+    expect(data.events[0]?.detail).toBe("msg 0");
+    expect(data.events[119]?.detail).toBe("msg 119");
+    expect(data.events.some((e) => e.detail === "outside")).toBe(false);
+  });
+
+  test("unknown export format is 400", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/audit/export?format=csv`, { headers: auth });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/format/i);
+  });
+
+  test("export rejects invalid from; format=md is markdown", async () => {
+    seedWindow();
+    const base = startServer();
+    const bad = await fetch(`${base}/api/audit/export?format=json&from=nope`, { headers: auth });
+    expect(bad.status).toBe(400);
+    const res = await fetch(
+      `${base}/api/audit/export?format=md&from=${encodeURIComponent(T_FROM)}&to=${encodeURIComponent(T_TO)}`,
+      { headers: auth },
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type") ?? "").toContain("markdown");
+    expect(await res.text()).toContain("events: 3");
+  });
 });
 
 describe("approvals endpoints", () => {

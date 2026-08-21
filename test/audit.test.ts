@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AuditLog, auditPath, formatAudit } from "../src/audit/log";
+import { AuditLog, auditPath, formatAudit, formatAuditMarkdown } from "../src/audit/log";
 import { Redactor } from "../src/security/redact";
+import type { AuditEvent, AuditKind } from "../src/audit/log";
 
 let home: string;
 
@@ -75,4 +76,120 @@ test("honours a disabled redactor", () => {
   const log = new AuditLog(auditPath(home), new Redactor(false));
   log.append("gateway_msg", "u1", "OPENAI_API_KEY=sk-abc1234567890");
   expect(log.query()[0]?.detail).toContain("sk-abc1234567890");
+});
+
+function seedEvent(
+  log: AuditLog,
+  ts: string,
+  kind: AuditKind,
+  actor: string,
+  detail: string,
+  bot?: string,
+): void {
+  const event: AuditEvent = { ts, kind, actor, detail, ...(bot ? { bot } : {}) };
+  appendFileSync(log.path, `${JSON.stringify(event)}\n`);
+}
+
+describe("query time window", () => {
+  const t0 = "2026-08-21T13:59:59.000Z";
+  const t1 = "2026-08-21T14:00:00.000Z";
+  const tMid = "2026-08-21T14:30:00.000Z";
+  const t2 = "2026-08-21T15:00:00.000Z";
+  const t3 = "2026-08-21T15:00:01.000Z";
+
+  function seeded(): AuditLog {
+    const log = new AuditLog(auditPath(home));
+    seedEvent(log, t0, "gateway_msg", "u1", "before window");
+    seedEvent(log, t1, "tool_block", "guard", "at from bound", "researcher");
+    seedEvent(log, tMid, "approval", "user", "inside window", "researcher");
+    seedEvent(log, t2, "write_exec", "gateway", "at to bound");
+    seedEvent(log, t3, "budget_halt", "gateway", "after window");
+    return log;
+  }
+
+  test("from/to inclusive: hits exactly the window", () => {
+    const log = seeded();
+    const hit = log.query({
+      from: Date.parse(t1),
+      to: Date.parse(t2),
+    });
+    expect(hit.map((e) => e.detail)).toEqual([
+      "at from bound",
+      "inside window",
+      "at to bound",
+    ]);
+  });
+
+  test("from-only drops earlier events; to-only drops later events", () => {
+    const log = seeded();
+    expect(log.query({ from: Date.parse(t2) }).map((e) => e.detail)).toEqual([
+      "at to bound",
+      "after window",
+    ]);
+    expect(log.query({ to: Date.parse(t1) }).map((e) => e.detail)).toEqual([
+      "before window",
+      "at from bound",
+    ]);
+  });
+
+  test("inverted from/to window is empty", () => {
+    const log = seeded();
+    expect(log.query({ from: Date.parse(t2), to: Date.parse(t1) })).toEqual([]);
+  });
+
+  test("kind still applies inside the window", () => {
+    const log = seeded();
+    const hit = log.query({
+      from: Date.parse(t1),
+      to: Date.parse(t2),
+      kind: "approval",
+    });
+    expect(hit).toHaveLength(1);
+    expect(hit[0]?.detail).toBe("inside window");
+  });
+
+  test("tail applies after the time filter", () => {
+    const log = seeded();
+    const hit = log.query({
+      from: Date.parse(t1),
+      to: Date.parse(t2),
+      tail: 2,
+    });
+    expect(hit.map((e) => e.detail)).toEqual(["inside window", "at to bound"]);
+  });
+
+  test("unparseable timestamps are excluded when a window is set", () => {
+    const log = new AuditLog(auditPath(home));
+    seedEvent(log, "not-a-date", "approval", "user", "bad ts");
+    seedEvent(log, tMid, "approval", "user", "good ts");
+    expect(log.query({ from: Date.parse(t1), to: Date.parse(t2) }).map((e) => e.detail)).toEqual([
+      "good ts",
+    ]);
+    expect(log.query().map((e) => e.detail)).toEqual(["bad ts", "good ts"]);
+  });
+});
+
+describe("markdown export", () => {
+  test("contains every event in the window and the count", () => {
+    const log = new AuditLog(auditPath(home));
+    seedEvent(log, "2026-08-21T14:00:00.000Z", "tool_block", "guard", "blocked .env", "researcher");
+    seedEvent(log, "2026-08-21T14:30:00.000Z", "approval", "user", "bash ok");
+    const events = log.query({
+      from: Date.parse("2026-08-21T14:00:00.000Z"),
+      to: Date.parse("2026-08-21T15:00:00.000Z"),
+    });
+    const md = formatAuditMarkdown(events);
+    expect(md).toContain("events: 2");
+    expect(md).toContain("tool_block");
+    expect(md).toContain("blocked .env");
+    expect(md).toContain("approval");
+    expect(md).toContain("bash ok");
+    expect(md).toContain("researcher");
+  });
+
+  test("empty window still renders a markdown document", () => {
+    const md = formatAuditMarkdown([]);
+    expect(md).toContain("events: 0");
+    expect(md.toLowerCase()).toContain("no audit events");
+  });
 });

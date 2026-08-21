@@ -21,6 +21,16 @@ export interface AuditEvent {
   detail: string;
 }
 
+export interface AuditQuery {
+  tail?: number;
+  bot?: string;
+  kind?: AuditKind;
+  /** Inclusive lower bound, epoch ms. */
+  from?: number;
+  /** Inclusive upper bound, epoch ms. */
+  to?: number;
+}
+
 export function auditPath(home: string): string {
   return join(home, "audit.jsonl");
 }
@@ -42,10 +52,9 @@ export class AuditLog {
     appendFileSync(this.path, `${JSON.stringify(event)}\n`);
   }
 
-  query(
-    opts: { tail?: number; bot?: string; kind?: AuditKind } = {},
-  ): AuditEvent[] {
+  query(opts: AuditQuery = {}): AuditEvent[] {
     if (!existsSync(this.path)) return [];
+    const windowed = opts.from !== undefined || opts.to !== undefined;
     const events: AuditEvent[] = [];
     const raw = readFileSync(this.path, "utf8");
     for (const line of raw.split("\n")) {
@@ -54,6 +63,12 @@ export class AuditLog {
         const e = JSON.parse(line) as AuditEvent;
         if (opts.bot && e.bot !== opts.bot) continue;
         if (opts.kind && e.kind !== opts.kind) continue;
+        if (windowed) {
+          const ts = Date.parse(e.ts);
+          if (!Number.isFinite(ts)) continue;
+          if (opts.from !== undefined && ts < opts.from) continue;
+          if (opts.to !== undefined && ts > opts.to) continue;
+        }
         events.push(e);
       } catch {
         // skip corrupted
@@ -72,4 +87,19 @@ export function formatAudit(events: AuditEvent[]): string {
       return `${ts} ${e.kind.padEnd(14)} ${e.actor}${bot}: ${e.detail}`;
     })
     .join("\n");
+}
+
+export function formatAuditMarkdown(events: AuditEvent[]): string {
+  const lines = ["# Audit export", "", `- events: ${events.length}`, ""];
+  if (events.length === 0) {
+    lines.push("No audit events in this window.", "");
+    return lines.join("\n");
+  }
+  for (const e of events) {
+    lines.push(`## ${e.ts} - ${e.kind}`, "");
+    lines.push(`- actor: ${e.actor}`);
+    if (e.bot) lines.push(`- bot: ${e.bot}`);
+    lines.push(`- detail: ${e.detail}`, "");
+  }
+  return lines.join("\n");
 }
