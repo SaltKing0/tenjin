@@ -250,6 +250,7 @@ test("console serves the setup-checklist module (#252)", async () => {
   const body = await res.text();
   expect(body).toContain("SETUP_ITEMS");
   expect(body).toContain("export function setupChecklist");
+});
 
 test("console serves the topbar-state module (#256)", async () => {
   const base = start({
