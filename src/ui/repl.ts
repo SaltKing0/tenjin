@@ -9,6 +9,7 @@ import type { ToolDef } from "../tools/registry";
 import type { HarnessConfig } from "../config/loader";
 import { Budget, createBudget, formatUSD } from "../agent/budget";
 import { runAgentTurn, type TurnEvent } from "../agent/loop";
+import { checkGlobalBudget } from "../audit/global-budget";
 import type { EventLogger, SessionEvent } from "../session/events";
 import { rebuildMessages, sumUsage } from "../session/events";
 import { SessionLog } from "../session/log";
@@ -138,6 +139,10 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           budget: state.budget,
           maxTokens: opts.config.maxTokens,
           cwd: opts.cwd,
+          globalBudgetGate:
+            opts.config.globalBudget
+              ? () => checkGlobalBudget(opts.home, opts.config.globalBudget!)
+              : undefined,
           approve: (name, group, input) =>
             approve(name, group, input, opts.config, rl, sessionAllowed, audit, opts.bot),
           guard: opts.guard,

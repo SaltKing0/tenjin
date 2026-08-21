@@ -380,6 +380,7 @@ export class Gateway {
         maxTokens: this.deps.config.maxTokens,
         capUSD: botBudgetUSD(profile, this.deps.config.budgetUSD),
         pricing: this.deps.config.pricing,
+        globalBudget: this.deps.config.globalBudget,
         policy: capPolicy("read-only", profile.config.security?.policy),
         denyTools: profile.config.security?.denyTools,
         extraTools,

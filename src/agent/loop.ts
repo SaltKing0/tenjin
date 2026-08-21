@@ -31,6 +31,15 @@ export interface ApproveFn {
   (toolName: string, group: ToolGroup, input: unknown): Promise<boolean>;
 }
 
+/** Result of a pre-call gate check (e.g. a global spend budget). */
+export interface GateCheck {
+  allowed: boolean;
+  reason?: string;
+}
+
+/** Optional global budget gate consulted before every provider call. */
+export type GlobalBudgetGate = () => GateCheck;
+
 export interface AgentTurnOptions {
   provider: Provider;
   model: string;
@@ -45,6 +54,8 @@ export interface AgentTurnOptions {
   audit?: (kind: "write_exec" | "budget_halt", detail: string, correlationId?: string) => void;
   /** Shared id threaded into this run's audit events (e.g. a delegation correlation id). */
   correlationId?: string;
+  /** Consulted before each provider call; returns blocked=false to halt the run. */
+  globalBudgetGate?: GlobalBudgetGate;
   onEvent?: (e: TurnEvent) => void;
   onTextDelta?: (delta: string) => void;
   signal?: AbortSignal;
@@ -58,6 +69,14 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
     if (opts.budget.exhausted) {
       opts.audit?.("budget_halt", `halted at ${opts.budget.spentUSD.toFixed(4)} USD`, opts.correlationId);
+      return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText };
+    }
+
+    const gate = opts.globalBudgetGate?.();
+    if (gate && !gate.allowed) {
+      const detail =
+        gate.reason ?? "blocked by global budget gate";
+      opts.audit?.("budget_halt", detail, opts.correlationId);
       return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText };
     }
 

@@ -324,4 +324,28 @@ describe("runHeadless", () => {
     await runHeadless(base({ provider: noneProvider, home, policy: "none" }));
     expect(noneProvider.requests[0]?.tools).toEqual([]);
   });
+
+  test("globalBudget reached halts before the provider is called", async () => {
+    const home = join(dir, "home");
+    mkdirSync(join(home, "sessions"), { recursive: true });
+    // Seed a session that already blows past the daily cap.
+    const now = new Date();
+    writeFileSync(
+      join(home, "sessions", "seed.jsonl"),
+      JSON.stringify({ t: "session_start", id: "seed", ts: now.toISOString(), provider: "a", model: "m" }) +
+        "\n" +
+        JSON.stringify({ t: "usage", inputTokens: 1000, outputTokens: 0, costUSD: 2.0, spentUSD: 2.0, ts: now.toISOString() }) +
+        "\n",
+    );
+    const provider = base().provider as ReturnType<typeof scriptProvider>;
+    const r = await runHeadless(
+      base({
+        provider,
+        home,
+        globalBudget: { dailyUSD: 0.5 },
+      }),
+    );
+    expect(r.stopReason).toBe("budget_exhausted");
+    expect(provider.requests).toHaveLength(0);
+  });
 });
