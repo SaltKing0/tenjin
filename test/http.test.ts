@@ -329,3 +329,27 @@ test("SSE closes an unread (zombie) client and removes its listener on queue ove
   // the zombie's listener was removed — no leak
   expect(activeSubscriberCount()).toBe(baseline);
 });
+
+test("SSE stream opened with no events stays alive and emits a heartbeat (#280)", async () => {
+  // fromId past every event → no history replay; a freshly opened stream must
+  // still keep the connection live with `: ping` heartbeats, which is what lets
+  // the console report "online" the moment the stream opens.
+  const stream = buildEventsStream(Number.MAX_SAFE_INTEGER);
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const deadline = Date.now() + 6000;
+  let heartbeat = false;
+  try {
+    while (Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (decoder.decode(value).includes(": ping")) {
+        heartbeat = true;
+        break;
+      }
+    }
+  } finally {
+    reader.cancel();
+  }
+  expect(heartbeat).toBe(true);
+});

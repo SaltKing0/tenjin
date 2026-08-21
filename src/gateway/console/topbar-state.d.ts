@@ -1,8 +1,10 @@
+export type ConnectionState = "connecting" | "online" | "offline";
+
 export interface ConnectionView {
   label: string;
-  tone: "ok" | "err";
+  tone: "ok" | "err" | "";
   banner: string | null;
 }
 
 export const OFFLINE_BANNER: string;
-export function connectionView(connected: boolean): ConnectionView;
+export function connectionView(state: ConnectionState | string): ConnectionView;
