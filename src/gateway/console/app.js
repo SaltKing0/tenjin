@@ -375,6 +375,8 @@ async function panelChat(main) {
           if (frame.type === "delta") {
             reply += frame.text;
             replyMsg.textContent = reply;
+          } else if (frame.type === "tool") {
+            log.append(el("div", { class: "msg tool-status dim" }, `· ${frame.name} …`));
           } else if (frame.type === "done") {
             const finalText = frame.reply ?? reply ?? "(no reply)";
             replyMsg.replaceChildren(renderMarkdown(finalText));
