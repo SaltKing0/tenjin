@@ -22,6 +22,13 @@ import {
   approvalLine,
   approvalAge,
 } from "./approval-badge.js";
+import {
+  approvalCardTitle,
+  approvalCardSummary,
+  approvalResultLine,
+  approvalCountdown,
+  approvalIsPending,
+} from "./approval-card.js";
 
 const $app = document.getElementById("app");
 
@@ -58,6 +65,9 @@ let bots = [];
 let approvalCount = 0;
 let approvalBadgeEl = null;
 let approvalDropdown = null;
+// #295: inline approval cards currently rendered in the chat log, keyed by
+// approval id so `approval.resolved` can collapse the matching card live.
+let chatApprovalCards = new Map();
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -994,6 +1004,20 @@ async function panelChat(main) {
     log.append(chatMessage({ role: "user", text }));
     const replyMsg = el("div", { class: "msg bot" }, "…");
     log.append(replyMsg);
+    // #295: while this run is in flight, surface approvals it triggers as
+    // inline cards in the chat log (the stream blocks during waitApproval).
+    // approval.created carries only { id }; fetch the detail for the card.
+    const offApproval = onEvent("approval.created", async (p) => {
+      try {
+        const detail = await apiJson(`/api/approvals/${p.id}`);
+        chatApprovalCard(log, detail);
+      } catch {
+        /* approval already resolved/removed — ignore */
+      }
+    });
+    const offResolved = onEvent("approval.resolved", (p) => {
+      settleApprovalCard(p.id, p.status, new Date());
+    });
     try {
       const res = await api("/api/chat/stream", {
         method: "POST",
@@ -1029,6 +1053,8 @@ async function panelChat(main) {
       replyMsg.textContent = `error: ${e.message}`;
       replyMsg.classList.add("err");
     } finally {
+      offApproval();
+      offResolved();
       sendBtn.disabled = false;
       input.focus();
     }
@@ -1062,7 +1088,7 @@ function approvalActionButtons(req, onDone) {
             method: "POST",
             body: JSON.stringify({ action: "approve" }),
           });
-          onDone();
+          onDone("approve");
         },
       },
       "approve",
@@ -1076,7 +1102,7 @@ function approvalActionButtons(req, onDone) {
             method: "POST",
             body: JSON.stringify({ action: "deny" }),
           });
-          onDone();
+          onDone("deny");
         },
       },
       "deny",
@@ -1158,6 +1184,56 @@ function buildApprovalDropdown(host, pending) {
     host.append(row);
   }
   host.append(el("a", { class: "approval-dd-all", href: "#approvals" }, "all approvals →"));
+}
+
+// #295: render (or update) an inline approval card in a chat log. The chat
+// stream blocks while an approval is pending, so the card is driven by the
+// global SSE events `approval.created` / `approval.resolved` (#125) rather
+// than by stream frames — this also collapses it live when the approval is
+// resolved from any surface. Returns the card element.
+function chatApprovalCard(log, req) {
+  const existing = chatApprovalCards.get(req.id);
+  if (existing) return existing;
+
+  const countdown = el("span", { class: "dim" });
+  const pendingEl = el(
+    "div",
+    { class: "chat-approval pending" },
+    el("div", { class: "chat-approval-title" }, approvalCardTitle(req)),
+    el("div", { class: "dim" }, approvalCardSummary(req)),
+    el("div", { style: "margin-top:4px" }, countdown),
+    approvalActionButtons(req, (status) =>
+      settleApprovalCard(req.id, status === "approve" ? "approved" : "denied", new Date()),
+    ),
+  );
+  const createdMs = req.ts ? Date.parse(req.ts) : Date.now();
+  const tick = () => {
+    countdown.textContent = approvalCountdown(createdMs, 120_000);
+  };
+  tick();
+  const timer = setInterval(tick, 1000);
+  pendingEl.dataset.timer = timer;
+  pendingEl.dataset.tool = req.tool;
+  chatApprovalCards.set(req.id, pendingEl);
+  log.append(pendingEl);
+  return pendingEl;
+}
+
+// #295: apply the resolved status to a chat approval card in place. Used both
+// by the inline approve/deny buttons (local, immediate) and by the SSE
+// `approval.resolved` handler (live from any surface); idempotent.
+function settleApprovalCard(id, status, when) {
+  const card = chatApprovalCards.get(id);
+  if (!card) return;
+  clearInterval(Number(card.dataset.timer));
+  card.classList.remove("pending");
+  card.classList.add(status);
+  card.textContent = "";
+  const tool = card.dataset.tool ?? "";
+  card.replaceChildren(
+    el("div", { class: "chat-approval-result" }, approvalResultLine(status, tool, when)),
+  );
+  chatApprovalCards.delete(id);
 }
 
 async function panelApprovals(main) {
