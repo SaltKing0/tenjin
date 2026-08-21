@@ -26,6 +26,8 @@ export interface TelegramChannelConfig {
   rateLimitMax?: number;
   rateLimitWindowMs?: number;
   maxMessageLength?: number;
+  /** Voice-message transcription (#137); off by default. */
+  voice?: { enabled?: boolean; model?: string };
 }
 
 export interface SlackChannelConfig {
@@ -216,6 +218,17 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
         bindings[bot] = ids as number[];
       }
     }
+    let voice: { enabled?: boolean; model?: string } | undefined;
+    if (tg.voice !== undefined && tg.voice !== null) {
+      if (typeof tg.voice !== "object" || Array.isArray(tg.voice)) {
+        throw new ConfigError("gateway.telegram.voice must be a mapping");
+      }
+      const v = tg.voice as Record<string, unknown>;
+      voice = {
+        enabled: v.enabled === true,
+        model: typeof v.model === "string" && v.model.trim() ? v.model.trim() : undefined,
+      };
+    }
     settings.telegram = {
       enabled,
       defaultBot: typeof tg.defaultBot === "string" ? tg.defaultBot : undefined,
@@ -230,6 +243,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
         typeof tg.rateLimitWindowMs === "number" ? tg.rateLimitWindowMs : undefined,
       maxMessageLength:
         typeof tg.maxMessageLength === "number" ? tg.maxMessageLength : undefined,
+      voice,
     };
   }
 

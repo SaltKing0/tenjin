@@ -66,6 +66,7 @@ import { Redactor } from "./security/redact";
 import { AuditLog, formatAudit, auditPath } from "./audit/log";
 import { aggregateSpend, renderSpend } from "./audit/spend";
 import { TelegramChannel } from "./gateway/telegram";
+import { transcribeAudio, type TranscriptionConfig } from "./gateway/stt";
 import { SlackChannel } from "./gateway/slack";
 import { createMessageHandler, chatStreamResponse, type HandleContext } from "./gateway/handler";
 import { startHttpServer } from "./gateway/http";
@@ -859,6 +860,22 @@ async function gatewayCommand(args: string[]): Promise<number> {
         notifyApproval,
         telegramBindings: tg.bindings,
       });
+      // Voice transcription (#137): enabled only when a model AND an API key are
+      // available, so an unconfigured voice toggle still gets the clear hint.
+      const voiceEnabled = tg.voice?.enabled === true;
+      const audioModel = tg.voice?.model;
+      const openaiKey = config.providers?.openai?.apiKey || process.env.OPENAI_API_KEY;
+      const openaiBaseUrl = config.providers?.openai?.baseUrl;
+      let transcribe: ((audio: Blob, filename: string) => Promise<string>) | undefined;
+      if (voiceEnabled && audioModel && openaiKey) {
+        const tCfg: TranscriptionConfig = {
+          apiKey: openaiKey,
+          model: audioModel,
+          baseUrl: openaiBaseUrl,
+        };
+        transcribe = async (audio, filename) =>
+          (await transcribeAudio(tCfg, audio, filename)).text;
+      }
       channel = new TelegramChannel(
         {
           token,
@@ -869,6 +886,14 @@ async function gatewayCommand(args: string[]): Promise<number> {
           rateLimitMax: tg.rateLimitMax,
           rateLimitWindowMs: tg.rateLimitWindowMs,
           maxMessageLength: tg.maxMessageLength,
+          voiceEnabled,
+          transcribe,
+          onTranscribed: (info) =>
+            audit.append(
+              "transcribe",
+              String(info.userId),
+              `voice ${info.fileId}: ${info.text.slice(0, 80)}${info.text.length > 80 ? "…" : ""}`,
+            ),
           onRejected: (info) =>
             audit.append(
               "channel_reject",
