@@ -15,9 +15,10 @@ import { editTool } from "../tools/edit";
 import { bashTool } from "../tools/bash";
 import type { ToolDef } from "../tools/registry";
 import { Redactor } from "../security/redact";
-import { readFacts } from "../tools/memory";
+import { readFacts, createRecordLearningTool } from "../tools/memory";
 import { buildMemorySection } from "../memory/inject";
 import { listSummaries } from "../memory/summaries";
+import { readLearnings } from "../memory/learnings";
 import { listSkills } from "../skills/loader";
 import { createUseSkillTool, summarizeSkills } from "../skills/activate";
 import { createSaveSkillTool } from "../tools/skill-writer";
@@ -114,7 +115,10 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     cwd: opts.cwd,
     facts: opts.memoryDir ? readFacts(opts.memoryDir) : null,
     memorySection: opts.memoryDir
-      ? buildMemorySection(listSummaries(opts.memoryDir), { currentProject: opts.cwd })
+      ? buildMemorySection(listSummaries(opts.memoryDir), {
+          currentProject: opts.cwd,
+          learnings: readLearnings(opts.memoryDir, opts.cwd),
+        })
       : null,
     skillsSummary: skills.length > 0 ? summarizeSkills(skills) : null,
   });
@@ -134,14 +138,27 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
   }
   const budget = createBudget(opts.capUSD, opts.pricing);
 
+  const tools = applyDenyTools(
+    [...toolsForPolicy(policy, skillDirs), ...(opts.extraTools ?? [])],
+    opts.denyTools,
+  );
+  // Tier-2 memory (#99): expose record_learning when a memory dir is in scope,
+  // attributing the learning to the just-created session log id when present.
+  if (opts.memoryDir) {
+    tools.push(
+      createRecordLearningTool({
+        memoryDirPath: opts.memoryDir,
+        projectPath: opts.cwd,
+        sessionId: logger?.id,
+      }),
+    );
+  }
+
   const result = await runAgentTurn({
     provider: opts.provider,
     model: opts.model,
     system,
-    tools: applyDenyTools(
-      [...toolsForPolicy(policy, skillDirs), ...(opts.extraTools ?? [])],
-      opts.denyTools,
-    ),
+    tools,
     messages: [{ role: "user", content: opts.message }],
     budget,
     maxTokens: opts.maxTokens,
