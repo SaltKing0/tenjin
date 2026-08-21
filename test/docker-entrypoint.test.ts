@@ -35,6 +35,14 @@ describe("e2e: docker entrypoint defaultBot seeding (#244)", () => {
     }
   });
 
+  // #239: entrypoint runs `sh check-token.sh` before seeding — stub it so the
+  // token guard passes and we exercise the seeding path only.
+  function installCheckTokenStub() {
+    const tok = join(appDir, "check-token.sh");
+    writeFileSync(tok, "#!/bin/sh\nexit 0\n");
+    chmodSync(tok, 0o755);
+  }
+
   function seedBotShim() {
     // A fake `bun` that records the `bot new <name>` invocation and writes the
     // bot exactly like the real `bot new` does (SOUL.md under TENJIN_HOME/bots).
@@ -49,6 +57,7 @@ exit 0
 `,
     );
     chmodSync(shim, 0o755);
+    installCheckTokenStub();
   }
 
   function runEntrypoint(cmd: string[]): { code: number; stdout: string; stderr: string } {
@@ -56,6 +65,7 @@ exit 0
       ...process.env,
       TENJIN_HOME: home,
       TENJIN_APP_DIR: appDir,
+      GATEWAY_TOKEN: "test-secret-token",
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
     };
     const res = Bun.spawnSync([ENTRYPOINT, ...cmd], { env });
@@ -106,6 +116,7 @@ exit 0
     home = mkdtempSync(join(tmpdir(), "tj-epwarn-"));
     appDir = mkdtempSync(join(tmpdir(), "tj-epapp-"));
     binDir = mkdtempSync(join(tmpdir(), "tj-epbin-"));
+    installCheckTokenStub();
     // volume already has a bot, but config points at a different, missing bot
     mkdirSync(join(home, "bots", "existing"), { recursive: true });
     writeFileSync(join(home, "bots", "existing", "SOUL.md"), "# SOUL\n");

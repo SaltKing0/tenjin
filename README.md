@@ -129,10 +129,12 @@ The gateway binds to `127.0.0.1` by default and **refuses to start** unless
 #239) — so a `docker compose up` without a configured `.env` cannot silently
 expose a known-token gateway.
 
-That's it. On first boot the entrypoint seeds a `default` bot into the fresh
-home volume so the gateway (which needs a bot for the web console) starts
-cleanly. The gateway config (`config.yaml`) is mounted read-only, so jobs,
-channels and the console token can be edited without rebuilding the image:
+That's it. On first boot the entrypoint seeds a bot into the fresh home volume
+so the gateway (which needs a bot for the web console) starts cleanly. The
+seed bot is named after the top-level `defaultBot` in `config.yaml` (or the
+`$TENJIN_DEFAULT_BOT` env override); it falls back to `default`. The gateway
+config (`config.yaml`) is mounted read-only, so jobs, channels and the console
+token can be edited without rebuilding the image:
 
 ```sh
 # edit ./config.yaml, then:

@@ -6,6 +6,11 @@
 # The listen token below must equal GATEWAY_TOKEN in .env (the container
 # HEALTHCHECK authenticates against /api/health with it).
 
+# Bot seeded into a fresh home volume on first boot (see entrypoint.sh). The
+# seed name honours this value, or the $TENJIN_DEFAULT_BOT env override, and
+# falls back to "default" if neither is set.
+defaultBot: default
+
 gateway:
   allowWrites: true
 
