@@ -22,7 +22,7 @@ function el(tag, attrs = {}, ...children) {
     else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
     else if (value !== null && value !== undefined) node.setAttribute(key, value);
   }
-  for (const child of children) {
+  for (const child of children.flat(Infinity)) {
     if (child === null || child === undefined) continue;
     node.append(child);
   }
@@ -425,6 +425,11 @@ const PANELS = [
 ];
 
 async function render() {
+  try {
+    bots = await apiJson("/api/bots").then((d) => d.bots);
+  } catch {
+    bots = [];
+  }
   const route = location.hash.replace("#", "") || "chat";
   const panel = PANELS.find(([name]) => name === route) || PANELS[0];
 
