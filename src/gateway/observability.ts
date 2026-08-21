@@ -19,6 +19,28 @@ export interface ObservabilityJob {
   nextDueMs: number;
 }
 
+/** Cache window for the disk aggregation behind health/metrics (#186). */
+export const OBSERVABILITY_CACHE_TTL_MS = 20_000;
+
+interface SpendCacheEntry {
+  home: string;
+  day: string;
+  computedAtMs: number;
+  totals: { totalUSD: number; todayUSD: number; today: string };
+}
+
+// #186: every health check and Prometheus scrape synchronously re-parsed every
+// line of every session .jsonl (solo + all bots) via aggregateSpend. The same
+// event loop serves SSE streams and /message — with thousands of sessions a
+// single scrape blocked the gateway. Cache the spend totals for a short window
+// (TTL ~20s, keyed by home + calendar day).
+let spendCache: SpendCacheEntry | null = null;
+
+/** Clear the in-process spend cache (mainly for tests). */
+export function resetObservabilityCache(): void {
+  spendCache = null;
+}
+
 export interface ObservabilityDeps {
   home: string;
   stats: ProviderStats;
@@ -50,16 +72,25 @@ function countPendingApprovals(home: string): number {
   return n;
 }
 
-function spendTotals(home: string): { totalUSD: number; todayUSD: number; today: string } {
+function spendTotals(home: string, now: Date = new Date()): { totalUSD: number; todayUSD: number; today: string } {
+  const today = now.toISOString().slice(0, 10);
+  const fresh =
+    spendCache !== null &&
+    spendCache.home === home &&
+    spendCache.day === today &&
+    now.getTime() - spendCache.computedAtMs < OBSERVABILITY_CACHE_TTL_MS;
+  if (fresh) return spendCache!.totals;
+
   const rows = aggregateSpend(home, {});
-  const today = new Date().toISOString().slice(0, 10);
   let totalUSD = 0;
   let todayUSD = 0;
   for (const r of rows) {
     totalUSD += r.costUSD;
     if (r.day === today) todayUSD += r.costUSD;
   }
-  return { totalUSD, todayUSD, today };
+  const totals = { totalUSD, todayUSD, today };
+  spendCache = { home, day: today, computedAtMs: now.getTime(), totals };
+  return totals;
 }
 
 /**
@@ -70,7 +101,7 @@ export function buildHealth(nowMs: number, deps: ObservabilityDeps): Record<stri
   const jobs = deps.jobs ?? [];
   const activeJobs = jobs.filter((j) => j.running).length;
   const pendingJobs = jobs.filter((j) => !j.running && j.nextDueMs <= nowMs).length;
-  const spend = spendTotals(deps.home);
+  const spend = spendTotals(deps.home, new Date(nowMs));
   return {
     activeJobs,
     pendingJobs,
@@ -96,7 +127,7 @@ function esc(s: string): string {
 export function buildMetrics(nowMs: number, deps: ObservabilityDeps): string {
   const jobs = deps.jobs ?? [];
   const pendingJobs = jobs.filter((j) => !j.running && j.nextDueMs <= nowMs).length;
-  const spend = spendTotals(deps.home);
+  const spend = spendTotals(deps.home, new Date(nowMs));
   const reach = deps.stats.reachability();
   const lines: string[] = [];
   lines.push("# HELP tenjin_spend_usd_total Total spend recorded across all sessions, USD.");
