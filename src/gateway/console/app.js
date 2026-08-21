@@ -5,6 +5,7 @@ import { renderMarkdown } from "./markdown.js";
 import { emptyStateFor } from "./empty-state.js";
 import { setupChecklist } from "./setup-checklist.js";
 import { headerLabels, stackLabels, isHeaderRow } from "./tables.js";
+import { firstRunView, shouldShowFirstRun } from "./first-run.js";
 
 import { connectionView } from "./topbar-state.js";
 
@@ -18,6 +19,9 @@ if (urlToken && urlToken.trim()) {
 }
 
 let token = localStorage.getItem("tenjin_token") || "";
+// #251: while the first-run guide is showing, suppress it after a step CTA so
+// the destination panel renders instead of re-showing the guide.
+let suppressFirstRun = false;
 let currentBot = localStorage.getItem("tenjin_bot") || "solo";
 let bots = [];
 
@@ -254,6 +258,26 @@ function botSelector(onChange) {
 
 async function panelStatus(main) {
   main.replaceChildren(el("h1", {}, "Status"));
+  // #251: re-open the first-run guide from here while the setup is incomplete.
+  try {
+    const setup = await apiJson("/api/setup/state");
+    if (shouldShowFirstRun(setup)) {
+      main.append(
+        el(
+          "button",
+          {
+            class: "firstrun-guide",
+            onclick: () => {
+              localStorage.removeItem("tenjin_firstrun_skipped");
+              suppressFirstRun = false;
+              render();
+            },
+          },
+          "setup guide",
+        ),
+      );
+    }
+  } catch {}
   const status = await apiJson("/status");
   const card = el(
     "div",
@@ -1211,11 +1235,75 @@ const PANELS = [
   ["status", "Status", panelStatus],
 ];
 
+// #251: the 3-step first-run guide (progress + links into the real panels).
+// Each "start" CTA navigates into its panel (suppressing the guide so the panel
+// renders); "skip to advanced mode" persists the choice and shows the console.
+function renderFirstRun(view) {
+  $app.replaceChildren();
+  $app.append(
+    el(
+      "div",
+      { class: "first-run" },
+      el("h1", {}, "Welcome to Tenjin"),
+      el("div", { class: "dim" }, "A few quick steps to your first run."),
+      el("div", { class: "firstrun-progress" }, el("div", { class: "firstrun-progress-fill", style: `width:${view.progress}%` })),
+      el("div", { class: "dim firstrun-count" }, `${view.done} of ${view.steps.length} steps done`),
+      ...view.steps.map((s) =>
+        el(
+          "div",
+          { class: s.done ? "card firstrun-step done" : "card firstrun-step" },
+          el("span", { class: "firstrun-step-n" }, s.n),
+          el("span", { class: "firstrun-step-mark" }, s.done ? "✓" : "✗"),
+          el("span", { class: "firstrun-step-title" }, s.title),
+          s.done
+            ? null
+            : el(
+                "button",
+                {
+                  class: "primary",
+                  onclick: () => {
+                    suppressFirstRun = true;
+                    location.hash = s.hash;
+                  },
+                },
+                "start",
+              ),
+        ),
+      ),
+      el(
+        "button",
+        {
+          class: "firstrun-skip",
+          onclick: () => {
+            localStorage.setItem("tenjin_firstrun_skipped", "1");
+            suppressFirstRun = true;
+            render();
+          },
+        },
+        "skip to advanced mode",
+      ),
+    ),
+  );
+}
+
 async function render() {
   try {
     bots = await apiJson("/api/bots").then((d) => d.bots);
   } catch {
     bots = [];
+  }
+  // #251: on an incomplete setup (unless skipped or the user navigated into a
+  // panel), show the 3-step first-run guide instead of dead panels.
+  if (!suppressFirstRun && localStorage.getItem("tenjin_firstrun_skipped") !== "1") {
+    try {
+      const setup = await apiJson("/api/setup/state");
+      if (shouldShowFirstRun(setup)) {
+        renderFirstRun(firstRunView(setup));
+        return;
+      }
+    } catch {
+      // setup state unavailable → fall through to the normal console
+    }
   }
   const route = location.hash.replace("#", "") || "chat";
   const panel = PANELS.find(([name]) => name === route) || PANELS[0];

@@ -320,3 +320,35 @@ input, select {
   .soul-input { min-height: 120px; }
   .login-box { margin: 10vh auto; }
 }
+
+/* #251: first-run setup guide screen. */
+.first-run { max-width: 640px; margin: 40px auto; padding: 0 16px; }
+.first-run h1 { font-size: 24px; margin-bottom: 4px; }
+.firstrun-progress {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin: 16px 0 6px;
+}
+.firstrun-progress-fill { height: 100%; background: var(--accent); transition: width 0.2s; }
+.firstrun-count { margin-bottom: 16px; }
+.firstrun-step { display: flex; align-items: center; gap: 12px; }
+.firstrun-step-n {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.firstrun-step.done .firstrun-step-n { border-color: var(--ok); color: var(--ok); }
+.firstrun-step-mark { color: var(--dim); font-weight: 600; }
+.firstrun-step.done .firstrun-step-mark { color: var(--ok); }
+.firstrun-step-title { flex: 1; }
+.firstrun-step.done .firstrun-step-title { color: var(--dim); }
+.firstrun-skip { margin-top: 8px; background: none; border: none; color: var(--dim); cursor: pointer; text-decoration: underline; }
+.firstrun-guide { margin: 0 0 16px; }
