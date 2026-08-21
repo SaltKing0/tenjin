@@ -47,6 +47,14 @@ test("fresh config template is stamped with the current schema version", () => {
   expect(raw).toContain(`version: ${CONFIG_SCHEMA_VERSION}`);
 });
 
+test("fresh config template includes a commented gateway block to enable the web console (#250)", () => {
+  ensureGlobalDir(home);
+  const raw = readFileSync(join(home, "config.yaml"), "utf8");
+  // a new user must be able to discover + enable the console by uncommenting
+  expect(raw).toContain("# gateway:");
+  expect(raw).toContain("listen:");
+});
+
 test("config schema: unversioned legacy config loads as current", () => {
   mkdirSync(home, { recursive: true });
   writeFileSync(join(home, "config.yaml"), 'provider: anthropic\nmodel: "m"\n');

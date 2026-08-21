@@ -355,6 +355,17 @@ memory:
 #   # defaultWindow: 128000    # context window (tokens) for unknown models
 #   # windows:                 # per-model context-window override
 #   #   my-model: 32000
+# gateway:                     # uncomment to start the HTTP API + web console (see docs/architecture.md)
+#   allowWrites: false         # gate write/edit/bash tool calls behind approvals
+#   listen:
+#     host: 127.0.0.1          # bind address — use 0.0.0.0 only behind a proxy or VPN
+#     port: 3000               # console/HTTP API port
+#     token: change-me         # bearer token for the console/API — set a real secret
+#   channels: [telegram]       # active channel kinds (defaults to each *.enabled channel below)
+#   # telegram:
+#   #   enabled: true
+#   #   defaultBot: mybot
+#   #   allowedUsers: []       # REQUIRED: allowlist of Telegram user ids
 `;
 
 const SOUL_TEMPLATE = `# SOUL

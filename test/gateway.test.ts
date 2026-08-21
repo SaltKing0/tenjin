@@ -590,6 +590,31 @@ describe("Gateway execution", () => {
     expect(lines).toContain("→ telegram");
   });
 
+  test("boot describe surfaces a disabled web console hint when gateway.listen is unset (#250)", () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({}),
+      registry: { get: () => mockProvider() } as never,
+    });
+    const lines = gw.describe().join("\n");
+    expect(lines).toContain("web console: disabled");
+    expect(lines).toContain("gateway.listen.port/token");
+  });
+
+  test("boot describe reports the console URL when gateway.listen is configured (#250)", () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: { listen: { host: "127.0.0.1", port: 3210, token: "s3cret" } },
+      }),
+      registry: { get: () => mockProvider() } as never,
+    });
+    const lines = gw.describe().join("\n");
+    expect(lines).toContain("web console: enabled at http://127.0.0.1:3210");
+  });
+
   test("reload rebuilds the job set from a fresh config (SIGHUP path)", () => {
     const gw = new Gateway({
       home,
