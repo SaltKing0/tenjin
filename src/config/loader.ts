@@ -548,11 +548,28 @@ function parseYamlFile(path: string): Partial<HarnessConfig> {
   return parsed as Partial<HarnessConfig>;
 }
 
-function mergeApproval(
-  base: Record<string, ApprovalMode>,
-  over: Partial<HarnessConfig>,
-): Record<string, ApprovalMode> {
-  return over.approval ? { ...base, ...over.approval } : base;
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Recursively merge `over` into `base`: plain objects merge key-by-key, every
+ * other value (scalars, arrays, null) is replaced by the higher-precedence one.
+ * This keeps a project `security.disabled: true` from wiping the global
+ * `security.blockedPatterns` — each nested field survives unless an overriding
+ * source actually sets it.
+ */
+function deepMerge<T>(base: T, over: unknown): T {
+  if (!isPlainObject(base) || !isPlainObject(over)) return over as T;
+  const out: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(over)) {
+    const baseValue = out[key];
+    out[key] =
+      isPlainObject(baseValue) && isPlainObject(value)
+        ? deepMerge(baseValue, value)
+        : value;
+  }
+  return out as T;
 }
 
 export interface LoadedConfig {
@@ -609,14 +626,11 @@ export function loadConfig(
     );
   }
 
-  const merged: HarnessConfig = {
-    ...DEFAULTS,
-    ...globalCfg,
-    ...managedCfg,
-    ...projectCfg,
-    version: CONFIG_SCHEMA_VERSION,
-    approval: mergeApproval(mergeApproval(DEFAULTS.approval, globalCfg), projectCfg),
-  };
+  const merged: HarnessConfig = deepMerge(
+    deepMerge(deepMerge(DEFAULTS, globalCfg), managedCfg),
+    projectCfg,
+  );
+  merged.version = CONFIG_SCHEMA_VERSION;
 
   validate(merged, globalPath, opts.skipModelCheck ?? false);
 

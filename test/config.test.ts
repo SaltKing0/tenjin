@@ -155,6 +155,24 @@ test("approval maps merge per-key with project winning", () => {
   expect(config.approval.bash).toBe("deny");
 });
 
+test("nested objects deep-merge per-key across sources (security survives)", () => {
+  mkdirSync(home, { recursive: true });
+  writeFileSync(
+    join(home, "config.yaml"),
+    "model: m\nsecurity:\n  blockedPatterns:\n    - /tmp/deny\n    - /etc/passwd\n  disabled: false\n",
+  );
+  mkdirSync(join(project, ".tenjin"));
+  writeFileSync(
+    join(project, ".tenjin", "config.yaml"),
+    "security:\n  disabled: true\n",
+  );
+  const { config } = loadConfig(project, home);
+  // project wins the field it sets…
+  expect(config.security?.disabled).toBe(true);
+  // …without wiping the global field the project did not touch.
+  expect(config.security?.blockedPatterns).toEqual(["/tmp/deny", "/etc/passwd"]);
+});
+
 test("missing model throws actionable error", () => {
   mkdirSync(home, { recursive: true });
   writeFileSync(join(home, "config.yaml"), "provider: anthropic\n");
