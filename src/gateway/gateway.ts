@@ -729,6 +729,7 @@ export class Gateway {
         },
         this.historyLen,
       );
+      emit("job.failed", { name: job.name, bot: job.botName, error: (e as Error).message });
       this.persistJob(job);
       throw e;
     } finally {

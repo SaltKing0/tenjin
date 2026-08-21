@@ -12,6 +12,7 @@ import type { SecurityGuard } from "../security/guard";
 import { detectSuspiciousOutput, frameToolOutput, maskToolOutput } from "../security/injection";
 import type { Budget } from "./budget";
 import { compressMessages } from "../session/context";
+import { emit } from "../gateway/events";
 
 export const MAX_ITERATIONS = 25;
 
@@ -84,6 +85,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     if (opts.budget.exhausted) {
       opts.audit?.("budget_halt", `halted at ${opts.budget.spentUSD.toFixed(4)} USD`, opts.correlationId);
+      emit("budget.exceeded", { reason: "session budget exhausted" });
       return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText };
     }
 
@@ -92,6 +94,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
       const detail =
         gate.reason ?? "blocked by global budget gate";
       opts.audit?.("budget_halt", detail, opts.correlationId);
+      emit("budget.exceeded", { reason: detail });
       return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText };
     }
 

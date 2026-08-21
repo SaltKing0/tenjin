@@ -795,7 +795,7 @@ async function panelApprovals(main) {
   }
   await refresh();
   const offs = [
-    onEvent("approval.new", refresh),
+    onEvent("approval.created", refresh),
     onEvent("approval.resolved", refresh),
   ];
   const observer = new MutationObserver(() => {

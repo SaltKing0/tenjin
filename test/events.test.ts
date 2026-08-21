@@ -64,7 +64,7 @@ describe("SSE /api/events (#57)", () => {
 
     const req = createRequest(home, { bot: "b", tool: "bash", inputSummary: "run ls" });
     const frame = await readFrame(res);
-    expect(frame.type).toBe("approval.new");
+    expect(frame.type).toBe("approval.created");
     expect(frame.payload).toEqual({ id: req.id });
     server.stop();
   });
@@ -78,7 +78,7 @@ describe("SSE /api/events (#57)", () => {
     await Bun.sleep(20);
     const req1 = createRequest(home, { bot: "b", tool: "bash", inputSummary: "one" });
     const frame1 = await readFrame(res1);
-    expect(frame1.type).toBe("approval.new");
+    expect(frame1.type).toBe("approval.created");
     expect(frame1.payload).toEqual({ id: req1.id });
 
     const req2 = createRequest(home, { bot: "b", tool: "bash", inputSummary: "two" });
@@ -87,7 +87,7 @@ describe("SSE /api/events (#57)", () => {
       headers: { authorization: "Bearer tok", "Last-Event-ID": String(frame1.id) },
     });
     const frame2 = await readFrame(res2);
-    expect(frame2.type).toBe("approval.new");
+    expect(frame2.type).toBe("approval.created");
     expect(frame2.payload).toEqual({ id: req2.id });
     expect(frame2.id).toBeGreaterThan(frame1.id);
     server.stop();
