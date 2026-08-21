@@ -1035,6 +1035,7 @@ describe("first-run setup state (#251)", () => {
       hasBot: false,
       hasGatewayToken: false,
       channelsEnabled: false,
+      hasBudgetLimit: true,
     });
   });
 
@@ -1054,6 +1055,7 @@ describe("first-run setup state (#251)", () => {
     expect(data.hasBot).toBe(true);
     expect(data.hasGatewayToken).toBe(true);
     expect(data.channelsEnabled).toBe(true);
+    expect(data.hasBudgetLimit).toBe(true);
   });
 
   test("present but empty model counts as not set", async () => {
