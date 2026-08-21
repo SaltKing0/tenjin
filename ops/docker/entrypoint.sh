@@ -1,6 +1,7 @@
 #!/bin/sh
 # Tenjin gateway container entrypoint.
 #
+#  0. Refuses to start with a missing or well-known GATEWAY_TOKEN (#239).
 #  1. Makes sure the home volume is ready.
 #  2. On first boot the gateway refuses to start without at least one bot (the
 #     web console needs a `defaultBot`), so we seed one if none exist.
@@ -10,6 +11,9 @@ set -e
 cd /app
 export TENJIN_HOME="${TENJIN_HOME:-/data}"
 mkdir -p "$TENJIN_HOME"
+
+# #239 fail closed: no gateway with a missing/example REST token.
+sh check-token.sh
 
 if [ -z "$(ls -A "$TENJIN_HOME/bots" 2>/dev/null)" ]; then
   echo "[tenjin] no bots yet — seeding a 'default' bot on a fresh home volume"
