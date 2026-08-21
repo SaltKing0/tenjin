@@ -35,6 +35,13 @@ The guard scans both full paths and path tokens inside shell commands, so
 are all caught. Blocked access returns a "Blocked by security policy" result and
 writes a `tool_block` audit event.
 
+Beyond plain tokens, the guard also decodes common obfuscation and rescans the
+result: base64 (`base64 -d <<< LmVudg==`), hex (`xxd -r -p <<< 2e656e76`),
+printf escapes (`printf '\x2e\x65\x6e\x76'`, octal `\056` included), and the
+quoted inline scripts passed to interpreters via `-c` / `-e` / `-r`
+(`python -c "open('.env')"`, `node -e`, `sh -c`, …). A blocked path smuggled
+into any of these forms is still caught.
+
 ### `security.disabled: true`
 
 Setting this **disables the guard entirely** — `SecurityGuard.fromConfig`
