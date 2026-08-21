@@ -16,7 +16,7 @@ import {
   resolveRequest,
   type ApprovalRequest,
 } from "./approvals";
-import { getSettings, applySettings, detectModels, testProvider, DetectTimeoutError } from "./settings";
+import { getSettings, applySettings, detectModels, testProvider, verifySettingsApply, DetectTimeoutError } from "./settings";
 import { sessionsDir } from "../config/loader";
 import { listConfiguredJobs, type JobRunResult, type JobView } from "./gateway";
 
@@ -125,10 +125,13 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
           registry: deps.registry,
           audit: (detail: string) => deps.audit.append("settings_changed", "console", detail),
         };
+        await verifySettingsApply(settingsDeps, body);
         applySettings(settingsDeps, body);
         return json({ ok: true, settings: getSettings(settingsDeps) });
       } catch (e) {
-        return json({ error: (e as Error).message }, 400);
+        const err = (e as Error).message;
+        deps.audit.append("settings_changed", "console", `settings apply rejected: ${err}`);
+        return json({ error: err }, 400);
       }
     }
 
