@@ -18,6 +18,7 @@ import { defaultModelRef, cheapModelRef, resolveModelRef, type ModelRef } from "
 import { loadSoul, loadAgentsMd, buildSystemPrompt } from "./agent/prompt";
 import { Budget, formatUSD, pricingFor } from "./agent/budget";
 import { runAgentTurn } from "./agent/loop";
+import { runHeadless } from "./agent/headless";
 import { startRepl } from "./ui/repl";
 import { SessionLog } from "./session/log";
 import { rebuildMessages, sumUsage } from "./session/events";
@@ -319,30 +320,18 @@ function applyOverrides(config: HarnessConfig, cli: CliArgs): void {
 }
 
 async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
-  const budget = new Budget(ctx.config.budgetUSD, ctx.config.pricing);
-  const messages = [{ role: "user" as const, content: prompt }];
-  let deniedOnce = false;
-
-  const result = await runAgentTurn({
+  const result = await runHeadless({
     provider: ctx.registry.get(ctx.defaultRef.provider),
     model: ctx.defaultRef.model,
-    system: ctx.system,
-    tools: ctx.tools,
-    messages,
-    budget,
-    maxTokens: ctx.config.maxTokens,
+    soulText: loadSoul(tenjinHome(), ctx.cwd).text,
     cwd: ctx.cwd,
-    approve: async (name, group) => {
-      void group;
-      if (!deniedOnce) {
-        stdout.write(`(note: tool "${name}" needs approval — not available in -p mode)\n`);
-        deniedOnce = true;
-      }
-      return false;
-    },
-    onTextDelta: (d) => stdout.write(d),
+    message: prompt,
+    maxTokens: ctx.config.maxTokens,
+    capUSD: ctx.config.budgetUSD,
+    policy: "read-only",
+    agentsMd: loadAgentsMd(ctx.cwd),
   });
-  stdout.write("\n");
+  stdout.write(`${result.text}\n`);
   stdout.write(
     `  [in ${result.usage.inputTokens} out ${result.usage.outputTokens} · ${formatUSD(result.costUSD)}]\n`,
   );

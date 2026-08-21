@@ -1,12 +1,8 @@
 import type { Provider } from "../provider/types";
 import type { HarnessConfig, ProviderName } from "../config/types";
 import { resolveBot, botModelRef, botBudgetUSD } from "./profile";
-import { buildSystemPrompt } from "../agent/prompt";
-import { runAgentTurn } from "../agent/loop";
+import { runHeadless } from "../agent/headless";
 import { Budget, formatUSD } from "../agent/budget";
-import { readTool } from "../tools/read";
-import { globTool } from "../tools/glob";
-import { grepTool } from "../tools/grep";
 import type { ToolDef } from "../tools/registry";
 
 export interface AskBotDeps {
@@ -51,24 +47,15 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
         cap = Math.min(cap, Math.max(0.01, remaining));
       }
 
-      const delegatedTools: ToolDef[] = [readTool, globTool, grepTool];
-      const system = buildSystemPrompt({
-        soulText: profile.soulText,
-        agentsMd: null,
-        cwd: deps.cwd,
-      });
-      const budget = new Budget(cap);
-
-      const result = await runAgentTurn({
+      const result = await runHeadless({
         provider,
         model: ref.model,
-        system,
-        tools: delegatedTools,
-        messages: [{ role: "user", content: message }],
-        budget,
-        maxTokens: deps.globalConfig.maxTokens,
+        soulText: profile.soulText,
         cwd: deps.cwd,
-        approve: async () => false,
+        message,
+        maxTokens: deps.globalConfig.maxTokens,
+        capUSD: cap,
+        policy: "read-only",
       });
 
       const text = result.text;
