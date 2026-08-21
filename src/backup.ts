@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   writeFileSync,
 } from "node:fs";
 import { join, dirname, isAbsolute } from "node:path";
@@ -241,7 +242,10 @@ export function backupHome(home: string, outPath: string): BackupResult {
   if (!existsSync(home)) {
     throw new ConfigError(`home does not exist: ${home}`);
   }
-  const skipAbs = new Set<string>([outPath]);
+  const tmpPath = `${outPath}.tmp`;
+  // Skip both the final archive and its temp sibling so neither the current
+  // run nor a stale `.tmp` from an interrupted previous run is collected.
+  const skipAbs = new Set<string>([outPath, tmpPath]);
   const files = collectHomeFiles(home, skipAbs);
   const meta: BackupMeta = {
     format: BACKUP_FORMAT,
@@ -263,7 +267,11 @@ export function backupHome(home: string, outPath: string): BackupResult {
   }
   chunks.push(Buffer.alloc(1024, 0)); // end of archive
 
-  writeFileSync(outPath, gzipSync(Buffer.concat(chunks)));
+  // Write to a sibling temp file and rename over the destination, so a crash or
+  // disk-full mid-write never corrupts an existing good backup (it stays intact
+  // until the atomic rename).
+  writeFileSync(tmpPath, gzipSync(Buffer.concat(chunks)));
+  renameSync(tmpPath, outPath);
   return { file: outPath, count: files.length, files: files.map((f) => f.rel) };
 }
 
@@ -339,7 +347,12 @@ export function restoreHome(home: string, archivePath: string): RestoreResult {
     if (parts[0] && BACKUP_EXCLUDES.has(parts[0])) continue;
     const dest = join(home, e.name);
     mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, e.content);
+    // Per-file atomic restore: write to a sibling temp then rename, so an
+    // interrupted restore never leaves a corrupt/partial file (each file is
+    // either the old or the new version, never a torn mix).
+    const tmp = `${dest}.tmp`;
+    writeFileSync(tmp, e.content);
+    renameSync(tmp, dest);
   }
 
   return { count: relFiles.length, files: relFiles };

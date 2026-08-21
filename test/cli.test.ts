@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, HELP } from "../src/cli/args";
@@ -225,6 +225,20 @@ describe("tenjin job management", () => {
     expect(raw).toContain("gateway:");
     expect(raw).toContain("- name:");
     expect(raw).toContain('cron: "0 9 * * *"');
+  });
+
+  // #315: writeConfigDoc writes atomically (temp+rename, no residue) and keeps
+  // the hand-authored top-of-file comment template when re-serializing.
+  test("addJob preserves the config header comments and writes atomically", () => {
+    writeFileSync(
+      configYamlPath(home),
+      "# Tenjin harness configuration\n# provider: anthropic | openai\nprovider: anthropic\nmodel: claude-sonnet-4-5\n",
+    );
+    addJob(home, { bot: "researcher", cron: "0 9 * * *", prompt: "check" });
+    const raw = readFileSync(configYamlPath(home), "utf8");
+    expect(raw.startsWith("# Tenjin harness configuration\n# provider: anthropic | openai\n")).toBe(true);
+    expect(raw).toContain("gateway:");
+    expect(existsSync(`${configYamlPath(home)}.tmp`)).toBe(false);
   });
 
   test("runJob executes headless as the bot and returns output", async () => {

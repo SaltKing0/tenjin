@@ -1,6 +1,7 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { ToolDef } from "./registry";
+import { atomicWrite } from "./atomic";
 
 export const editTool: ToolDef = {
   name: "edit_file",
@@ -38,7 +39,12 @@ export const editTool: ToolDef = {
     const updated = args.replaceAll
       ? text.split(oldString).join(newString)
       : text.replace(oldString, newString);
-    await writeFile(path, updated, "utf8");
+    // Atomic temp+rename write with a TOCTOU symlink re-check (see atomic.ts).
+    await atomicWrite(path, updated, {
+      guard: ctx.guard,
+      toolName: "edit_file",
+      cwd: ctx.cwd,
+    });
     return `Replaced ${args.replaceAll ? occurrences : 1} occurrence(s) in ${args.path}`;
   },
 };

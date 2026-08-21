@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { YAML } from "bun";
 import { ConfigError } from "../config/loader";
@@ -75,9 +75,37 @@ export function readConfigDoc(home: string): ConfigDoc {
   return { doc, gateway: gw, jobs: jobs as Record<string, unknown>[] };
 }
 
+/**
+ * Preserve the leading comment block (the hand-authored template header) when
+ * re-serializing, since `stringifyBlockStyle` is value-preserving but
+ * comment-discarding. Only the top-of-file comment lines are kept — inline
+ * per-key comments deeper in the body are not (that would need a comment-aware
+ * YAML round-trip, out of scope here).
+ */
+function preserveHeaderComments(existing: string, serialized: string): string {
+  const header: string[] = [];
+  for (const line of existing.split("\n")) {
+    const t = line.trimStart();
+    if (t === "" || t.startsWith("#")) {
+      header.push(line);
+    } else {
+      break;
+    }
+  }
+  if (!header.length) return serialized;
+  return header.join("\n").replace(/\n+$/, "") + "\n" + serialized;
+}
+
 /** Write the top-level doc back to `config.yaml` in block style. */
 export function writeConfigDoc(home: string, doc: Record<string, unknown>): void {
-  writeFileSync(configYamlPath(home), stringifyBlockStyle(doc));
+  const path = configYamlPath(home);
+  const existing = readFileSync(path, "utf8");
+  const serialized = stringifyBlockStyle(doc);
+  // Atomic temp+rename so a crash mid-write never corrupts the hand-maintained
+  // config (a sibling `.tmp` is swapped in only once fully written).
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, preserveHeaderComments(existing, serialized));
+  renameSync(tmp, path);
 }
 
 // Block-style serializer lives in src/config/block-style.ts (shared with the

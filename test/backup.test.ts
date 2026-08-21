@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   existsSync,
+  readdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
@@ -123,6 +124,22 @@ test("backup writes an archive that excludes secrets", () => {
   expect(rawTar.includes(Buffer.from("sk-SECRETLIVE"))).toBe(false);
   expect(rawTar.includes(Buffer.from("hunter2"))).toBe(false);
   expect(rawTar.includes(Buffer.from("KEYRING-SECRET-0f3a9c"))).toBe(false);
+});
+
+// #315: backup/restore must be atomic — an interrupted write must never leave a
+// corrupt destination, and no `.tmp` residue is left behind.
+test("backup and restore are atomic (no .tmp residue)", () => {
+  buildHome(home);
+  backupHome(home, outFile);
+  expect(existsSync(`${outFile}.tmp`)).toBe(false);
+  restoreHome(target, outFile);
+  const walk = (d: string): string[] =>
+    readdirSync(d, { withFileTypes: true }).flatMap((e) => {
+      const p = join(d, e.name);
+      return e.isDirectory() ? walk(p) : [p];
+    });
+  const allFiles = walk(target);
+  expect(allFiles.some((p) => p.endsWith(".tmp"))).toBe(false);
 });
 
 test("roundtrip backup -> restore reproduces the home without secrets", () => {

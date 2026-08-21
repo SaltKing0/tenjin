@@ -1,6 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { ToolDef } from "./registry";
+import { atomicWrite } from "./atomic";
 
 export const writeTool: ToolDef = {
   name: "write_file",
@@ -18,8 +18,12 @@ export const writeTool: ToolDef = {
   async handler(args, ctx) {
     const path = resolve(ctx.cwd, String(args.path));
     const content = String(args.content);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, content, "utf8");
+    // Atomic temp+rename write with a TOCTOU symlink re-check (see atomic.ts).
+    await atomicWrite(path, content, {
+      guard: ctx.guard,
+      toolName: "write_file",
+      cwd: ctx.cwd,
+    });
     const bytes = Buffer.byteLength(content, "utf8");
     return `Wrote ${bytes} bytes to ${args.path}`;
   },
