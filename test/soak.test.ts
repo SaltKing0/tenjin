@@ -166,6 +166,9 @@ describe("soak: SSE stream no-loss over HTTP (#138)", () => {
 });
 
 describe("soak: memory bounded under churn (#138)", () => {
+  // Heavy disk I/O (1000 sessions × ~100 events written to a temp dir); this
+  // routinely exceeds Bun's default 5000 ms per-test timeout on a busy/shared
+  // machine, so give it an explicit generous window.
   test("repeated session generation does not grow RSS unboundedly", () => {
     const before = process.memoryUsage().rss;
     const sessions2 = mkdtempSync(join(tmpdir(), "tj-soak-churn-"));
@@ -183,5 +186,5 @@ describe("soak: memory bounded under churn (#138)", () => {
     } finally {
       rmSync(sessions2, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });
