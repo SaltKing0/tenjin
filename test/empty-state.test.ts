@@ -3,7 +3,7 @@ import { EMPTY_STATES, ROUTES, emptyStateFor } from "../src/gateway/console/empt
 
 describe("console empty-states (#254)", () => {
   test("defines guidance copy for every required panel", () => {
-    for (const panel of ["chat", "jobs", "sessions", "memory", "approvals"]) {
+    for (const panel of ["chat", "chat_history", "jobs", "sessions", "memory", "approvals"]) {
       const def = EMPTY_STATES[panel];
       if (!def) throw new Error(`missing empty-state for ${panel}`);
       expect(def.title.length).toBeGreaterThan(0);

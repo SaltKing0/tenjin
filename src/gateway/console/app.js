@@ -9,6 +9,7 @@ import { headerLabels, stackLabels, isHeaderRow } from "./tables.js";
 import { firstRunView, shouldShowFirstRun } from "./first-run.js";
 import { botSectionItems } from "./sidebar-bots.js";
 import { lastRunStatus, runStatusView, historyTones } from "./job-status.js";
+import { messageText, sessionMessages } from "./chat-history.js";
 
 import { panelGroups } from "./sidebar-groups.js";
 
@@ -771,15 +772,18 @@ async function openReplay(main, id) {
   }
 }
 
+// #284: shared message-block builder (used by chat history + live sends).
+function chatMessage(m) {
+  const cls = m.role === "user" ? "msg you" : "msg bot";
+  const label = m.role === "user" ? "you" : "tenjin";
+  return el("div", { class: cls }, el("strong", {}, label), el("div", {}, m.text));
+}
+
 function messageCard(ev) {
+  const text = messageText(ev);
   if (ev.role === "user") {
-    const text = typeof ev.content === "string" ? ev.content : JSON.stringify(ev.content);
     return el("div", { class: "msg you" }, el("strong", {}, "you"), el("div", {}, text));
   }
-  const text =
-    typeof ev.content === "string"
-      ? ev.content
-      : (ev.content || []).map((b) => (b.type === "text" ? b.text : "")).join(" ").trim();
   if (!text) return el("div", {});
   return el("div", { class: "msg bot" }, el("strong", {}, "tenjin"), el("div", {}, text));
 }
@@ -917,7 +921,7 @@ async function panelChat(main) {
     el(
       "div",
       { class: "toolbar" },
-      botSelector(() => {}),
+      botSelector(() => loadHistory()),
       el("span", { class: "dim" }, "prefix @botname to address a specific bot"),
     ),
   );
@@ -925,8 +929,35 @@ async function panelChat(main) {
   const input = el("input", { placeholder: "message your bot…", autofocus: true });
   const sendBtn = el("button", { class: "primary" }, "send");
   main.append(log, el("div", { class: "chat-input" }, input, sendBtn));
-  // #254: with no bots yet, guide the user (dismissed on the first message)
-  if (bots.length === 0) log.append(emptyStateCard("chat"));
+
+  // #284: on open, render the selected bot's last session as history (auto-
+  // scrolled), or an empty-state with context; reload when the bot switches.
+  async function loadHistory() {
+    let history = [];
+    try {
+      const s = await apiJson(`/api/sessions?bot=${encodeURIComponent(currentBot)}&limit=1`);
+      const latest = s.sessions && s.sessions[0];
+      if (latest) {
+        const ev = await apiJson(
+          `/api/sessions/${encodeURIComponent(latest.id)}/events?bot=${encodeURIComponent(currentBot)}`,
+        );
+        history = sessionMessages(ev.events);
+      }
+    } catch {
+      history = [];
+    }
+    log.replaceChildren();
+    if (bots.length === 0) {
+      // #254: with no bots yet, guide the user (dismissed on the first message)
+      log.append(emptyStateCard("chat"));
+    } else if (history.length === 0) {
+      log.append(emptyStateCard("chat_history"));
+    } else {
+      for (const m of history) log.append(chatMessage(m));
+      log.lastElementChild?.scrollIntoView({ block: "end" });
+    }
+  }
+  await loadHistory();
 
   async function send() {
     const text = input.value.trim();
@@ -934,7 +965,7 @@ async function panelChat(main) {
     input.value = "";
     sendBtn.disabled = true;
     log.querySelector(".empty-state")?.remove();
-    log.append(el("div", { class: "msg you" }, text));
+    log.append(chatMessage({ role: "user", text }));
     const replyMsg = el("div", { class: "msg bot" }, "…");
     log.append(replyMsg);
     try {
