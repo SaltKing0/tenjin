@@ -49,8 +49,22 @@ function mockProvider(reply = "job output"): Provider {
 
 describe("parseGatewaySettings", () => {
   test("empty/missing → defaults", () => {
-    expect(parseGatewaySettings(undefined)).toEqual({ jobs: [], telegram: null, heartbeat: null, listen: null, allowWrites: false });
-    expect(parseGatewaySettings(null)).toEqual({ jobs: [], telegram: null, heartbeat: null, listen: null, allowWrites: false });
+    expect(parseGatewaySettings(undefined)).toEqual({
+      jobs: [],
+      telegram: null,
+      heartbeat: null,
+      listen: null,
+      allowWrites: false,
+      catchUp: { enabled: true, max: 50 },
+    });
+    expect(parseGatewaySettings(null)).toEqual({
+      jobs: [],
+      telegram: null,
+      heartbeat: null,
+      listen: null,
+      allowWrites: false,
+      catchUp: { enabled: true, max: 50 },
+    });
   });
 
   test("valid job parses with schedule validation", () => {
@@ -621,5 +635,185 @@ describe("onSessionEnd summaries (#37)", () => {
 
     const summariesDir = join(home, "bots", "worker", "memory", "summaries");
     expect(existsSync(summariesDir)).toBe(false);
+  });
+});
+
+describe("scheduler catch-up (#19)", () => {
+  // A persisted run two minutes in the past — downtime long enough that, for a
+  // 1m cadence (every) or a daily cron, the next scheduled run has been missed.
+  const TWO_MIN_AGO_MS = Date.now() - 2 * 60_000;
+  const stateFile = () => join(home, "gateway-state.json");
+
+  function writeOverdueState(jobs: Record<string, number | undefined>) {
+    const state: { version: number; jobs: Record<string, unknown> } = {
+      version: 1,
+      jobs: {},
+    };
+    for (const [name, atMs] of Object.entries(jobs)) {
+      state.jobs[name] =
+        atMs === undefined
+          ? { lastRun: null }
+          : { lastRun: { atMs, stopReason: "end_turn", costUSD: 0 } };
+    }
+    writeFileSync(stateFile(), JSON.stringify(state));
+  }
+
+  function makeGateway(jobs: unknown[], catchUp?: unknown, opts: { log?: (l: string) => void } = {}) {
+    return new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: { jobs, ...(catchUp !== undefined ? { catchUp } : {}) } as never,
+      }),
+      registry: { get: () => mockProvider("CATCHUP BODY") } as never,
+      log: opts.log,
+    });
+  }
+
+  test("parse: catchUp defaults to enabled with max 50", () => {
+    expect(parseGatewaySettings(undefined).catchUp).toEqual({ enabled: true, max: 50 });
+    expect(
+      parseGatewaySettings({ catchUp: { enabled: false, max: 2 } }).catchUp,
+    ).toEqual({ enabled: false, max: 2 });
+  });
+
+  test("parse: invalid catchUp rejected", () => {
+    expect(() => parseGatewaySettings({ catchUp: { max: 0 } })).toThrow(/positive integer/);
+    expect(() => parseGatewaySettings({ catchUp: { max: "x" } })).toThrow(/positive integer/);
+  });
+
+  test("parse: per-job timeoutMs parsed and validated", () => {
+    const s = parseGatewaySettings({
+      jobs: [{ name: "a", bot: "worker", prompt: "p", every: "1m", timeoutMs: 5000 }],
+    });
+    expect(s.jobs[0]?.timeoutMs).toBe(5000);
+    expect(() =>
+      parseGatewaySettings({
+        jobs: [{ name: "a", bot: "worker", prompt: "p", every: "1m", timeoutMs: 0 }],
+      }),
+    ).toThrow(/timeoutMs/);
+    expect(() =>
+      parseGatewaySettings({
+        jobs: [{ name: "a", bot: "worker", prompt: "p", every: "1m", timeoutMs: -1 }],
+      }),
+    ).toThrow(/timeoutMs/);
+  });
+
+  test("hydrates persisted lastRun and fires the missed run exactly once", async () => {
+    writeOverdueState({ digest: TWO_MIN_AGO_MS });
+    const gw = makeGateway([{ name: "digest", bot: "worker", prompt: "p", every: "1m" }]);
+    const job = gw.jobs[0];
+    if (!job) throw new Error("missing job");
+    // Persisted lastRun is hydrated into the in-memory job at boot.
+    expect(job.lastRun?.atMs).toBe(TWO_MIN_AGO_MS);
+
+    const fired = await gw.catchUpOverdue(Date.now());
+
+    expect(fired).toBe(1);
+    await Bun.sleep(80);
+    expect(job.running).toBe(false);
+    // The missed run advanced lastRun to now and freshened the cadence.
+    expect(job.lastRun?.atMs).toBeGreaterThan(TWO_MIN_AGO_MS);
+    expect(job.nextDueMs).toBeGreaterThan(Date.now() - 5_000);
+  });
+
+  test("a recently-run job is not overdue", async () => {
+    writeOverdueState({ digest: Date.now() - 5_000 });
+    const gw = makeGateway([{ name: "digest", bot: "worker", prompt: "p", every: "10m" }]);
+    // 5s old run, 10m cadence → next scheduled slot is still in the future.
+    expect(await gw.catchUpOverdue(Date.now())).toBe(0);
+  });
+
+  test("no persisted state → nothing to catch up (first boot)", async () => {
+    const gw = makeGateway([{ name: "digest", bot: "worker", prompt: "p", every: "1m" }]);
+    expect(await gw.catchUpOverdue(Date.now())).toBe(0);
+  });
+
+  test("catchUp disabled → no catch-up runs", async () => {
+    writeOverdueState({ digest: TWO_MIN_AGO_MS });
+    const gw = makeGateway(
+      [{ name: "digest", bot: "worker", prompt: "p", every: "1m" }],
+      { enabled: false, max: 50 },
+    );
+    expect(await gw.catchUpOverdue(Date.now())).toBe(0);
+  });
+
+  test("catchUp caps the number of runs per boot", async () => {
+    writeOverdueState({ a: TWO_MIN_AGO_MS, b: TWO_MIN_AGO_MS, c: TWO_MIN_AGO_MS });
+    const logs: string[] = [];
+    const gw = makeGateway(
+      [
+        { name: "a", bot: "worker", prompt: "p", every: "1m" },
+        { name: "b", bot: "worker", prompt: "p", every: "1m" },
+        { name: "c", bot: "worker", prompt: "p", every: "1m" },
+      ],
+      { enabled: true, max: 2 },
+      { log: (l) => logs.push(l) },
+    );
+    expect(await gw.catchUpOverdue(Date.now())).toBe(2);
+    const catched = logs
+      .filter((l) => l.includes("catch-up"))
+      .map((l) => /job (\w+) catch-up/.exec(l)?.[1]);
+    expect(catched).toEqual(["a", "b"]);
+  });
+});
+
+describe("job hang release + per-job timeout (#19)", () => {
+  // A provider whose single chat() call never settles — simulates a hung
+  // upstream request that must not pin the job slot forever.
+  function hangingProvider(gate: { release: () => void }) {
+    return {
+      name: "mock",
+      async chat(): Promise<never> {
+        return new Promise<never>(() => {
+          if (gate.release) gate.release();
+        });
+      },
+    };
+  }
+
+  test("a hanging job with timeoutMs frees its slot and records the timeout", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: {
+          jobs: [{ name: "digest", bot: "worker", prompt: "p", every: "1h", timeoutMs: 30 }],
+        },
+      }),
+      registry: { get: () => hangingProvider({ release: () => {} }) } as never,
+    });
+
+    const started = Date.now();
+    const result = await gw.runNow("digest");
+    const took = Date.now() - started;
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(String(result.error)).toMatch(/timed out/);
+    expect(took).toBeLessThan(2_000);
+    // Slot is free again and the timeout is recorded as the last run.
+    const job = gw.jobs[0];
+    if (!job) throw new Error("missing job");
+    expect(job.running).toBe(false);
+    // A hung run must not be treated as caught-up-but-successful state; the
+    // error run is persisted so a restart won't re-fetch it as overdue.
+    expect(job.lastRun?.error).toMatch(/timed out/);
+    expect(existsSync(join(home, "gateway-state.json"))).toBe(true);
+  });
+
+  test("job without timeoutMs still runs normally (no regression)", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: { jobs: [{ name: "digest", bot: "worker", prompt: "p", every: "1h" }] },
+      }),
+      registry: { get: () => mockProvider("HELLO") } as never,
+    });
+    const result = await gw.runNow("digest");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.text).toBe("HELLO");
   });
 });
