@@ -264,6 +264,18 @@ test("console serves the topbar-state module (#256)", async () => {
   expect(body).toContain("export function connectionView");
 });
 
+test("console serves the first-run module (#251)", async () => {
+  const base = start({
+    consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
+  });
+  const res = await fetch(`${base}/console/first-run.js`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("application/javascript");
+  const body = await res.text();
+  expect(body).toContain("firstRunView");
+  expect(body).toContain("shouldShowFirstRun");
+});
+
 test("console serves the tables module (#258)", async () => {
   const base = start({
     consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
