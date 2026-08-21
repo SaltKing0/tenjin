@@ -7,6 +7,7 @@ import { resolveMemoryScope } from "./memory-scope.js";
 import { setupChecklist } from "./setup-checklist.js";
 import { headerLabels, stackLabels, isHeaderRow } from "./tables.js";
 import { firstRunView, shouldShowFirstRun } from "./first-run.js";
+import { panelGroups } from "./sidebar-groups.js";
 
 import { connectionView } from "./topbar-state.js";
 
@@ -1341,9 +1342,19 @@ async function render() {
     el(
       "nav",
       {},
-      PANELS.map(([name, label]) =>
-        el("a", { class: name === panel[0] ? "active" : "", href: `#${name}` }, label),
-      ),
+      // #287: group the panels (Operate / Observe / Settings) instead of a
+      // flat list. Labels are hidden on the mobile bottom-nav layout.
+      ...panelGroups(PANELS.map(([name]) => name)).flatMap((g) => [
+        g.label ? el("div", { class: "sidebar-group-label" }, g.label) : null,
+        ...g.names.map((name) => {
+          const entry = PANELS.find(([p]) => p[0] === name);
+          return el(
+            "a",
+            { class: name === panel[0] ? "active" : "", href: `#${name}` },
+            entry[1],
+          );
+        }),
+      ]),
     ),
   );
 
