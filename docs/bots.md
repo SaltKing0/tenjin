@@ -173,6 +173,26 @@ state around by hand:
   (`name-2`) instead of overwriting. The imported configuration is validated
   like any other bot before the bot is left behind.
 
+## Git catalog (marketplace-lite)
+
+Beyond single archives, bot packages can be shared through a **git catalog**: a
+git repository that acts as a registry of bot packages — no separate
+infrastructure needed. Each package lives under `bots/<name>/` in the repo and
+holds the same #104 portable content (plus a `.tenjin-package.json` manifest);
+runtime state and secrets never enter it.
+
+- `tenjin bot search <repo> [query]` lists the packages available in a catalog
+  repo (any URL / ssh / local path), optionally filtered by a query.
+- `tenjin bot install <repo>/<name> [--yes]` clones the catalog, validates the
+  package (manifest + config), shows what it will create, asks for confirmation
+  (skip the prompt with `--yes`), then installs it under `bots/`.
+- `tenjin bot publish <name> --to <repo> [--push]` exports the bot's portable
+  content into the catalog under `bots/<name>/` and commits it. Pass `--push` to
+  push the change to the catalog's remote.
+
+On gateway boot, installed bots are scanned and broken bot packages are reported
+with their path and reason (a single broken bot never prevents booting).
+
 ## Reference
 
 | Need | Command / file |
@@ -181,6 +201,9 @@ state around by hand:
 | List bots | `tenjin bot list` |
 | Export a bot (portable package) | `tenjin bot export <name>` |
 | Import a bot | `tenjin bot import <file.tar.gz>` |
+| Search a git catalog | `tenjin bot search <repo> [query]` |
+| Install from a git catalog | `tenjin bot install <repo>/<name> [--yes]` |
+| Publish into a git catalog | `tenjin bot publish <name> --to <repo> [--push]` |
 | Seed examples | `tenjin bot init-examples` |
 | Run as a bot | `tenjin --bot <name>` |
 | Bot profile code | `src/bots/profile.ts` |

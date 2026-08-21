@@ -4,6 +4,7 @@ import type { HarnessConfig } from "../config/types";
 import { ConfigError } from "../config/types";
 import { ProviderRegistry } from "../provider/registry";
 import { resolveBot, listBots, botModelRef, botBudgetUSD, type BotProfile, type BotRoutineConfig, type BotHeartbeatConfig } from "../bots/profile";
+import { scanInstalledBots } from "../bots/catalog";
 import { runHeadless, capPolicy, type HeadlessOptions, type HeadlessResult } from "../agent/headless";
 import { guardForBot } from "../security/guard";
 import { resolveParanoid } from "../security/injection";
@@ -776,6 +777,12 @@ export class Gateway {
 
   async run(signal: AbortSignal): Promise<void> {
     for (const line of this.describe()) this.log(line);
+    // #140 boot scan: warn on broken installed bot packages (one broken bot
+    // must never take the gateway down).
+    const { broken } = scanInstalledBots(this.deps.home);
+    for (const b of broken) {
+      this.log(`broken bot package "${b.name}" at ${b.dir}: ${b.reason}`);
+    }
     // #19: fire scheduled runs that fell due while the gateway was down before
     // the main loop starts polling future cadences.
     await this.catchUpOverdue();

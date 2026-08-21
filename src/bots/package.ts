@@ -20,7 +20,7 @@ const META_FILE = ".tenjin-package.json";
 /** Top-level runtime dirs that never travel with a bot. */
 const EXCLUDED_DIRS = new Set(["sessions", "memory", "inbox"]);
 
-interface PackageMeta {
+export interface PackageMeta {
   format: "tenjin-bot";
   version: 1;
   name: string;
@@ -86,12 +86,12 @@ function tarEntry(
  * Collecting files (excludes runtime dirs)
  * ------------------------------------------------------------------ */
 
-interface PkgFile {
+export interface PkgFile {
   rel: string; // path relative to bot root
   content: Buffer;
 }
 
-function collectBotFiles(root: string): PkgFile[] {
+export function collectBotFiles(root: string): PkgFile[] {
   const out: PkgFile[] = [];
   const walk = (dir: string, relDir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -228,10 +228,21 @@ export function importBot(home: string, archivePath: string): ImportResult {
   }
 
   const entries = parseTar(tar);
-  const files = entries.filter((e) => e.type === "file");
+  const files: PkgFile[] = entries
+    .filter((e) => e.type === "file")
+    .map((e) => ({ rel: e.name, content: e.content }));
+  return installPortableFiles(home, files);
+}
 
+/**
+ * Core install: given a set of portable package files (from a .tar.gz or from a
+ * catalog directory), validate the manifest, pick a safe unique name, write the
+ * contents and resolveBot-validate the result — rolling back fully on failure.
+ * Shared by `importBot` (tar pipeline) and the git catalog installer.
+ */
+export function installPortableFiles(home: string, files: PkgFile[]): ImportResult {
   // read meta (required)
-  const metaEntry = files.find((e) => e.name === META_FILE);
+  const metaEntry = files.find((f) => f.rel === META_FILE);
   if (!metaEntry) {
     throw new ConfigError(`not a tenjin bot package: missing ${META_FILE}`);
   }
@@ -251,24 +262,24 @@ export function importBot(home: string, archivePath: string): ImportResult {
   // validate paths BEFORE writing anything (no traversal, no absolute)
   const relFiles: string[] = [];
   for (const e of files) {
-    if (e.name === META_FILE) continue;
+    if (e.rel === META_FILE) continue;
     if (
-      isAbsolute(e.name) ||
-      e.name.startsWith("..") ||
-      e.name.startsWith("/") ||
-      e.name.includes("\u0000") ||
-      e.name.split("/").some((p) => p === "..")
+      isAbsolute(e.rel) ||
+      e.rel.startsWith("..") ||
+      e.rel.startsWith("/") ||
+      e.rel.includes("\u0000") ||
+      e.rel.split("/").some((p) => p === "..")
     ) {
-      throw new ConfigError(`package contains unsafe path: ${e.name}`);
+      throw new ConfigError(`package contains unsafe path: ${e.rel}`);
     }
-    relFiles.push(e.name);
+    relFiles.push(e.rel);
   }
 
   try {
     mkdirSync(root, { recursive: true });
     for (const e of files) {
-      if (e.name === META_FILE) continue;
-      const dest = join(root, e.name);
+      if (e.rel === META_FILE) continue;
+      const dest = join(root, e.rel);
       mkdirSync(dirname(dest), { recursive: true });
       writeFileSync(dest, e.content);
     }

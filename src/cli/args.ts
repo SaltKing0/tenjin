@@ -15,6 +15,9 @@ Usage:
   tenjin --fork <id> [n]     branch a copy at event n (default: end)
   tenjin --bot <name>        run as a specific bot
   tenjin bot new|list|export|import|init-examples   manage & package bots
+  tenjin bot search <repo> [query]   list bot packages in a git catalog repo
+  tenjin bot install <repo>/<name> [--yes]   install a bot from a git catalog
+  tenjin bot publish <name> --to <repo> [--push]   export a bot into a catalog
   tenjin tell <bot> <text>   leave a user message in a bot's inbox
   tenjin arena "<prompt>" --models <ref,ref,...>   race one prompt through
                             several models in parallel. refs use provider:model
