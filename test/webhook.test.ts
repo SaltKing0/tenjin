@@ -186,6 +186,93 @@ describe("WebhookChannel HTTP handler", () => {
       target.stop(true);
     }
   });
+
+  // #203: content-length cap fires BEFORE the body is read or any auth work.
+  test("oversized content-length is rejected (413) before auth/read — even with no signature", async () => {
+    const ch = new WebhookChannel(
+      { secret: SECRET, defaultBot: "researcher", allowedSenders: [], maxMessageLength: 64 },
+      () => {},
+    );
+    let called = false;
+    ch.onMessage(async (m) => {
+      called = true;
+      return `echo:${m.text}`;
+    });
+    const bigRaw = JSON.stringify({ text: "x".repeat(500) }); // ~520 bytes > 64 cap
+    const req = new Request("http://127.0.0.1:1/channel/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(bigRaw.length), // no signature/timestamp
+      },
+      body: bigRaw,
+    });
+    const res = await (ch as unknown as { eventHandler: (r: Request) => Promise<Response> }).eventHandler(req);
+    expect(res.status).toBe(413);
+    expect(called).toBe(false); // never reached the handler
+  });
+
+  // #203: per-IP rate limit applies BEFORE auth, keyed by connection IP, so an
+  // unsigned flood is throttled regardless of the (attacker-controlled) sender.
+  test("per-IP rate limit applies pre-auth and caps actual runs", async () => {
+    const ch = new WebhookChannel(
+      { secret: SECRET, defaultBot: "researcher", allowedSenders: [], rateLimitMax: 2, rateLimitWindowMs: 60_000 },
+      () => {},
+    );
+    let runs = 0;
+    ch.onMessage(async (m) => {
+      runs += 1;
+      return `echo:${m.text}`;
+    });
+    const eh = (ch as unknown as { eventHandler: (r: Request) => Promise<Response> }).eventHandler;
+    const mk = (i: number) => {
+      const b = signedBody({ text: `hi${i}`, sender: `s${i}` }); // distinct messages → no replay dedup
+      return new Request("http://127.0.0.1:1/channel/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-webhook-signature": b.signature,
+          "x-webhook-timestamp": b.ts,
+        },
+        body: b.raw,
+      });
+    };
+    expect((await eh(mk(0))).status).toBe(200);
+    expect((await eh(mk(1))).status).toBe(200);
+    expect((await eh(mk(2))).status).toBe(429);
+    expect(runs).toBe(2); // the throttled request never reached the handler
+  });
+
+  // #203: an identical signed message re-sent within the validity window is a
+  // replay — deduped so the agent runs exactly once.
+  test("a re-sent signed message is deduped (one run, no double agent run)", async () => {
+    const ch = new WebhookChannel(
+      { secret: SECRET, defaultBot: "researcher", allowedSenders: [], maxMessageLength: 200 },
+      () => {},
+    );
+    let runs = 0;
+    ch.onMessage(async (m) => {
+      runs += 1;
+      return `echo:${m.text}`;
+    });
+    const eh = (ch as unknown as { eventHandler: (r: Request) => Promise<Response> }).eventHandler;
+    const body = signedBody({ text: "fire", sender: "github" });
+    const mk = () =>
+      new Request("http://127.0.0.1:1/channel/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-webhook-signature": body.signature,
+          "x-webhook-timestamp": body.ts,
+        },
+        body: body.raw,
+      });
+    const first = await eh(mk());
+    const second = await eh(mk()); // exact same message again
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200); // benign response, not an error
+    expect(runs).toBe(1); // ran once despite two deliveries
+  });
 });
 
 describe("gateway config webhook", () => {
