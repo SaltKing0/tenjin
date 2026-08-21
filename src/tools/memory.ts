@@ -2,7 +2,12 @@ import { existsSync, mkdirSync, appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ToolDef } from "./registry";
 import type { EmbeddingProvider } from "../provider/embeddings";
-import { loadChunks, searchChunks } from "../memory/vector-store";
+import {
+  loadChunks,
+  searchChunks,
+  type SearchOptions,
+  type VectorStore,
+} from "../memory/vector-store";
 
 export function factsPath(memoryDirPath: string): string {
   return join(memoryDirPath, "facts.md");
@@ -46,6 +51,9 @@ export function createRecallTool(deps: {
   memoryDirPath: string;
   projectPath: string;
   embeddings: EmbeddingProvider | null;
+  /** Optional in-memory index; when provided, search runs against it instead of
+   *  re-loading the whole chunk log on every call. */
+  store?: VectorStore;
 }): ToolDef {
   return {
     name: "recall",
@@ -68,14 +76,16 @@ export function createRecallTool(deps: {
       if (!query) throw new Error("query must not be empty");
       const [vector] = await deps.embeddings.embed([query]);
       if (!vector) throw new Error("embedding provider returned no vector");
-      const chunks = loadChunks(join(deps.memoryDirPath, "vectors.jsonl"));
-      const { hits, skipped } = searchChunks(chunks, {
+      const opts: SearchOptions = {
         query: vector,
         topK: Math.min(10, Math.max(1, Number(args.topK) || 5)),
         projectPath: deps.projectPath,
         minScore: 0.15,
         embedModel: deps.embeddings.model,
-      });
+      };
+      const { hits, skipped } = deps.store
+        ? deps.store.search(opts)
+        : searchChunks(loadChunks(join(deps.memoryDirPath, "vectors.jsonl")), opts);
       const warnings: string[] = [];
       if (skipped > 0) {
         warnings.push(

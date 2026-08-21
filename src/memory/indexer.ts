@@ -7,7 +7,9 @@ import {
   appendChunks,
   indexedSessionIds,
   loadChunks,
+  vectorsFilePath,
   type VectorChunk,
+  type VectorStore,
 } from "./vector-store";
 
 const MAX_CHUNK_CHARS = 2000;
@@ -50,10 +52,15 @@ export async function indexPendingSessions(opts: {
   projectPath: string;
   embeddings: EmbeddingProvider;
   limit?: number;
+  /** Optional in-memory index; when provided it is used for session dedup and
+   *  buffered writes instead of re-loading the whole chunk log each pass. */
+  store?: VectorStore;
 }): Promise<IndexReport> {
   const report: IndexReport = { indexed: [], chunks: 0, errors: [] };
-  const vectorsFile = joinVectorsFile(opts.memoryDirPath);
-  const done = indexedSessionIds(loadChunks(vectorsFile));
+  const store = opts.store;
+  // `vectorsFile` is only used on the legacy (store-less) path.
+  const vectorsFile = store ? null : vectorsFilePath(opts.memoryDirPath);
+  const done = store ? store.sessionsIndexed() : indexedSessionIds(loadChunks(vectorsFile!));
 
   const logs = SessionLog.list(opts.sessionsDirPath)
     .filter((s) => !done.has(s.id))
@@ -81,16 +88,18 @@ export async function indexPendingSessions(opts: {
           embedDim: embedding.length,
         };
       });
-      appendChunks(vectorsFile, chunks);
+      if (store) {
+        store.addAll(chunks);
+      } else {
+        appendChunks(vectorsFile!, chunks);
+      }
       report.indexed.push(log.id);
       report.chunks += chunks.length;
     } catch (e) {
       report.errors.push(`${log.id}: ${(e as Error).message}`);
     }
   }
-  return report;
-}
 
-function joinVectorsFile(memoryDirPath: string): string {
-  return `${memoryDirPath}/vectors.jsonl`;
+  if (store) store.flush();
+  return report;
 }

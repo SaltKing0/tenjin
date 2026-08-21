@@ -29,6 +29,7 @@ import { rebuildMessages, sumUsage } from "./session/events";
 import { generatePendingSummaries, listSummaries } from "./memory/summaries";
 import { buildMemorySection } from "./memory/inject";
 import { indexPendingSessions } from "./memory/indexer";
+import { VectorStore, vectorsFilePath } from "./memory/vector-store";
 import { createEmbeddings } from "./provider/embeddings";
 import { vectorEnabled } from "./config/loader";
 import { createRecallTool, createRememberTool, readFacts } from "./tools/memory";
@@ -159,6 +160,9 @@ async function main(): Promise<number> {
     const embeddings = vectorEnabled(config)
       ? createEmbeddings({ model: config.memory?.vector?.model })
       : null;
+    // In-memory vector index, loaded (and compacted) once at boot. Shared by the
+    // boot index pass and the recall tool so neither re-reads the whole log.
+    let vectorStore: VectorStore | null = null;
     if (memoryEnabled(config) && cli.print === undefined && !cli.fork && !cli.resume) {
       try {
         const sumRef = cheapRef ?? defaultRef;
@@ -179,11 +183,20 @@ async function main(): Promise<number> {
 
       if (embeddings) {
         try {
+          vectorStore = VectorStore.open(vectorsFilePath(memDir));
+          // Compaction removes duplicate/stale chunks so the log stays bounded.
+          const compacted = vectorStore.compact();
+          if (compacted.removed > 0) {
+            stdout.write(
+              `memory: compacted vector store (${compacted.removed} duplicate/stale chunk(s) removed)\n`,
+            );
+          }
           const report = await indexPendingSessions({
             sessionsDirPath: dir,
             memoryDirPath: memDir,
             projectPath: cwd,
             embeddings,
+            store: vectorStore,
           });
           for (const err of report.errors) {
             stdout.write(`memory: ${err}\n`);
@@ -228,7 +241,7 @@ async function main(): Promise<number> {
     ];
     if (memoryEnabled(config)) {
       tools.push(createRememberTool({ memoryDirPath: memDir }));
-      tools.push(createRecallTool({ memoryDirPath: memDir, projectPath: cwd, embeddings }));
+      tools.push(createRecallTool({ memoryDirPath: memDir, projectPath: cwd, embeddings, store: vectorStore ?? undefined }));
     }
     tools.push(createUseSkillTool({ home, projectDir: cwd }));
     tools.push(createSaveSkillTool({ projectDir: cwd }));
