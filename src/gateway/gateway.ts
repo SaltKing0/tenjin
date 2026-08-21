@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HarnessConfig } from "../config/types";
 import { ConfigError } from "../config/types";
@@ -323,54 +323,98 @@ function statePath(home: string): string {
   return join(home, "gateway-state.json");
 }
 
+function stateBakPath(home: string): string {
+  return join(home, "gateway-state.json.bak");
+}
+
+function stateTmpPath(home: string): string {
+  return join(home, "gateway-state.json.tmp");
+}
+
+/**
+ * Parse + normalize a persisted state file. Returns `null` when the file cannot
+ * be read as valid v2 state (unparseable JSON or structurally wrong shape), so
+ * the caller can decide whether to fall back to a backup. Never throws.
+ */
+function parseStateFile(path: string, historyCap: number): GatewayStateFile | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== "object") return null;
+  const rec = raw as Record<string, unknown>;
+  const jobsRaw = rec.jobs;
+  if (!jobsRaw || typeof jobsRaw !== "object") return null;
+  const jobs: Record<string, GatewayStateJob> = {};
+  for (const [name, entry] of Object.entries(jobsRaw as Record<string, unknown>)) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    if (rec.version === 1) {
+      // Migrate the old single `lastRun` into a one-entry history.
+      const lr = e.lastRun as Partial<JobLastRun> | null | undefined;
+      jobs[name] = {
+        history: lr && typeof lr.atMs === "number"
+          ? normalizeHistory(
+              [
+                {
+                  atMs: lr.atMs,
+                  status: lr.error ? "error" : "ok",
+                  stopReason: lr.stopReason ?? "",
+                  costUSD: lr.costUSD ?? 0,
+                  durationMs: 0,
+                  ...(lr.error ? { error: lr.error } : {}),
+                },
+              ],
+              historyCap,
+            )
+          : [],
+      };
+    } else {
+      jobs[name] = { history: normalizeHistory(e.history, historyCap) };
+    }
+  }
+  return { version: 2, jobs };
+}
+
 export function loadGatewayState(
   home: string,
   historyCap = DEFAULT_JOB_HISTORY_LEN,
+  onWarn?: (msg: string) => void,
 ): GatewayStateFile {
   const empty: GatewayStateFile = { version: 2, jobs: {} };
   const path = statePath(home);
   if (!existsSync(path)) return empty;
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-    if (!raw || typeof raw !== "object") return empty;
-    const jobsRaw = raw.jobs;
-    if (!jobsRaw || typeof jobsRaw !== "object") return empty;
-    const jobs: Record<string, GatewayStateJob> = {};
-    for (const [name, entry] of Object.entries(jobsRaw as Record<string, unknown>)) {
-      if (!entry || typeof entry !== "object") continue;
-      const e = entry as Record<string, unknown>;
-      if (raw.version === 1) {
-        // Migrate the old single `lastRun` into a one-entry history.
-        const lr = e.lastRun as Partial<JobLastRun> | null | undefined;
-        jobs[name] = {
-          history: lr && typeof lr.atMs === "number"
-            ? normalizeHistory(
-                [
-                  {
-                    atMs: lr.atMs,
-                    status: lr.error ? "error" : "ok",
-                    stopReason: lr.stopReason ?? "",
-                    costUSD: lr.costUSD ?? 0,
-                    durationMs: 0,
-                    ...(lr.error ? { error: lr.error } : {}),
-                  },
-                ],
-                historyCap,
-              )
-            : [],
-        };
-      } else {
-        jobs[name] = { history: normalizeHistory(e.history, historyCap) };
-      }
+  const parsed = parseStateFile(path, historyCap);
+  if (parsed) return parsed;
+
+  // The main file is corrupt (e.g. a crash mid-write) — recover the previous
+  // good copy from the backup instead of silently starting from empty.
+  const bak = stateBakPath(home);
+  if (existsSync(bak)) {
+    const fromBak = parseStateFile(bak, historyCap);
+    if (fromBak) {
+      onWarn?.(`gateway state corrupt at ${path}; recovered from ${bak}`);
+      return fromBak;
     }
-    return { version: 2, jobs };
-  } catch {
-    return empty;
   }
+  onWarn?.(`gateway state corrupt at ${path}; no usable backup (${bak}) — starting empty`);
+  return empty;
 }
 
+/**
+ * Atomically persist gateway state: write to a temp file, then rename over the
+ * real path, and keep the previous good copy as `.bak`. A crash mid-write can
+ * never leave the main file half-written — it holds either the old or the new
+ * complete state, and the last good version survives in `.bak` (#187).
+ */
 export function saveGatewayState(home: string, state: GatewayStateFile): void {
-  writeFileSync(statePath(home), JSON.stringify(state, null, 2));
+  const path = statePath(home);
+  const tmp = stateTmpPath(home);
+  writeFileSync(tmp, JSON.stringify(state, null, 2));
+  if (existsSync(path)) renameSync(path, stateBakPath(home));
+  renameSync(tmp, path);
 }
 
 /** Settle `p` within `ms`; a timeout rejects with `msg`. The loser is detached. */
@@ -402,7 +446,7 @@ export class Gateway {
     this.historyLen = this.settings.jobHistoryLen ?? DEFAULT_JOB_HISTORY_LEN;
     // #19/#151: hydrate each job's persisted run history so a restart keeps the
     // last N runs (and knows which scheduled runs have already happened).
-    this.state = loadGatewayState(deps.home, this.historyLen);
+    this.state = loadGatewayState(deps.home, this.historyLen, (m) => this.log(m));
     for (const job of this.jobs) {
       const saved = this.state.jobs[job.name];
       if (saved?.history && saved.history.length > 0) {
@@ -410,6 +454,7 @@ export class Gateway {
         job.lastRun = toLastRun(job.history[0]!);
       }
     }
+    this.pruneStaleState();
   }
 
   /**
@@ -422,6 +467,7 @@ export class Gateway {
     this.deps.config = config;
     this.settings = parseGatewaySettings(config.gateway);
     this.jobs = this.buildAllJobs(Date.now());
+    this.pruneStaleState();
   }
 
   /**
@@ -501,6 +547,29 @@ export class Gateway {
       saveGatewayState(this.deps.home, this.state);
     } catch {
       // Best-effort: state persistence must never fail a job run.
+    }
+  }
+
+  /**
+   * Drop persisted history entries for jobs that are no longer configured, so
+   * deleted jobs don't accumulate in gateway-state.json forever — and a removed
+   * job really disappears from the persisted state (#187).
+   */
+  private pruneStaleState(): void {
+    const current = new Set(this.jobs.map((j) => j.name));
+    let pruned = false;
+    for (const name of Object.keys(this.state.jobs)) {
+      if (!current.has(name)) {
+        delete this.state.jobs[name];
+        pruned = true;
+      }
+    }
+    if (pruned) {
+      try {
+        saveGatewayState(this.deps.home, this.state);
+      } catch {
+        // Best-effort: pruning must never fail boot/reload.
+      }
     }
   }
 
