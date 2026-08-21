@@ -106,7 +106,7 @@ runs and how to configure its channels, jobs, heartbeats, and the web console.
 | `tenjin --resume <id>` | Continue a previous session |
 | `tenjin --fork <id> [n]` | Branch a copy at event `n` (default: end) |
 | `tenjin --bot <name>` | Run as a specific bot |
-| `tenjin bot new\|list\|init-examples` | Manage bots |
+| `tenjin bot new\|list\|export\|import\|init-examples` | Manage & package bots |
 | `tenjin gateway [--dry-run]` | Always-on gateway (channels, jobs, heartbeats, console) |
 | `tenjin audit [--tail n] [--bot x] [--kind k]` | Security event trail |
 | `tenjin spend [--days n] [--bot x]` | Spend across all sessions |

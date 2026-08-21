@@ -16,7 +16,6 @@ import { botDir, listBots, resolveBot } from "./profile";
  * depending on an archive library — flattening to the project's zero-dep rule.
  */
 
-const MAGIC = "ustar\u000000";
 const META_FILE = ".tenjin-package.json";
 /** Top-level runtime dirs that never travel with a bot. */
 const EXCLUDED_DIRS = new Set(["sessions", "memory", "inbox"]);
@@ -133,8 +132,7 @@ export function exportBot(
   if (!existsSync(soulPath)) {
     throw new ConfigError(`unknown bot "${name}" — nothing to export`);
   }
-  const safe = (opts.cwd ?? process.cwd()) as string;
-  const file = join(safe, `${name}.tar.gz`);
+  const file = join(opts.cwd ?? process.cwd(), `${name}.tar.gz`);
 
   const files = collectBotFiles(root);
   const meta: PackageMeta = { format: "tenjin-bot", version: 1, name };

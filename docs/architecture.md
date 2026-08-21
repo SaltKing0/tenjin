@@ -50,7 +50,7 @@ Everything funnels through [`src/index.ts`](../src/index.ts), which parses the
 CLI, loads config, builds an `AppContext`, and dispatches to one of:
 
 - **Interactive / one-shot / resume / fork** — the agent turn loop.
-- **`bot`** — bot lifecycle: `new`, `list`, `init-examples`.
+- **`bot`** — bot lifecycle: `new`, `list`, `export`, `import`, `init-examples`.
 - **`gateway`** — the always-on process (below).
 - **`audit` / `spend`** — CLI views over the event trail and spend records.
 - **`doctor` / `export` / `forget`** — diagnostics and data management.
