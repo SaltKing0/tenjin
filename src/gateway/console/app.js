@@ -400,6 +400,37 @@ async function openReplay(main, id) {
   const box = el("div");
   main.append(box);
 
+  // #131: ancestry breadcrumb — which forks this session traces back to, and
+  // where context-elision (compression) happened along the way.
+  try {
+    const tree = await apiJson(`/api/sessions/${encodeURIComponent(id)}/tree?bot=${encodeURIComponent(currentBot)}`);
+    const lineage = tree && Array.isArray(tree.lineage) ? tree.lineage : [];
+    if (lineage.length > 0) {
+      box.append(el("h2", {}, "Lineage"));
+      box.append(
+        el(
+          "div",
+          { class: "dim", style: "margin:4px 0 8px" },
+          lineage.map((n) => n.id).join(" ← forked from "),
+        ),
+      );
+      for (const n of lineage) {
+        if (n.compressionCount > 0) {
+          box.append(
+            el(
+              "div",
+              { class: "dim", style: "margin-left:8px" },
+              `${n.id}: ${n.compressionCount} compression(s)` +
+                n.compressions.map((c) => ` ~ ${c.beforeTokens} → ${c.afterTokens} (elided ${c.elidedTokens})`).join(""),
+            ),
+          );
+        }
+      }
+    }
+  } catch {
+    // lineage is best-effort; the timeline below still renders without it
+  }
+
   const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/events?bot=${encodeURIComponent(currentBot)}`);
   box.append(el("h2", {}, "Timeline"));
   if (!data.events || data.events.length === 0) {
