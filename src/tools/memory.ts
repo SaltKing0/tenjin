@@ -69,20 +69,31 @@ export function createRecallTool(deps: {
       const [vector] = await deps.embeddings.embed([query]);
       if (!vector) throw new Error("embedding provider returned no vector");
       const chunks = loadChunks(join(deps.memoryDirPath, "vectors.jsonl"));
-      const hits = searchChunks(chunks, {
+      const { hits, skipped } = searchChunks(chunks, {
         query: vector,
         topK: Math.min(10, Math.max(1, Number(args.topK) || 5)),
         projectPath: deps.projectPath,
         minScore: 0.15,
+        embedModel: deps.embeddings.model,
       });
-      if (hits.length === 0) return "No relevant memories found.";
-      return hits
-        .map((h) => {
-          const date = h.chunk.created.slice(0, 10);
-          const text = h.chunk.text.length > 150 ? `${h.chunk.text.slice(0, 150)}…` : h.chunk.text;
-          return `[${h.score.toFixed(2)}] ${date} ${h.chunk.sessionId} ${h.chunk.role}: ${text}`;
-        })
-        .join("\n");
+      const warnings: string[] = [];
+      if (skipped > 0) {
+        warnings.push(
+          `${skipped} chunk(s) skipped: stored embedding model/dimension differs from "${deps.embeddings.model}" (${vector.length}d)`,
+        );
+      }
+      const prefix = warnings.length > 0 ? `${warnings.join("; ")}\n` : "";
+      if (hits.length === 0) return `${prefix}No relevant memories found.`;
+      return (
+        prefix +
+        hits
+          .map((h) => {
+            const date = h.chunk.created.slice(0, 10);
+            const text = h.chunk.text.length > 150 ? `${h.chunk.text.slice(0, 150)}…` : h.chunk.text;
+            return `[${h.score.toFixed(2)}] ${date} ${h.chunk.sessionId} ${h.chunk.role}: ${text}`;
+          })
+          .join("\n")
+      );
     },
   };
 }
