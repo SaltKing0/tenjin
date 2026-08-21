@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,8 +7,10 @@ import {
   listSkills,
   sanitizeSkillName,
   saveSkill,
+  scaffoldSkill,
   skillTemplate,
 } from "../src/skills/loader";
+import { createSaveSkillTool } from "../src/tools/skill-writer";
 import { buildSkillsSection, createUseSkillTool, summarizeSkills } from "../src/skills/activate";
 import { dispatch } from "../src/tools/registry";
 
@@ -195,4 +197,56 @@ test("summarizeSkills formats listing lines", () => {
   expect(lines[0]).toContain("global");
   expect(lines[0]).toContain("First one");
   expect(summarizeSkills([])).toBe("no skills installed");
+});
+
+describe("save_skill tool", () => {
+  const makeTool = () => createSaveSkillTool({ projectDir: project });
+
+  test("saves skill via dispatch", async () => {
+    const r = await dispatch(
+      [makeTool()],
+      "save_skill",
+      { name: "release-steps", description: "How to release", content: "1. tag\n2. push" },
+      { cwd: project },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("Saved skill to");
+    expect(getSkill(home, project, "release-steps")?.content).toContain("1. tag");
+  });
+
+  test("collision surfaces as error result", async () => {
+    await dispatch(
+      [makeTool()],
+      "save_skill",
+      { name: "dup", description: "d", content: "c" },
+      { cwd: project },
+    );
+    const r = await dispatch(
+      [makeTool()],
+      "save_skill",
+      { name: "dup", description: "d2", content: "c2" },
+      { cwd: project },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.output).toContain("already exists");
+  });
+
+  test("invalid name surfaces as error result", async () => {
+    const r = await dispatch(
+      [makeTool()],
+      "save_skill",
+      { name: "!!!", description: "d", content: "c" },
+      { cwd: project },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.output).toContain("invalid skill name");
+  });
+});
+
+test("scaffoldSkill writes editable template or throws on collision", () => {
+  const path = scaffoldSkill(project, "My Scaffold");
+  expect(existsSync(path)).toBe(true);
+  const raw = require("node:fs").readFileSync(path, "utf8");
+  expect(raw).toContain('name: "my-scaffold"');
+  expect(() => scaffoldSkill(project, "my-scaffold")).toThrow(/already exists/);
 });

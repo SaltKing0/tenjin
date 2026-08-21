@@ -14,7 +14,7 @@ import { rebuildMessages, sumUsage } from "../session/events";
 import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { buildSkillsSection, summarizeSkills } from "../skills/activate";
-import { getSkill, listSkills } from "../skills/loader";
+import { getSkill, listSkills, scaffoldSkill } from "../skills/loader";
 import { listSummaries, sessionsWithoutSummary } from "../memory/summaries";
 import { loadChunks, indexedSessionIds } from "../memory/vector-store";
 import { readFacts } from "../tools/memory";
@@ -247,7 +247,20 @@ async function handleCommand(
     case "/skill": {
       const name = rest[0];
       if (!name) {
-        stdout.write(red("usage: /skill <name> [off]\n"));
+        stdout.write(red("usage: /skill <name> [off] | /skill new <name>\n"));
+        return;
+      }
+      if (name === "new") {
+        if (!rest[1]) {
+          stdout.write(red("usage: /skill new <name>\n"));
+          return;
+        }
+        try {
+          const path = scaffoldSkill(opts.cwd, rest[1]);
+          stdout.write(dim(`scaffolded ${path} — edit to taste\n`));
+        } catch (e) {
+          stdout.write(red(`${(e as Error).message}\n`));
+        }
         return;
       }
       if (rest[1] === "off") {

@@ -125,3 +125,15 @@ export function skillTemplate(name: string): string {
     "",
   ].join("\n");
 }
+
+export function scaffoldSkill(projectDir: string, name: string): string {
+  const safe = sanitizeSkillName(name);
+  const dir = join(projectSkillsDir(projectDir), safe);
+  if (existsSync(dir)) {
+    throw new ConfigError(`skill "${safe}" already exists`);
+  }
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "SKILL.md");
+  writeFileSync(path, skillTemplate(safe));
+  return path;
+}

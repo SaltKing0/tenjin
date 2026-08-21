@@ -27,6 +27,7 @@ import { createEmbeddings } from "./provider/embeddings";
 import { vectorEnabled } from "./config/loader";
 import { createRecallTool, createRememberTool, readFacts } from "./tools/memory";
 import { createUseSkillTool } from "./skills/activate";
+import { createSaveSkillTool } from "./tools/skill-writer";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
@@ -142,6 +143,7 @@ async function main(): Promise<number> {
       tools.push(createRecallTool({ memoryDirPath: memDir, projectPath: cwd, embeddings }));
     }
     tools.push(createUseSkillTool({ home, projectDir: cwd }));
+    tools.push(createSaveSkillTool({ projectDir: cwd }));
     const ctx: AppContext = { config, registry, defaultRef, cheapRef, system, tools, cwd };
 
     if (cli.print !== undefined) {
