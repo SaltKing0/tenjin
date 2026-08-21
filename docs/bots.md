@@ -124,6 +124,11 @@ See [docs/architecture.md](architecture.md#gateway) for the full gateway config.
   messages are treated as data, not instructions.
 - **Delegation** — the `ask_bot` tool (`src/bots/delegate.ts`) lets one bot
   ask another and get its answer back, creating a delegation audit event.
+  Fire-and-forget work is handled by `ask_bot_async` + `bot_task_status`
+  (`src/bots/tasks.ts`): `ask_bot_async` returns a `task_id` immediately and
+  runs the target bot headless in the background; each task has a configurable
+  timeout (default 5 min) and its status/result is persisted under the target
+  bot at `~/.tenjin/bots/<name>/tasks/`.
 
 You can tune inbox retention with the global `inbox` config:
 

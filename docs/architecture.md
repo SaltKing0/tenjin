@@ -80,6 +80,8 @@ Bots (see [docs/bots.md](bots.md)) are role-specific agents, each with its own
 defines profiles; [`src/bots/inbox.ts`](../src/bots/inbox.ts) implements the
 async inbox and its TTL/size policy; [`src/bots/delegate.ts`](../src/bots/delegate.ts)
 provides the `ask_bot` tool so one bot can delegate to another;
+[`src/bots/tasks.ts`](../src/bots/tasks.ts) adds the async `ask_bot_async` /
+`bot_task_status` task abstraction for fire-and-forget delegation;
 [`src/bots/tools.ts`](../src/bots/tools.ts) exposes `send_message` /
 `check_inbox` to bots.
 
