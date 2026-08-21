@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -253,5 +253,99 @@ describe("gateway config jobHistoryLen", () => {
     for (let i = 0; i < 3; i++) await gw.runNow("j1");
     const view = gw.listJobs().find((j) => j.name === "j1")!;
     expect(view.history.length).toBe(2);
+  });
+});
+
+describe("gateway state crash-safety & stale pruning (#187)", () => {
+  test("saveGatewayState writes atomically and keeps the prior version as .bak", () => {
+    const first = { version: 2 as const, jobs: { j1: { history: [rec(1)] } } };
+    saveGatewayState(home, first);
+    expect(existsSync(join(home, "gateway-state.json"))).toBe(true);
+    // No prior copy on the first save.
+    expect(existsSync(join(home, "gateway-state.json.bak"))).toBe(false);
+
+    const second = { version: 2 as const, jobs: { j1: { history: [rec(2), rec(1)] } } };
+    saveGatewayState(home, second);
+
+    // The main file holds the latest state; .bak holds the previous good copy.
+    const main = JSON.parse(readFileSync(join(home, "gateway-state.json"), "utf8"));
+    expect(main).toEqual(second);
+    const bak = JSON.parse(readFileSync(join(home, "gateway-state.json.bak"), "utf8"));
+    expect(bak).toEqual(first);
+    // No temp file is left behind after a clean write.
+    expect(existsSync(join(home, "gateway-state.json.tmp"))).toBe(false);
+  });
+
+  test("a corrupt main file recovers history from .bak and warns", () => {
+    // Two saves so .bak holds a previous good copy of the job history.
+    const older = { version: 2 as const, jobs: { j1: { history: [rec(6)] } } };
+    const latest = { version: 2 as const, jobs: { j1: { history: [rec(8), rec(6)] } } };
+    saveGatewayState(home, older); // main = older
+    saveGatewayState(home, latest); // .bak = older, main = latest
+    // Simulate a crash mid-write leaving the main file truncated/garbage.
+    writeFileSync(join(home, "gateway-state.json"), "{ broken json !!");
+    const warns: string[] = [];
+    const state = loadGatewayState(home, DEFAULT_JOB_HISTORY_LEN, (m) => warns.push(m));
+    // The last good copy is recovered from .bak instead of being lost.
+    expect(state.jobs.j1!.history[0]!.atMs).toBe(1006);
+    expect(warns.some((w) => w.includes(".bak"))).toBe(true);
+  });
+
+  test("a corrupt main file with no .bak falls back to empty state and warns", () => {
+    writeFileSync(join(home, "gateway-state.json"), "not json");
+    const warns: string[] = [];
+    const state = loadGatewayState(home, DEFAULT_JOB_HISTORY_LEN, (m) => warns.push(m));
+    expect(state.jobs).toEqual({});
+    expect(warns.length).toBeGreaterThan(0);
+  });
+
+  test("a missing state file returns empty without warning", () => {
+    const warns: string[] = [];
+    const state = loadGatewayState(home, DEFAULT_JOB_HISTORY_LEN, (m) => warns.push(m));
+    expect(state.jobs).toEqual({});
+    expect(warns.length).toBe(0);
+  });
+
+  test("deleted job history is pruned from persisted state on boot", () => {
+    // Prior state carries a ghost entry for a job that is no longer configured.
+    saveGatewayState(home, {
+      version: 2,
+      jobs: { j1: { history: [rec(1)] }, ghost: { history: [rec(2)] } },
+    });
+    new Gateway({
+      home,
+      cwd: home,
+      config: config({ gateway: { jobs: [{ name: "j1", bot: "worker", prompt: "p", every: "10m" }] } }),
+      registry: mockRegistry(),
+      log: () => {},
+    });
+    const after = loadGatewayState(home);
+    expect(Object.keys(after.jobs).sort()).toEqual(["j1"]);
+    expect(after.jobs.ghost).toBeUndefined();
+  });
+
+  test("deleted job history is pruned from persisted state on the job-rm reload path", async () => {
+    // Gateway knows two jobs; running `ghost` seeds it into the persisted state.
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: {
+          jobs: [
+            { name: "j1", bot: "worker", prompt: "p", every: "10m" },
+            { name: "ghost", bot: "worker", prompt: "p", every: "10m" },
+          ],
+        },
+      }),
+      registry: mockRegistry(),
+      log: () => {},
+    });
+    await gw.runNow("ghost");
+    await gw.runNow("j1");
+    // Simulate `tenjin job rm ghost` + SIGHUP: the fresh config no longer lists it.
+    gw.reload(config({ gateway: { jobs: [{ name: "j1", bot: "worker", prompt: "p", every: "10m" }] } }));
+    const after = loadGatewayState(home);
+    expect(after.jobs.ghost).toBeUndefined();
+    expect(Object.keys(after.jobs)).toEqual(["j1"]);
   });
 });
