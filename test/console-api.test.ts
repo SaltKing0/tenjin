@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { appendFileSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startHttpServer, type HttpServerHandle } from "../src/gateway/http";
@@ -328,6 +328,64 @@ describe("approvals endpoints", () => {
     });
     expect(again.status).toBe(404);
   });
+
+  test("GET /api/approvals/:id returns a bash command longer than 300 chars in full", async () => {
+    const command =
+      "find /var/log -type f -name '*.log' -print0 | xargs -0 grep -n " +
+      `"${"token-fragment-".repeat(25)}"`;
+    expect(command.length).toBeGreaterThan(300);
+    const req = createRequest(home, {
+      bot: "researcher",
+      tool: "bash",
+      input: { command },
+    });
+    const base = startServer();
+    const listRes = await fetch(`${base}/api/approvals`, { headers: auth });
+    const listData = (await listRes.json()) as {
+      pending: Array<{ input?: unknown; inputSummary: string }>;
+    };
+    expect(listData.pending).toHaveLength(1);
+    expect(listData.pending[0]?.input).toBeUndefined();
+    expect(listData.pending[0]?.inputSummary.length).toBeLessThanOrEqual(300);
+    expect(listData.pending[0]?.inputSummary.includes(command)).toBe(false);
+
+    const res = await fetch(`${base}/api/approvals/${req.id}`, { headers: auth });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as {
+      id: string;
+      tool: string;
+      inputSummary: string;
+      input: { command: string };
+    };
+    expect(data.id).toBe(req.id);
+    expect(data.tool).toBe("bash");
+    expect(data.inputSummary.length).toBeLessThanOrEqual(300);
+    expect(data.input.command).toBe(command);
+    expect(data.input.command.length).toBeGreaterThan(300);
+  });
+
+  test("GET /api/approvals/:id is 404 for an unknown id", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/approvals/deadbeef`, { headers: auth });
+    expect(res.status).toBe(404);
+  });
+});
+
+test("console approvals panel opens a scrollable monospace full-view via GET /api/approvals/:id", () => {
+  const js = readFileSync(
+    join(import.meta.dir, "..", "src", "gateway", "console", "app.js"),
+    "utf8",
+  );
+  const css = readFileSync(
+    join(import.meta.dir, "..", "src", "gateway", "console", "style.css"),
+    "utf8",
+  );
+  expect(js).toMatch(/apiJson\(`\/api\/approvals\/\$\{req\.id\}`\)/);
+  expect(js).toMatch(/el\(\s*"pre"/);
+  expect(js).toMatch(/approval-input/);
+  expect(css).toMatch(/pre\.approval-input/);
+  expect(css).toMatch(/pre\.approval-input[\s\S]*overflow:\s*auto/);
+  expect(css).toMatch(/pre\.approval-input[\s\S]*max-height/);
 });
 
 test("POST /api/settings/test validates a provider key via health check", async () => {

@@ -13,7 +13,6 @@ import {
   createRequest,
   resolveRequest,
   waitApproval,
-  summarizeInput,
 } from "./approvals";
 
 export interface HandlerDeps {
@@ -104,7 +103,7 @@ export function createMessageHandler(deps: HandlerDeps) {
         const req = createRequest(deps.home, {
           bot: botName,
           tool: toolName,
-          inputSummary: summarizeInput(input),
+          input,
         });
         const notice =
           `Approval needed [${req.id}]\nbot: ${botName}\ntool: ${toolName}\n${req.inputSummary}\nReply /approve ${req.id} or /deny ${req.id}`;
