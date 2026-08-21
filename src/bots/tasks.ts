@@ -121,6 +121,8 @@ export interface StartTaskArgs {
   dependsOn?: string;
   /** #128: bot expected to have an inbox that is notified on completion. */
   notifyBot?: string;
+  /** #142: effort dial; overrides the target bot's configured effort. */
+  effort?: EffortLevel;
 }
 
 /** True when `dependsOnId` (directly or transitively) forms a cycle with `newId`. */
@@ -184,9 +186,6 @@ function notifyCompletion(home: string, task: BotTask): void {
  * `dependsOn` is set the run is deferred until that task is `done`.
  */
 export function startAsyncTask(deps: AsyncTaskDeps, args: StartTaskArgs): StartedTask {
-  /** #142: effort dial; overrides the target bot's configured effort. */
-  effort?: EffortLevel;
-}): StartedTask {
   const targetName = String(args.targetBot ?? "").trim();
   if (targetName === deps.fromBot) {
     throw new ConfigError("cannot delegate to yourself");
