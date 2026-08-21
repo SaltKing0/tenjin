@@ -21,6 +21,9 @@ import { SessionLog } from "./session/log";
 import { rebuildMessages, sumUsage } from "./session/events";
 import { generatePendingSummaries, listSummaries } from "./memory/summaries";
 import { buildMemorySection } from "./memory/inject";
+import { indexPendingSessions } from "./memory/indexer";
+import { createEmbeddings } from "./provider/embeddings";
+import { vectorEnabled } from "./config/loader";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
@@ -83,6 +86,27 @@ async function main(): Promise<number> {
         }
       } catch (e) {
         stdout.write(`memory: skipped (${(e as Error).message})\n`);
+      }
+
+      if (vectorEnabled(config)) {
+        const embeddings = createEmbeddings({ model: config.memory?.vector?.model });
+        if (embeddings) {
+          try {
+            const report = await indexPendingSessions({
+              sessionsDirPath: sessionsDir(home),
+              memoryDirPath: memDir,
+              projectPath: cwd,
+              embeddings,
+            });
+            for (const err of report.errors) {
+              stdout.write(`memory: ${err}\n`);
+            }
+          } catch (e) {
+            stdout.write(`memory: vector index skipped (${(e as Error).message})\n`);
+          }
+        } else if (config.memory?.vector?.enabled === true) {
+          stdout.write("memory: vector layer requested but OPENAI_API_KEY is not set\n");
+        }
       }
     }
 

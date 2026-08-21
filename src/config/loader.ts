@@ -19,7 +19,10 @@ export interface HarnessConfig {
   approval: Record<string, ApprovalMode>;
   pricing?: PricingOverride;
   providers?: { openai?: { baseUrl?: string } };
-  memory?: { enabled?: boolean };
+  memory?: {
+    enabled?: boolean;
+    vector?: { enabled?: boolean; model?: string };
+  };
 }
 
 export class ConfigError extends Error {}
@@ -49,6 +52,9 @@ approval:                  # ask | allow | deny, per tool
 #   outputPerMTok: 15
 memory:
   enabled: true             # session summaries + recall (set false to disable)
+  vector:
+    enabled: true           # semantic recall; needs OPENAI_API_KEY at runtime
+    # model: text-embedding-3-small
 # providers:
 #   openai:
 #     baseUrl: https://api.deepseek.com/v1   # any OpenAI-compatible endpoint
@@ -80,6 +86,10 @@ export function memoryDir(home = tenjinHome()): string {
 
 export function memoryEnabled(cfg: HarnessConfig): boolean {
   return cfg.memory?.enabled !== false;
+}
+
+export function vectorEnabled(cfg: HarnessConfig): boolean {
+  return memoryEnabled(cfg) && cfg.memory?.vector?.enabled !== false;
 }
 
 export function ensureGlobalDir(home = tenjinHome()): { created: boolean } {
