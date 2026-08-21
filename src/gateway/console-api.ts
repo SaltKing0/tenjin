@@ -268,6 +268,12 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
         const sessionCount = existsSync(sessionsDirPath)
           ? readdirSync(sessionsDirPath).filter((f) => f.endsWith(".jsonl")).length
           : 0;
+        // #277: per-bot memory entry count (summaries + facts + vector chunks)
+        // so the console can pick a non-empty memory scope by default.
+        const mem = join(deps.home, "bots", name, "memory");
+        const memoryCount = existsSync(mem)
+          ? listSummaries(mem).length + (readFacts(mem) ? 1 : 0) + loadChunks(vectorsFilePath(mem)).length
+          : 0;
         return {
           name,
           model: profile
@@ -277,6 +283,7 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
             ? unreadMessages(profile.inboxDir, inboxPolicyFromConfig(deps.config.inbox)).length
             : 0,
           sessions: sessionCount,
+          memory: memoryCount,
         };
       });
       return json({ bots });

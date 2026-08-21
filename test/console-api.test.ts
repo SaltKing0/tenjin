@@ -14,6 +14,7 @@ import { startHttpServer, type HttpServerHandle } from "../src/gateway/http";
 import { createConsoleApi, type JobsApi } from "../src/gateway/console-api";
 import { Gateway } from "../src/gateway/gateway";
 import { createBot } from "../src/bots/profile";
+import { factsPath } from "../src/tools/memory";
 import { AuditLog } from "../src/audit/log";
 import type { AuditEvent, AuditKind } from "../src/audit/log";
 import { createRequest } from "../src/gateway/approvals";
@@ -105,6 +106,18 @@ test("GET /api/bots lists bots with model and unread", async () => {
   expect(data.bots[0].name).toBe("researcher");
   expect(typeof data.bots[0].model).toBe("string");
   expect(data.bots[0].unread).toBe(0);
+});
+
+test("GET /api/bots reports per-bot memory count for scope defaults (#277)", async () => {
+  const base = startServer();
+  // researcher has no memory yet
+  const empty = (await (await fetch(`${base}/api/bots`, { headers: auth })).json()) as any;
+  expect(empty.bots[0].memory).toBe(0);
+  // seed a facts file -> memory count becomes 1
+  mkdirSync(join(home, "bots", "researcher", "memory"), { recursive: true });
+  writeFileSync(factsPath(join(home, "bots", "researcher", "memory")), "a durable fact\n");
+  const withMem = (await (await fetch(`${base}/api/bots`, { headers: auth })).json()) as any;
+  expect(withMem.bots[0].memory).toBe(1);
 });
 
 describe("bots CRUD + SOUL editor", () => {
