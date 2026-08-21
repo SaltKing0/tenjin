@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { HarnessConfig } from "../config/types";
 import type { ProviderRegistry } from "../provider/registry";
 import { listBots, botModelRef, resolveBot } from "../bots/profile";
-import { unreadMessages } from "../bots/inbox";
+import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
 import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { aggregateSpend } from "../audit/spend";
@@ -96,7 +96,9 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
           model: profile
             ? `${botModelRef(profile, deps.config).provider}:${botModelRef(profile, deps.config).model}`
             : "?",
-          unread: profile ? unreadMessages(profile.inboxDir).length : 0,
+          unread: profile
+            ? unreadMessages(profile.inboxDir, inboxPolicyFromConfig(deps.config.inbox)).length
+            : 0,
           sessions: sessionCount,
         };
       });

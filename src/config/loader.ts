@@ -7,6 +7,7 @@ import {
   ConfigError,
   type ApprovalMode,
   type HarnessConfig,
+  type InboxConfig,
   type PricingConfig,
   type PricingOverride,
   type ProviderName,
@@ -48,6 +49,9 @@ memory:
     # model: text-embedding-3-small
 # security:
 #   redaction: true          # mask secrets (sk-…, AKIA…, keys) in session/audit logs
+# inbox:
+#   ttlDays: 30              # drop messages older than this on read/write; 0 = never
+#   maxMessages: 500         # keep newest N per inbox (read mail dropped first); 0 = unlimited
 # models:                   # optional model tiers (provider-prefixed to mix providers)
 #   default: anthropic:claude-sonnet-4-5
 #   cheap: openai:gpt-4o-mini
@@ -207,6 +211,7 @@ function validate(cfg: HarnessConfig, globalPath: string, skipModelCheck: boolea
     throw new ConfigError(`budgetUSD must be a number >= 0 (0 = unlimited)`);
   }
   validatePricing(cfg.pricing);
+  validateInbox(cfg.inbox);
 }
 
 function validateRatePair(pair: unknown, label: string): void {
@@ -219,6 +224,22 @@ function validateRatePair(pair: unknown, label: string): void {
   }
   if (typeof obj.outputPerMTok !== "number" || obj.outputPerMTok < 0) {
     throw new ConfigError(`${label}.outputPerMTok must be a number >= 0`);
+  }
+}
+
+function validateInbox(inbox: InboxConfig | undefined): void {
+  if (inbox === undefined) return;
+  if (typeof inbox !== "object" || inbox === null) {
+    throw new ConfigError(`inbox must be a mapping`);
+  }
+  if (inbox.ttlDays !== undefined && (typeof inbox.ttlDays !== "number" || inbox.ttlDays < 0)) {
+    throw new ConfigError(`inbox.ttlDays must be a number >= 0 (0 = never expire)`);
+  }
+  if (
+    inbox.maxMessages !== undefined &&
+    (typeof inbox.maxMessages !== "number" || inbox.maxMessages < 0 || !Number.isInteger(inbox.maxMessages))
+  ) {
+    throw new ConfigError(`inbox.maxMessages must be an integer >= 0 (0 = unlimited)`);
   }
 }
 

@@ -5,10 +5,12 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import type { InboxConfig } from "../config/types";
 
 export interface InboxMessage {
   id: string;
@@ -21,14 +23,15 @@ export interface InboxMessage {
 }
 
 export interface InboxPolicy {
-  /** Messages older than this are purged on read/write. Default: 30 days. */
+  /** Messages older than this are purged on read/write. Default: 30 days. 0 disables. */
   ttlMs?: number;
-  /** Max messages kept per inbox; oldest read messages are dropped first. Default: 500. */
+  /** Max messages kept per inbox; oldest read messages are dropped first. Default: 500. 0 disables. */
   maxMessages?: number;
 }
 
 export const DEFAULT_INBOX_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const DEFAULT_INBOX_MAX_MESSAGES = 500;
+const STALE_TMP_MS = 60_000;
 
 function resolvePolicy(p?: InboxPolicy): Required<InboxPolicy> {
   return {
@@ -37,8 +40,28 @@ function resolvePolicy(p?: InboxPolicy): Required<InboxPolicy> {
   };
 }
 
+/** Map `inbox:` from config.yaml onto a store policy. `ttlDays: 0` / `maxMessages: 0` disable. */
+export function inboxPolicyFromConfig(inbox?: InboxConfig): InboxPolicy | undefined {
+  if (!inbox) return undefined;
+  const policy: InboxPolicy = {};
+  if (inbox.ttlDays !== undefined) policy.ttlMs = inbox.ttlDays * 86_400_000;
+  if (inbox.maxMessages !== undefined) policy.maxMessages = inbox.maxMessages;
+  return policy;
+}
+
 export function inboxFile(dir: string, id: string): string {
   return join(dir, `${id}.json`);
+}
+
+function atomicWriteJson(path: string, value: unknown): void {
+  const tmp = `${path}.${randomUUID().slice(0, 8)}.tmp`;
+  writeFileSync(tmp, JSON.stringify(value, null, 2));
+  try {
+    renameSync(tmp, path);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 let lastMs = 0;
@@ -65,10 +88,8 @@ export function sendMessage(
     ts: new Date(ts).toISOString(),
     read: false,
   };
-  writeFileSync(inboxFile(inboxDir, message.id), JSON.stringify(message, null, 2));
-  const { ttlMs, maxMessages } = resolvePolicy(policy);
-  purgeExpired(inboxDir, ttlMs);
-  enforceMax(inboxDir, maxMessages);
+  atomicWriteJson(inboxFile(inboxDir, message.id), message);
+  listMessages(inboxDir, policy);
   return message;
 }
 
@@ -95,16 +116,25 @@ function readMessages(inboxDir: string): InboxMessage[] {
   return messages.sort((a, b) => (a.ts < b.ts ? -1 : 1));
 }
 
-/** Remove expired messages and orphaned atomic-write temp files. */
+function isTmpFile(name: string): boolean {
+  return name.includes(".tmp-") || name.endsWith(".tmp");
+}
+
+/** Remove expired messages and crash-orphaned atomic-write temp files. */
 function purgeExpired(inboxDir: string, ttlMs: number): void {
-  const cutoff = Date.now() - ttlMs;
+  const cutoff = ttlMs > 0 ? Date.now() - ttlMs : null;
+  const now = Date.now();
   for (const file of readdirSync(inboxDir)) {
     const path = join(inboxDir, file);
-    if (file.includes(".tmp-")) {
-      rmSync(path, { force: true });
+    if (isTmpFile(file)) {
+      try {
+        if (now - statSync(path).mtimeMs >= STALE_TMP_MS) rmSync(path, { force: true });
+      } catch {
+        // raced with a writer
+      }
       continue;
     }
-    if (!file.endsWith(".json")) continue;
+    if (cutoff === null || !file.endsWith(".json")) continue;
     try {
       const parsed = JSON.parse(readFileSync(path, "utf8")) as InboxMessage;
       if (parsed && typeof parsed.ts === "string" && new Date(parsed.ts).getTime() < cutoff) {
@@ -118,6 +148,7 @@ function purgeExpired(inboxDir: string, ttlMs: number): void {
 
 /** Drop oldest read messages first, then oldest unread, until under the cap. */
 function enforceMax(inboxDir: string, maxMessages: number): void {
+  if (maxMessages <= 0) return;
   const all = readMessages(inboxDir);
   if (all.length <= maxMessages) return;
   const excess = all.length - maxMessages;
@@ -135,7 +166,9 @@ function enforceMax(inboxDir: string, maxMessages: number): void {
 
 export function listMessages(inboxDir: string, policy?: InboxPolicy): InboxMessage[] {
   if (!existsSync(inboxDir)) return [];
-  purgeExpired(inboxDir, resolvePolicy(policy).ttlMs);
+  const { ttlMs, maxMessages } = resolvePolicy(policy);
+  purgeExpired(inboxDir, ttlMs);
+  enforceMax(inboxDir, maxMessages);
   return readMessages(inboxDir);
 }
 
@@ -151,12 +184,7 @@ export function markRead(inboxDir: string, ids: string[]): void {
       const msg = JSON.parse(readFileSync(path, "utf8")) as InboxMessage;
       if (msg.read) continue;
       msg.read = true;
-      // Write to a temp file and rename: atomic on POSIX, so concurrent
-      // readers never observe a torn write and concurrent writers can't
-      // interleave into a corrupt file.
-      const tmp = join(inboxDir, `${id}.tmp-${randomUUID().slice(0, 8)}`);
-      writeFileSync(tmp, JSON.stringify(msg, null, 2));
-      renameSync(tmp, path);
+      atomicWriteJson(path, msg);
     } catch {
       // skip corrupted
     }

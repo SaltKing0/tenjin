@@ -6,12 +6,14 @@ import {
   markRead,
   sendMessage,
   unreadMessages,
+  type InboxPolicy,
 } from "./inbox";
 import { ConfigError } from "../config/types";
 
 export function createSendMessageTool(deps: {
   home: string;
   fromBot: string;
+  policy?: InboxPolicy;
 }): ToolDef {
   return {
     name: "send_message",
@@ -33,18 +35,25 @@ export function createSendMessageTool(deps: {
       if (!listBots(deps.home).includes(to)) {
         throw new Error(`unknown bot "${to}"`);
       }
-      const msg = sendMessage(join(deps.home, "bots", to, "inbox"), {
-        from: deps.fromBot,
-        to,
-        subject: String(args.subject ?? ""),
-        body: String(args.body ?? ""),
-      });
+      const msg = sendMessage(
+        join(deps.home, "bots", to, "inbox"),
+        {
+          from: deps.fromBot,
+          to,
+          subject: String(args.subject ?? ""),
+          body: String(args.body ?? ""),
+        },
+        deps.policy,
+      );
       return `Delivered to ${to} (id ${msg.id})`;
     },
   };
 }
 
-export function createCheckInboxTool(deps: { profile: BotProfile }): ToolDef {
+export function createCheckInboxTool(deps: {
+  profile: BotProfile;
+  policy?: InboxPolicy;
+}): ToolDef {
   return {
     name: "check_inbox",
     group: "read",
@@ -55,7 +64,7 @@ export function createCheckInboxTool(deps: { profile: BotProfile }): ToolDef {
       properties: {},
     },
     async handler(_args, _ctx) {
-      const unread = unreadMessages(deps.profile.inboxDir);
+      const unread = unreadMessages(deps.profile.inboxDir, deps.policy);
       if (unread.length === 0) return "inbox empty";
       markRead(
         deps.profile.inboxDir,

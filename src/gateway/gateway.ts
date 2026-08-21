@@ -9,7 +9,7 @@ import { Redactor } from "../security/redact";
 import { parseGatewaySettings, type GatewaySettings } from "./config";
 import { createCheckInboxTool, createSendMessageTool } from "../bots/tools";
 import { createRememberTool } from "../tools/memory";
-import { formatInbox, unreadMessages } from "../bots/inbox";
+import { formatInbox, inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
 import type { ToolDef } from "../tools/registry";
 
 export interface ScheduledJob {
@@ -130,7 +130,8 @@ export class Gateway {
     let extraTools: ToolDef[] | undefined;
     let approve: HeadlessOptions["approve"];
     if (job.kind === "heartbeat") {
-      const unread = unreadMessages(profile.inboxDir);
+      const inboxPolicy = inboxPolicyFromConfig(this.deps.config.inbox);
+      const unread = unreadMessages(profile.inboxDir, inboxPolicy);
       const inboxPart =
         unread.length > 0
           ? `You have ${unread.length} unread message(s):\n${formatInbox(unread)}\n`
@@ -140,8 +141,8 @@ export class Gateway {
         `If a message needs a reply, answer the sender with send_message. ` +
         `Briefly note anything actionable; if nothing needs attention reply with just "ok".`;
       const tools: ToolDef[] = [
-        createCheckInboxTool({ profile }),
-        createSendMessageTool({ home: this.deps.home, fromBot: profile.name }),
+        createCheckInboxTool({ profile, policy: inboxPolicy }),
+        createSendMessageTool({ home: this.deps.home, fromBot: profile.name, policy: inboxPolicy }),
         createRememberTool({ memoryDirPath: profile.memoryDir }),
       ];
       extraTools = tools;

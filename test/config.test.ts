@@ -227,3 +227,24 @@ describe("providers.yaml (console-managed)", () => {
     expect(config.models?.default).toBe("anthropic:m");
   });
 });
+
+describe("inbox config", () => {
+  test("loads ttlDays and maxMessages from config.yaml", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "config.yaml"),
+      "model: m\ninbox:\n  ttlDays: 7\n  maxMessages: 50\n",
+    );
+    const { config } = loadConfig(project, home);
+    expect(config.inbox).toEqual({ ttlDays: 7, maxMessages: 50 });
+  });
+
+  test("rejects negative ttlDays and maxMessages", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: m\ninbox:\n  ttlDays: -1\n");
+    expect(() => loadConfig(project, home)).toThrow(/inbox\.ttlDays/);
+
+    writeFileSync(join(home, "config.yaml"), "model: m\ninbox:\n  maxMessages: -5\n");
+    expect(() => loadConfig(project, home)).toThrow(/inbox\.maxMessages/);
+  });
+});
