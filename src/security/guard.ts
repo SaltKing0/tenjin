@@ -205,3 +205,43 @@ export class SecurityGuard {
     }
   }
 }
+
+export type GuardConfig = {
+  blockedPatterns?: string[];
+  disabled?: boolean;
+  workspaceRoot?: string;
+  allowedPaths?: string[];
+};
+
+/** Union extra bot globs onto the global set (defaults if global is unset). */
+export function mergeBlockedPatterns(global?: string[], extra?: string[]): string[] {
+  const base = global ?? [...DEFAULT_BLOCKED_PATTERNS];
+  if (!extra?.length) return base;
+  const seen = new Set(base);
+  const out = [...base];
+  for (const p of extra) {
+    if (!seen.has(p)) {
+      seen.add(p);
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+/** Guard for one bot: global patterns plus the bot's extra blockedPatterns. */
+export function guardForBot(
+  globalSecurity: GuardConfig | undefined,
+  botSecurity: { blockedPatterns?: string[] } | undefined,
+  onBlock?: (detail: string) => void,
+): SecurityGuard | null {
+  return SecurityGuard.fromConfig(
+    {
+      ...globalSecurity,
+      blockedPatterns: mergeBlockedPatterns(
+        globalSecurity?.blockedPatterns,
+        botSecurity?.blockedPatterns,
+      ),
+    },
+    onBlock,
+  );
+}

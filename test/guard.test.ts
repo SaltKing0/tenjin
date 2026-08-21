@@ -6,6 +6,8 @@ import {
   isGuardDisabled,
   buildGuardStatus,
   announceGuardDisabled,
+  mergeBlockedPatterns,
+  guardForBot,
 } from "../src/security/guard";
 import { AuditLog } from "../src/audit/log";
 import { dispatch } from "../src/tools/registry";
@@ -116,6 +118,35 @@ describe("fromConfig", () => {
   test("undefined config → defaults", () => {
     const g = SecurityGuard.fromConfig(undefined)!;
     expect(g.checkText(".env").blocked).toBe(true);
+  });
+});
+
+describe("per-bot pattern union (#59)", () => {
+  test("mergeBlockedPatterns unions extra globs onto the global/default set", () => {
+    expect(mergeBlockedPatterns(undefined, ["secrets/*"])).toEqual([
+      ...DEFAULT_BLOCKED_PATTERNS,
+      "secrets/*",
+    ]);
+    expect(mergeBlockedPatterns(["vault/*"], ["secrets/*", "vault/*"])).toEqual([
+      "vault/*",
+      "secrets/*",
+    ]);
+  });
+
+  test("restrictive bot blocks paths the global guard still allows", () => {
+    const global = SecurityGuard.fromConfig({ blockedPatterns: [".env"] })!;
+    const bot = guardForBot(
+      { blockedPatterns: [".env"] },
+      { blockedPatterns: ["secrets/*"] },
+    )!;
+    expect(global.checkText("secrets/api.key").blocked).toBe(false);
+    expect(bot.checkText("secrets/api.key").blocked).toBe(true);
+    expect(bot.checkText(".env").blocked).toBe(true);
+    expect(bot.checkText("readme.md").blocked).toBe(false);
+  });
+
+  test("global disabled still yields no bot guard", () => {
+    expect(guardForBot({ disabled: true }, { blockedPatterns: ["secrets/*"] })).toBeNull();
   });
 });
 

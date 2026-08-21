@@ -13,6 +13,8 @@ export interface TelegramChannelConfig {
   enabled: boolean;
   defaultBot?: string;
   allowedUsers: number[];
+  /** Per-bot Telegram sender allowlists (bot name → user ids). */
+  bindings?: Record<string, number[]>;
   adminChatId?: number;
   allowWrites?: boolean;
   approvalTimeoutMs?: number;
@@ -114,10 +116,24 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     if (enabled && (typeof tg.defaultBot !== "string" || !tg.defaultBot.trim())) {
       throw new ConfigError("gateway.telegram.enabled requires a defaultBot");
     }
+    let bindings: Record<string, number[]> | undefined;
+    if (tg.bindings !== undefined && tg.bindings !== null) {
+      if (typeof tg.bindings !== "object" || Array.isArray(tg.bindings)) {
+        throw new ConfigError("gateway.telegram.bindings must be a mapping of bot name → user ids");
+      }
+      bindings = {};
+      for (const [bot, ids] of Object.entries(tg.bindings as Record<string, unknown>)) {
+        if (!Array.isArray(ids) || ids.some((u) => typeof u !== "number")) {
+          throw new ConfigError(`gateway.telegram.bindings.${bot} must be a list of numeric ids`);
+        }
+        bindings[bot] = ids as number[];
+      }
+    }
     settings.telegram = {
       enabled,
       defaultBot: typeof tg.defaultBot === "string" ? tg.defaultBot : undefined,
       allowedUsers,
+      bindings,
       adminChatId: typeof tg.adminChatId === "number" ? tg.adminChatId : undefined,
       allowWrites: tg.allowWrites === true,
       approvalTimeoutMs:

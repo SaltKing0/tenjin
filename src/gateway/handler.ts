@@ -5,10 +5,16 @@ import { Redactor } from "../security/redact";
 import type { AuditLog } from "../audit/log";
 import { resolveBot, botModelRef, botBudgetUSD } from "../bots/profile";
 import { formatModelRef, type ModelRef } from "../config/models";
-import { runHeadless } from "../agent/headless";
+import { runHeadless, capPolicy } from "../agent/headless";
 import { loadAgentsMd } from "../agent/prompt";
 import { formatUSD } from "../agent/budget";
-import { routeText } from "./telegram";
+import { guardForBot } from "../security/guard";
+import {
+  routeText,
+  botsAllowedForUser,
+  routeBoundText,
+  mergeBotAllowlist,
+} from "./telegram";
 import {
   createRequest,
   resolveRequest,
@@ -29,12 +35,15 @@ export interface HandlerDeps {
   audit: AuditLog;
   log: (line: string) => void;
   notifyApproval?: (chatId: number, text: string) => Promise<void>;
+  /** Gateway-level bot → Telegram user-id allowlists. */
+  telegramBindings?: Record<string, number[]>;
 }
 
 export interface HandleContext {
   actor: string;
   source: "telegram" | "http";
   chatId?: number;
+  userId?: number;
   onDelta?: (delta: string) => void;
 }
 
@@ -68,6 +77,40 @@ export function chatStreamResponse(
   });
 }
 
+function telegramAllowlists(deps: HandlerDeps): Record<string, number[] | undefined> {
+  const allowlists: Record<string, number[] | undefined> = {};
+  for (const name of deps.availableBots) {
+    try {
+      const profile = resolveBot(deps.home, name);
+      allowlists[name] = mergeBotAllowlist(
+        profile.config.telegram?.allowedUsers,
+        deps.telegramBindings?.[name],
+      );
+    } catch {
+      continue;
+    }
+  }
+  return allowlists;
+}
+
+function routeInbound(
+  deps: HandlerDeps,
+  text: string,
+  ctx: HandleContext,
+): { bot: string; rest: string } | { error: string } {
+  if (ctx.source === "telegram" && ctx.userId !== undefined) {
+    const allowed = botsAllowedForUser(
+      ctx.userId,
+      deps.availableBots,
+      telegramAllowlists(deps),
+    );
+    const routed = routeBoundText(text, deps.defaultBot, deps.availableBots, allowed);
+    if (!routed.ok) return { error: routed.error };
+    return { bot: routed.bot, rest: routed.rest };
+  }
+  return routeText(text, deps.defaultBot, deps.availableBots);
+}
+
 export function createMessageHandler(deps: HandlerDeps) {
   return async function handle(
     text: string,
@@ -92,7 +135,9 @@ export function createMessageHandler(deps: HandlerDeps) {
         : `Unknown or already-resolved request ${id}.`;
     }
 
-    const { bot: botName, rest } = routeText(text, deps.defaultBot, deps.availableBots);
+    const routed = routeInbound(deps, text, ctx);
+    if ("error" in routed) return routed.error;
+    const { bot: botName, rest } = routed;
     const profile = resolveBot(deps.home, botName);
     const ref = botModelRef(profile, deps.config);
     deps.audit.append("gateway_msg", ctx.actor, `${botName}: ${text.slice(0, 120)}`, botName);
@@ -130,13 +175,21 @@ export function createMessageHandler(deps: HandlerDeps) {
         maxTokens: deps.config.maxTokens,
         capUSD: botBudgetUSD(profile, deps.config.budgetUSD),
         pricing: deps.config.pricing,
-        policy: deps.allowWrites ? "full" : "read-only",
+        policy: capPolicy(
+          deps.allowWrites ? "full" : "read-only",
+          profile.config.security?.policy,
+        ),
+        denyTools: profile.config.security?.denyTools,
         agentsMd: loadAgentsMd(deps.cwd),
         home: deps.home,
         memoryDir: profile.memoryDir,
         sessionLogDir: profile.sessionsDir,
         sessionBot: profile.name,
-        guard: deps.guard,
+        guard: guardForBot(
+          deps.config.security,
+          profile.config.security,
+          (detail) => deps.audit.append("tool_block", ctx.actor, detail, botName),
+        ),
         approve,
         audit: (kind, detail) => deps.audit.append(kind, ctx.actor, detail, botName),
         onTextDelta: ctx.onDelta,

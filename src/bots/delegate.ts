@@ -1,7 +1,8 @@
 import type { Provider } from "../provider/types";
 import type { HarnessConfig, ProviderName } from "../config/types";
 import { resolveBot, botModelRef, botBudgetUSD } from "./profile";
-import { runHeadless } from "../agent/headless";
+import { runHeadless, capPolicy } from "../agent/headless";
+import { guardForBot } from "../security/guard";
 import { Budget, formatUSD } from "../agent/budget";
 import type { ToolDef } from "../tools/registry";
 
@@ -59,10 +60,15 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
         maxTokens: deps.globalConfig.maxTokens,
         capUSD: cap,
         pricing: deps.globalConfig.pricing,
-        policy: "read-only",
+        policy: capPolicy("read-only", profile.config.security?.policy),
+        denyTools: profile.config.security?.denyTools,
         home: deps.home,
         memoryDir: profile.memoryDir,
-        guard: deps.guard,
+        guard: guardForBot(
+          deps.globalConfig.security,
+          profile.config.security,
+          deps.guard?.onBlock,
+        ),
         sessionLogDir: profile.sessionsDir,
         sessionBot: profile.name,
       });
