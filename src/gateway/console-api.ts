@@ -9,7 +9,7 @@ import { renderTrajectory } from "../session/trajectory";
 import { aggregateSpend } from "../audit/spend";
 import { AuditLog } from "../audit/log";
 import { approvalsDir, getRequest, resolveRequest } from "./approvals";
-import { getSettings, applySettings, detectModels, DetectTimeoutError } from "./settings";
+import { getSettings, applySettings, detectModels, testProvider, DetectTimeoutError } from "./settings";
 import { sessionsDir } from "../config/loader";
 
 export interface ConsoleApiDeps {
@@ -82,6 +82,24 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
         const status = e instanceof DetectTimeoutError ? 504 : 400;
         return json({ error: (e as Error).message }, status);
       }
+    }
+
+    if (path === "/api/settings/test" && req.method === "POST") {
+      let body: { provider?: unknown; baseUrl?: unknown; apiKey?: unknown; timeoutMs?: unknown };
+      try {
+        body = (await req.json()) as typeof body;
+      } catch {
+        return json({ error: "invalid json" }, 400);
+      }
+      const result = await testProvider(
+        {
+          provider: String(body.provider ?? ""),
+          baseUrl: body.baseUrl ? String(body.baseUrl) : undefined,
+          apiKey: typeof body.apiKey === "string" ? body.apiKey : undefined,
+        },
+        typeof body.timeoutMs === "number" && body.timeoutMs > 0 ? body.timeoutMs : undefined,
+      );
+      return json(result);
     }
 
     if (path === "/api/bots" && req.method === "GET") {

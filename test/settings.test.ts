@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getSettings, applySettings, detectModels, DetectTimeoutError } from "../src/gateway/settings";
+import { getSettings, applySettings, detectModels, testProvider, DetectTimeoutError } from "../src/gateway/settings";
 import { loadConfig, providersFile } from "../src/config/loader";
 import { ProviderRegistry } from "../src/provider/registry";
 import type { HarnessConfig } from "../src/config/types";
@@ -320,5 +320,65 @@ describe("live-apply through gateway objects", () => {
       server?.stop();
       upstream.stop(true);
     }
+  });
+});
+
+describe("testProvider", () => {
+  test("valid openai key reports ok with status", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        if (req.headers.get("authorization") !== "Bearer sk-ok") {
+          return new Response("bad auth", { status: 401 });
+        }
+        return new Response("", { status: 200 });
+      },
+    });
+    try {
+      const r = await testProvider({
+        provider: "openai",
+        baseUrl: `http://127.0.0.1:${server.port}/v1`,
+        apiKey: "sk-ok",
+      });
+      expect(r.ok).toBe(true);
+      expect(r.status).toBe(200);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("invalid key reports status and provider hint, does not throw", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response("invalid x-api-key", { status: 401 }),
+    });
+    try {
+      const r = await testProvider({
+        provider: "anthropic",
+        baseUrl: `http://127.0.0.1:${server.port}/v1`,
+        apiKey: "bad",
+      });
+      expect(r.ok).toBe(false);
+      expect(r.status).toBe(401);
+      expect(r.error).toContain("/models 401");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("unknown provider returns ok:false instead of throwing", async () => {
+    const r = await testProvider({ provider: "bogus" });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("unknown provider");
+  });
+
+  test("unreachable endpoint surfaces a message", async () => {
+    const r = await testProvider(
+      { provider: "openai", baseUrl: "http://127.0.0.1:1/v1", apiKey: "sk-x" },
+      300,
+    );
+    expect(r.ok).toBe(false);
+    expect(typeof r.error).toBe("string");
+    expect(r.error!.length).toBeGreaterThan(0);
   });
 });

@@ -189,3 +189,52 @@ describe("approvals endpoints", () => {
     expect(again.status).toBe(404);
   });
 });
+
+test("POST /api/settings/test validates a provider key via health check", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch: () => new Response("", { status: 200 }),
+  });
+  try {
+    const base = startServer();
+    const res = await fetch(`${base}/api/settings/test`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: "openai",
+        baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+        apiKey: "sk-live",
+      }),
+    });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { ok?: boolean; status?: number; error?: string };
+    expect(data.ok).toBe(true);
+  } finally {
+    upstream.stop(true);
+  }
+});
+
+test("POST /api/settings/test reports a rejected key as ok:false", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch: () => new Response("invalid key", { status: 401 }),
+  });
+  try {
+    const base = startServer();
+    const res = await fetch(`${base}/api/settings/test`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: "anthropic",
+        baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+        apiKey: "bad",
+      }),
+    });
+    const data = (await res.json()) as { ok?: boolean; status?: number; error?: string };
+    expect(data.ok).toBe(false);
+    expect(data.status).toBe(401);
+    expect(data.error).toContain("/models 401");
+  } finally {
+    upstream.stop(true);
+  }
+});

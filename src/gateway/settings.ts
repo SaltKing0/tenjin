@@ -122,6 +122,30 @@ export class DetectTimeoutError extends Error {
   }
 }
 
+function modelsEndpoint(
+  provider: string,
+  opts: { baseUrl?: string; apiKey?: string; limit?: number },
+): { url: string; headers: Record<string, string> } {
+  if (provider === "anthropic") {
+    const base = (opts.baseUrl || ANTHROPIC_DEFAULT_BASE).replace(/\/$/, "");
+    return {
+      url: opts.limit ? `${base}/models?limit=${opts.limit}` : `${base}/models`,
+      headers: {
+        "x-api-key": opts.apiKey ?? process.env.ANTHROPIC_API_KEY ?? "",
+        "anthropic-version": "2023-06-01",
+      },
+    };
+  }
+  if (provider === "openai") {
+    const base = (opts.baseUrl || OPENAI_DEFAULT_BASE).replace(/\/$/, "");
+    return {
+      url: `${base}/models`,
+      headers: { authorization: `Bearer ${opts.apiKey ?? process.env.OPENAI_API_KEY ?? ""}` },
+    };
+  }
+  throw new ConfigError(`unknown provider "${provider}"`);
+}
+
 export async function detectModels(
   input: {
     provider: string;
@@ -131,24 +155,11 @@ export async function detectModels(
   timeoutMs: number = DETECT_TIMEOUT_MS,
 ): Promise<string[]> {
   const provider = input.provider.toLowerCase();
-  let base: string;
-  let url: string;
-  let headers: Record<string, string>;
-
-  if (provider === "anthropic") {
-    base = (input.baseUrl || ANTHROPIC_DEFAULT_BASE).replace(/\/$/, "");
-    url = `${base}/models?limit=100`;
-    headers = {
-      "x-api-key": input.apiKey ?? process.env.ANTHROPIC_API_KEY ?? "",
-      "anthropic-version": "2023-06-01",
-    };
-  } else if (provider === "openai") {
-    base = (input.baseUrl || OPENAI_DEFAULT_BASE).replace(/\/$/, "");
-    url = `${base}/models`;
-    headers = { authorization: `Bearer ${input.apiKey ?? process.env.OPENAI_API_KEY ?? ""}` };
-  } else {
-    throw new ConfigError(`unknown provider "${input.provider}"`);
-  }
+  const { url, headers } = modelsEndpoint(provider, {
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    limit: 100,
+  });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new DetectTimeoutError(provider, timeoutMs)), timeoutMs);
@@ -162,6 +173,68 @@ export async function detectModels(
       .map((m) => m.id)
       .filter((id): id is string => typeof id === "string");
     return ids.sort();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Result of a provider key health check (never throws for a failed check). */
+export interface ProviderTestResult {
+  ok: boolean;
+  provider: string;
+  status?: number;
+  error?: string;
+}
+
+/**
+ * Health check for a single provider: validates the key against the provider's
+ * models endpoint without listing/returning models. Used by the console
+ * settings panel to confirm a key that may not support model listing.
+ */
+export async function testProvider(
+  input: {
+    provider: string;
+    baseUrl?: string;
+    apiKey?: string;
+  },
+  timeoutMs: number = DETECT_TIMEOUT_MS,
+): Promise<ProviderTestResult> {
+  const provider = input.provider.toLowerCase();
+  let url: string;
+  let headers: Record<string, string>;
+  try {
+    ({ url, headers } = modelsEndpoint(provider, {
+      baseUrl: input.baseUrl,
+      apiKey: input.apiKey,
+    }));
+  } catch (e) {
+    return { ok: false, provider: input.provider, error: (e as Error).message };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new DetectTimeoutError(provider, timeoutMs)),
+    timeoutMs,
+  );
+  try {
+    const res = await fetch(url, { method: "GET", headers, signal: controller.signal });
+    if (res.ok) {
+      return { ok: true, provider, status: res.status };
+    }
+    let detail = "";
+    try {
+      detail = (await res.text()).slice(0, 200);
+    } catch {
+      /* body may not be readable */
+    }
+    return {
+      ok: false,
+      provider,
+      status: res.status,
+      error: `${provider} /models ${res.status}${detail ? `: ${detail}` : ""}`,
+    };
+  } catch (e) {
+    return { ok: false, provider, error: (e as Error).message };
   } finally {
     clearTimeout(timer);
   }
