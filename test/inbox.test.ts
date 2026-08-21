@@ -5,9 +5,11 @@ import { join } from "node:path";
 import {
   DEFAULT_INBOX_MAX_MESSAGES,
   DEFAULT_INBOX_TTL_MS,
+  USER_SENDER,
   formatInbox,
   inboxFile,
   inboxPolicyFromConfig,
+  leaveUserMessage,
   listMessages,
   markRead,
   sendMessage,
@@ -162,6 +164,66 @@ describe("bot messaging tools", () => {
 
     const second = await dispatch([checker], "check_inbox", {}, { cwd: home });
     expect(second.output).toBe("inbox empty");
+  });
+});
+
+describe("user inbox (solo / tell)", () => {
+  test("leaveUserMessage stores from=user and is unread", () => {
+    createBot(home, "coder");
+    const inboxDir = join(home, "bots", "coder", "inbox");
+    const msg = leaveUserMessage(inboxDir, "coder", "please look at the auth refactor tomorrow");
+    expect(msg.from).toBe(USER_SENDER);
+    expect(msg.from).toBe("user");
+    expect(msg.to).toBe("coder");
+    expect(msg.body).toContain("auth refactor");
+    expect(msg.read).toBe(false);
+    const unread = unreadMessages(inboxDir);
+    expect(unread).toHaveLength(1);
+    expect(unread[0]?.from).toBe("user");
+  });
+
+  test("empty text is rejected", () => {
+    const dir = join(home, "inbox");
+    expect(() => leaveUserMessage(dir, "coder", "   ")).toThrow(/empty/i);
+  });
+
+  test("unreadMessages puts user messages ahead of bot messages", () => {
+    const dir = join(home, "inbox");
+    sendMessage(dir, { from: "writer", to: "coder", subject: "bot first", body: "from a bot" });
+    leaveUserMessage(dir, "coder", "from the user, sent later");
+    sendMessage(dir, { from: "researcher", to: "coder", subject: "bot after", body: "another bot" });
+    expect(unreadMessages(dir).map((m) => m.from)).toEqual(["user", "writer", "researcher"]);
+  });
+
+  test("tenjin tell <bot> <text> leaves a user message in that bot's inbox", () => {
+    createBot(home, "coder");
+    const proc = Bun.spawnSync(
+      ["bun", "run", join(import.meta.dir, "..", "src", "index.ts"), "tell", "coder", "remember the auth idea"],
+      { cwd: join(import.meta.dir, ".."), env: { ...process.env, TENJIN_HOME: home } },
+    );
+    expect(proc.exitCode).toBe(0);
+    expect((proc.stdout?.toString() ?? "")).toContain("coder");
+    const unread = unreadMessages(join(home, "bots", "coder", "inbox"));
+    expect(unread).toHaveLength(1);
+    expect(unread[0]?.from).toBe("user");
+    expect(unread[0]?.body).toContain("auth idea");
+    expect(unread[0]?.read).toBe(false);
+  });
+
+  test("tenjin tell without text or unknown bot fails", () => {
+    createBot(home, "coder");
+    const usage = Bun.spawnSync(
+      ["bun", "run", join(import.meta.dir, "..", "src", "index.ts"), "tell", "coder"],
+      { cwd: join(import.meta.dir, ".."), env: { ...process.env, TENJIN_HOME: home } },
+    );
+    expect(usage.exitCode).toBe(2);
+    expect((usage.stdout?.toString() ?? "") + (usage.stderr?.toString() ?? "")).toMatch(/usage:.*tell/i);
+
+    const unknown = Bun.spawnSync(
+      ["bun", "run", join(import.meta.dir, "..", "src", "index.ts"), "tell", "ghost", "hello"],
+      { cwd: join(import.meta.dir, ".."), env: { ...process.env, TENJIN_HOME: home } },
+    );
+    expect(unknown.exitCode).not.toBe(0);
   });
 });
 

@@ -31,6 +31,7 @@ export interface InboxPolicy {
 
 export const DEFAULT_INBOX_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const DEFAULT_INBOX_MAX_MESSAGES = 500;
+export const USER_SENDER = "user";
 const STALE_TMP_MS = 60_000;
 
 function resolvePolicy(p?: InboxPolicy): Required<InboxPolicy> {
@@ -91,6 +92,19 @@ export function sendMessage(
   atomicWriteJson(inboxFile(inboxDir, message.id), message);
   listMessages(inboxDir, policy);
   return message;
+}
+
+/** Leave a solo-mode note in a bot's inbox. Sender is always `user`. */
+export function leaveUserMessage(
+  inboxDir: string,
+  to: string,
+  text: string,
+  policy?: InboxPolicy,
+): InboxMessage {
+  const body = text.trim();
+  if (!body) throw new Error("message is empty");
+  const subject = body.split(/\r?\n/, 1)[0] ?? body;
+  return sendMessage(inboxDir, { from: USER_SENDER, to, subject, body }, policy);
 }
 
 /** Raw listing without side effects; sorted chronologically. */
@@ -173,7 +187,10 @@ export function listMessages(inboxDir: string, policy?: InboxPolicy): InboxMessa
 }
 
 export function unreadMessages(inboxDir: string, policy?: InboxPolicy): InboxMessage[] {
-  return listMessages(inboxDir, policy).filter((m) => !m.read);
+  const unread = listMessages(inboxDir, policy).filter((m) => !m.read);
+  const fromUser = unread.filter((m) => m.from === USER_SENDER);
+  const fromBots = unread.filter((m) => m.from !== USER_SENDER);
+  return [...fromUser, ...fromBots];
 }
 
 export function markRead(inboxDir: string, ids: string[]): void {
