@@ -616,9 +616,15 @@ async function panelSettings(main) {
     statusLine.textContent = "saving…";
     statusLine.className = "dim";
     try {
+      const defaultModel = modelSelect.value || state.defaultModel;
+      if (!defaultModel && !confirm("No default model selected — save anyway?")) {
+        statusLine.textContent = "save cancelled";
+        statusLine.className = "dim";
+        return;
+      }
       const body = {
         models: {
-          default: modelSelect.value || state.defaultModel,
+          default: defaultModel,
           cheap: cheapSelect.value,
         },
       };
