@@ -18,6 +18,7 @@ export class ProviderRegistry {
     private openaiBaseUrl?: string,
     keys: ProviderKeys = {},
     private retry?: RetryConfig,
+    private anthropicCaching = true,
   ) {
     this.keys = { ...keys };
   }
@@ -55,8 +56,8 @@ export class ProviderRegistry {
         }
         const baseUrl = env.ANTHROPIC_BASE_URL || undefined;
         return baseUrl
-          ? new AnthropicProvider(apiKey, baseUrl, this.retry)
-          : new AnthropicProvider(apiKey, undefined, this.retry);
+          ? new AnthropicProvider(apiKey, baseUrl, this.retry, this.anthropicCaching)
+          : new AnthropicProvider(apiKey, undefined, this.retry, this.anthropicCaching);
       }
       case "openai": {
         const apiKey = this.keys.openai || env.OPENAI_API_KEY;

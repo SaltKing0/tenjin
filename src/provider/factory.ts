@@ -14,5 +14,6 @@ export function createProvider(config: HarnessConfig): Provider {
       openai: config.providers?.openai?.apiKey,
     },
     config.retry,
+    config.providers?.anthropic?.caching,
   ).get(config.provider);
 }
