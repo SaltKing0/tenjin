@@ -856,3 +856,79 @@ describe("jobs API", () => {
     expect(js).toContain("Run now");
   });
 });
+
+describe("memory endpoint", () => {
+  const memDirFor = (bot: string) => join(home, "bots", bot, "memory");
+
+  test("GET /api/memory/:bot returns facts, summaries and vector stats", async () => {
+    const mem = memDirFor("researcher");
+    mkdirSync(join(mem, "summaries"), { recursive: true });
+    writeFileSync(join(mem, "facts.md"), "- [2026-08-21] researcher prefers citations\n- [2026-08-21] terse style\n");
+    writeFileSync(
+      join(mem, "summaries", "sess1.md"),
+      [
+        "---",
+        "sessionId: sess1",
+        "projectPath: /p",
+        "uptoEvent: 3",
+        "created: 2026-08-21T10:00:00Z",
+        "---",
+        "Investigated auth.ts.",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(mem, "vectors.jsonl"),
+      [
+        JSON.stringify({ id: "c1", sessionId: "sess1", projectPath: "/p", role: "user", text: "auth", embedding: [0.1, 0.2, 0.3], created: "t", embedModel: "model-x", embedDim: 3 }),
+        JSON.stringify({ id: "c2", sessionId: "sess1", projectPath: "/p", role: "assistant", text: "ok", embedding: [0.4, 0.5, 0.6], created: "t", embedModel: "model-x", embedDim: 3 }),
+      ].join("\n") + "\n",
+    );
+
+    const base = startServer();
+    const res = await fetch(`${base}/api/memory/researcher`, { headers: auth });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      bot: string;
+      facts: string | null;
+      summaries: Array<{ sessionId: string; text: string }>;
+      vector: { count: number; embedModel: string | null; dim: number | null };
+    };
+    expect(body.bot).toBe("researcher");
+    expect(body.facts).toContain("researcher prefers citations");
+    expect(body.summaries).toHaveLength(1);
+    expect(body.summaries[0]?.sessionId).toBe("sess1");
+    expect(body.summaries[0]?.text).toContain("Investigated auth.ts.");
+    expect(body.vector.count).toBe(2);
+    expect(body.vector.embedModel).toBe("model-x");
+    expect(body.vector.dim).toBe(3);
+  });
+
+  test("bot without memory returns empty fields, not an error", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/memory/researcher`, { headers: auth });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { facts: string | null; summaries: unknown[]; vector: { count: number } };
+    expect(body.facts).toBeNull();
+    expect(body.summaries).toEqual([]);
+    expect(body.vector.count).toBe(0);
+  });
+
+  test("unknown bot is rejected", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/memory/ghost`, { headers: auth });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain("unknown bot");
+  });
+
+  test("console memory panel is registered and wired to the endpoint", () => {
+    const js = readFileSync(
+      join(import.meta.dir, "..", "src", "gateway", "console", "app.js"),
+      "utf8",
+    );
+    expect(js).toContain('["memory", "Memory", panelMemory]');
+    expect(js).toContain("/api/memory/");
+    expect(js).toContain("read-only view of a bot's facts");
+    expect(js).toContain("chunks:");
+  });
+});
