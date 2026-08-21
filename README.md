@@ -14,7 +14,9 @@ It is the reference harness this repository documents. Repo codename: `stealth`.
 - **Bring your own model** — Anthropic or any OpenAI-compatible endpoint
   (OpenAI, DeepSeek, Ollama, OpenRouter) configured in one YAML file.
 - **Sessions, memory and skills** — every conversation is a durable session log;
-  optional embeddings-backed recall, summonable skills, and per-bot facts.
+  optional embeddings-backed recall, summonable skills, and per-bot facts. A
+  distilled **learnings** tier (`record_learning`) persists durable takeaways
+  per bot+project, deduplicated and injected ahead of running summaries.
 - **Bots** — run multiple role-specific agents from one install, each with its
   own `SOUL.md`, model, budget, memory and inbox.
 - **Always-on gateway** — Telegram channel, scheduled jobs, heartbeats and a
