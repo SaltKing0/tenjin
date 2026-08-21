@@ -39,6 +39,9 @@ import { vectorEnabled } from "./config/loader";
 import { createRecallTool, createRememberTool, createRecordLearningTool, readFacts } from "./tools/memory";
 import { readLearnings } from "./memory/learnings";
 import { createUseSkillTool } from "./skills/activate";
+import { listSkills } from "./skills/loader";
+import { usageStats, analyzeUsage } from "./skills/usage";
+import { pendingRefines } from "./skills/refine";
 import { createSaveSkillTool } from "./tools/skill-writer";
 import { createListSkillsTool } from "./tools/skill-lister";
 import {
@@ -165,6 +168,9 @@ async function main(): Promise<number> {
   }
   if (process.argv[2] === "keyring") {
     return keyringCommand(process.argv.slice(3));
+  }
+  if (process.argv[2] === "skills") {
+    return skillsCommand(process.argv.slice(3));
   }
 
   let cli: CliArgs;
@@ -605,6 +611,43 @@ function keyringCommand(args: string[]): number {
     return 0;
   }
   stdout.write("usage: tenjin keyring init|status\n");
+  return 2;
+}
+
+/** Skill self-improvement surface (#133): usage stats + refine analysis. */
+function skillsCommand(args: string[]): number {
+  const [sub, name] = args;
+  const cwd = process.cwd();
+  const skills = listSkills(tenjinHome(), cwd).map((s) => s.name);
+  if (sub === "analyze") {
+    const candidates = analyzeUsage(cwd, skills);
+    const pending = pendingRefines(cwd, skills);
+    stdout.write(`skills: ${skills.length} installed; ${candidates.length} flagged for refinement\n`);
+    for (const c of candidates) {
+      const pct = Math.round(c.errorRate * 100);
+      stdout.write(`  ${c.skill}: ${c.uses} use(s), ${c.errors} error(s) (${pct}%) — refine candidate\n`);
+    }
+    if (pending.length) {
+      stdout.write("pending refine proposals (activation requires approval):\n");
+      for (const p of pending) {
+        stdout.write(`  ${p.skill}#v${p.version}: ${p.reason || p.description}\n`);
+      }
+    }
+    return 0;
+  }
+  if (sub === "stat") {
+    if (!name) {
+      stdout.write("usage: tenjin skills stat <skill>\n");
+      return 2;
+    }
+    const st = usageStats(cwd, name);
+    const pct = Math.round(st.errorRate * 100);
+    stdout.write(
+      `${name}: ${st.uses} use(s), ${st.errors} error(s) (${pct}%), last used ${st.lastUsed ?? "never"}\n`,
+    );
+    return 0;
+  }
+  stdout.write("usage: tenjin skills analyze | stat <skill>\n");
   return 2;
 }
 
