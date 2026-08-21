@@ -78,6 +78,22 @@ describe("applySettings", () => {
     void config;
   });
 
+  test("anthropic baseUrl is stored via console settings and applied to registry", () => {
+    const { deps, config, registry } = setup();
+    applySettings(deps, {
+      anthropic: { apiKey: "sk-ant-1234", baseUrl: "https://custom-anthropic.example/v1" },
+    });
+    expect(config.providers?.anthropic?.baseUrl).toBe("https://custom-anthropic.example/v1");
+    // persists for next boot
+    const reloaded = loadConfig(project, home, { skipModelCheck: true }).config;
+    expect(reloaded.providers?.anthropic?.baseUrl).toBe("https://custom-anthropic.example/v1");
+    // reported back to the console and applied to the registry without env
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_BASE_URL;
+    expect(getSettings(deps).anthropic.baseUrl).toBe("https://custom-anthropic.example/v1");
+    expect(registry.get("anthropic").name).toBe("anthropic");
+  });
+
   test("openai baseUrl + key stored together", () => {
     const { deps, config } = setup();
     applySettings(deps, {
