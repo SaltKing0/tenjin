@@ -10,10 +10,16 @@ Usage:
   tenjin --provider <name>   anthropic | openai
   tenjin --budget <usd>      session spend cap
   tenjin --resume <id>       continue a previous session
+  tenjin --fork <id> [n]     branch a copy at event n (default: end)
 
 Options:
   -h, --help                 show this help
 `;
+
+export interface ForkSpec {
+  id: string;
+  uptoEvent?: number;
+}
 
 export interface CliArgs {
   help: boolean;
@@ -22,6 +28,7 @@ export interface CliArgs {
   provider?: string;
   budget?: number;
   resume?: string;
+  fork?: ForkSpec;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -52,6 +59,18 @@ export function parseArgs(argv: string[]): CliArgs {
       case "--resume":
         args.resume = argv[++i];
         break;
+      case "--fork": {
+        const id = argv[++i];
+        if (!id) throw new ConfigError(`--fork requires a session id`);
+        let uptoEvent: number | undefined;
+        const next = argv[i + 1];
+        if (next !== undefined && /^\d+$/.test(next)) {
+          uptoEvent = Number(next);
+          i++;
+        }
+        args.fork = { id, uptoEvent };
+        break;
+      }
       default:
         throw new ConfigError(`Unknown argument: ${a}\n\n${HELP}`);
     }

@@ -83,17 +83,15 @@ async function main(): Promise<number> {
     }
 
     const dir = sessionsDir(home);
+    if (cli.fork) {
+      const log = SessionLog.fork(dir, cli.fork.id, cli.fork.uptoEvent);
+      stdout.write(`forked ${cli.fork.id} → ${log.id}\n`);
+      await continueSession(ctx, dir, log);
+      return 0;
+    }
     if (cli.resume) {
       const log = SessionLog.resolve(dir, cli.resume);
-      const events = log.events();
-      await startRepl({
-        ...ctx,
-        sessionId: log.id,
-        logger: log,
-        sessionsDir: dir,
-        initialMessages: rebuildMessages(events),
-        initialSpentUSD: sumUsage(events).spentUSD,
-      });
+      await continueSession(ctx, dir, log);
       return 0;
     }
 
@@ -115,8 +113,23 @@ async function main(): Promise<number> {
   }
 }
 
-function applyOverrides(config: HarnessConfig, cli: CliArgs): void {
-  if (cli.model) config.model = cli.model;
+async function continueSession(
+  ctx: AppContext,
+  dir: string,
+  log: SessionLog,
+): Promise<void> {
+  const events = log.events();
+  await startRepl({
+    ...ctx,
+    sessionId: log.id,
+    logger: log,
+    sessionsDir: dir,
+    initialMessages: rebuildMessages(events),
+    initialSpentUSD: sumUsage(events).spentUSD,
+  });
+}
+
+function applyOverrides(config: HarnessConfig, cli: CliArgs): void {  if (cli.model) config.model = cli.model;
   if (cli.provider) {
     if (cli.provider !== "anthropic" && cli.provider !== "openai") {
       throw new ConfigError(`--provider must be anthropic or openai`);

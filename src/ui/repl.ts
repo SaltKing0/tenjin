@@ -9,6 +9,7 @@ import { runAgentTurn, type TurnEvent } from "../agent/loop";
 import type { EventLogger, SessionEvent } from "../session/events";
 import { rebuildMessages, sumUsage } from "../session/events";
 import { SessionLog } from "../session/log";
+import { renderTrajectory } from "../session/trajectory";
 import { VERSION } from "../version";
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -23,7 +24,7 @@ export interface ReplOptions {
   tools: ToolDef[];
   cwd: string;
   sessionId: string;
-  logger?: EventLogger;
+  logger?: SessionLog;
   sessionsDir?: string;
   initialMessages?: ChatMessage[];
   initialSpentUSD?: number;
@@ -134,7 +135,7 @@ function pricingOf(opts: ReplOptions): Pricing {
 interface ReplState {
   messages: ChatMessage[];
   budget: Budget;
-  logger: EventLogger | undefined;
+  logger: SessionLog | undefined;
   sessionId: string;
 }
 
@@ -157,6 +158,8 @@ async function handleCommand(
           "/tools           list available tools",
           "/sessions        list saved sessions",
           "/resume <id>     continue a previous session",
+          "/fork [n]        branch current conversation at event n",
+          "/replay          print trajectory of this session",
           "",
         ].join("\n"),
       );
@@ -208,17 +211,37 @@ async function handleCommand(
       }
       try {
         const log = SessionLog.resolve(opts.sessionsDir, rest[0]);
-        const events = log.events();
-        state.messages = rebuildMessages(events);
-        state.budget.spentUSD = sumUsage(events).spentUSD;
-        state.logger = log;
-        state.sessionId = log.id;
-        sessionAllowed.clear();
+        adoptLog(state, log, sessionAllowed);
         stdout.write(
           dim(`resumed ${log.id} — ${state.messages.length} messages restored\n`),
         );
       } catch (e) {
         stdout.write(red(`${(e as Error).message}\n`));
+      }
+      return;
+    }
+    case "/fork": {
+      if (!opts.sessionsDir) {
+        stdout.write(red("sessions not available\n"));
+        return;
+      }
+      const n = rest[0] !== undefined && /^\d+$/.test(rest[0]) ? Number(rest[0]) : undefined;
+      try {
+        const log = SessionLog.fork(opts.sessionsDir, state.sessionId, n);
+        adoptLog(state, log, sessionAllowed);
+        stdout.write(dim(`forked → ${log.id} (${state.messages.length} messages)\n`));
+      } catch (e) {
+        stdout.write(red(`${(e as Error).message}\n`));
+      }
+      return;
+    }
+    case "/replay": {
+      if (!state.logger) {
+        stdout.write(red("no session log active\n"));
+        return;
+      }
+      for (const line of renderTrajectory(state.logger.events())) {
+        stdout.write(dim(line) + "\n");
       }
       return;
     }
@@ -249,6 +272,15 @@ async function approve(
     return true;
   }
   return answer === "y" || answer === "yes";
+}
+
+function adoptLog(state: ReplState, log: SessionLog, sessionAllowed: Set<string>): void {
+  const events = log.events();
+  state.messages = rebuildMessages(events);
+  state.budget.spentUSD = sumUsage(events).spentUSD;
+  state.logger = log;
+  state.sessionId = log.id;
+  sessionAllowed.clear();
 }
 
 function forwardEvent(e: TurnEvent, logger?: EventLogger, budget?: Budget): void {

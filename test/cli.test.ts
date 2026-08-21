@@ -61,4 +61,30 @@ describe("parseArgs", () => {
     expect(a.print).toBe("say --model x");
     expect(a.model).toBeUndefined();
   });
+
+  describe("--fork", () => {
+    test("id only forks at end", () => {
+      expect(parseArgs(["--fork", "abc123"]).fork).toEqual({
+        id: "abc123",
+        uptoEvent: undefined,
+      });
+    });
+
+    test("numeric second token becomes event index", () => {
+      expect(parseArgs(["--fork", "abc", "14"]).fork).toEqual({
+        id: "abc",
+        uptoEvent: 14,
+      });
+    });
+
+    test("non-numeric second token is left alone (treated as unknown arg later)", () => {
+      const a = parseArgs(["--fork", "abc"]);
+      expect(a.fork?.id).toBe("abc");
+      expect(a.fork?.uptoEvent).toBeUndefined();
+    });
+
+    test("missing id throws", () => {
+      expect(() => parseArgs(["--fork"])).toThrow(/requires a session id/);
+    });
+  });
 });
