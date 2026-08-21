@@ -60,6 +60,8 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
         capUSD: cap,
         pricing: deps.globalConfig.pricing,
         policy: "read-only",
+        home: deps.home,
+        memoryDir: profile.memoryDir,
         guard: deps.guard,
         sessionLogDir: profile.sessionsDir,
         sessionBot: profile.name,

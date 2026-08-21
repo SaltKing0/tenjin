@@ -157,6 +157,53 @@ describe("Gateway execution", () => {
     expect(posted).toEqual([{ channel: "telegram", text: "DIGEST BODY" }]);
   });
 
+  test("job run injects the bot's facts.md, skill catalog, and use_skill", async () => {
+    const mem = join(home, "bots", "worker", "memory");
+    mkdirSync(mem, { recursive: true });
+    writeFileSync(join(mem, "facts.md"), "- [2026-08-21] worker likes short replies\n");
+    mkdirSync(join(home, "skills", "brief"), { recursive: true });
+    writeFileSync(
+      join(home, "skills", "brief", "SKILL.md"),
+      '---\nname: "brief"\ndescription: "Keep it short"\n---\nBe brief.\n',
+    );
+
+    const capture: { req?: ChatRequest } = {};
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: config({
+        gateway: {
+          jobs: [{ name: "digest", bot: "worker", prompt: "make digest", every: "1m" }],
+        },
+      }),
+      registry: {
+        get: () => ({
+          name: "mock",
+          async chat(req: ChatRequest): Promise<ChatResponse> {
+            capture.req = req;
+            return {
+              stopReason: "end_turn",
+              content: [{ type: "text", text: "ok" }],
+              usage: { inputTokens: 10, outputTokens: 5 },
+            };
+          },
+        }),
+      } as never,
+    });
+
+    await gw.fireDue(Date.now() + 120_000);
+    await Bun.sleep(50);
+
+    const system = String(capture.req?.system);
+    expect(system).toContain("# Facts");
+    expect(system).toContain("worker likes short replies");
+    expect(system).toContain("# Skills");
+    expect(system).toContain("brief");
+    const names = (capture.req?.tools ?? []).map((t) => t.name);
+    expect(names).toContain("use_skill");
+    expect(names).not.toContain("save_skill");
+  });
+
   test("postTo unknown channel logs and does not throw", async () => {
     const logs: string[] = [];
     const gw = new Gateway({
@@ -244,6 +291,7 @@ describe("heartbeat", () => {
     expect(toolNames).toContain("check_inbox");
     expect(toolNames).toContain("send_message");
     expect(toolNames).toContain("remember");
+    expect(toolNames).toContain("use_skill");
   });
 
   test("heartbeat replies to the sender via send_message, landing in the sender inbox", async () => {

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -95,6 +95,32 @@ test("handler errors become error frame, not throw", async () => {
   const raw = await res.text();
   expect(raw).toContain('"type":"error"');
   expect(raw).toContain("boom");
+});
+
+test("chat injects bot facts.md and exposes use_skill", async () => {
+  const mem = join(home, "bots", "tester", "memory");
+  mkdirSync(mem, { recursive: true });
+  writeFileSync(join(mem, "facts.md"), "- [2026-08-21] tester prefers terse replies\n");
+  mkdirSync(join(home, "skills", "terse"), { recursive: true });
+  writeFileSync(
+    join(home, "skills", "terse", "SKILL.md"),
+    '---\nname: "terse"\ndescription: "Keep replies short"\n---\nBe terse.\n',
+  );
+
+  const provider = streamingProvider();
+  const handle = makeHandler(provider);
+  await handle("say hi", { actor: "console", source: "http" });
+
+  const req = provider.requests[0];
+  expect(req).toBeDefined();
+  const system = String(req?.system);
+  expect(system).toContain("# Facts");
+  expect(system).toContain("tester prefers terse replies");
+  expect(system).toContain("# Skills");
+  expect(system).toContain("terse");
+  const names = req?.tools.map((t) => t.name) ?? [];
+  expect(names).toContain("use_skill");
+  expect(names).not.toContain("save_skill");
 });
 
 test("createMessageHandler forwards onDelta to the model stream", async () => {

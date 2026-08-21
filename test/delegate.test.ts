@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAskBotTool } from "../src/bots/delegate";
@@ -111,7 +111,28 @@ describe("ask_bot", () => {
     expect(names).not.toContain("ask_bot");
     expect(names).not.toContain("bash");
     expect(names).not.toContain("write_file");
+    expect(names).not.toContain("save_skill");
     expect(names).toContain("read_file");
+    expect(names).toContain("use_skill");
+  });
+
+  test("delegation injects the target bot's facts.md and available skills", async () => {
+    const mem = join(home, "bots", "researcher", "memory");
+    mkdirSync(mem, { recursive: true });
+    writeFileSync(join(mem, "facts.md"), "- [2026-08-21] researcher prefers citations\n");
+    mkdirSync(join(home, "skills", "cite-sources"), { recursive: true });
+    writeFileSync(
+      join(home, "skills", "cite-sources", "SKILL.md"),
+      '---\nname: "cite-sources"\ndescription: "Always cite files"\n---\nCite paths.\n',
+    );
+    const provider = mockProvider("ok");
+    const tool = makeTool({ provider });
+    await ask(tool, { bot: "researcher", message: "hi" });
+    const system = String(provider.requests[0]?.system);
+    expect(system).toContain("# Facts");
+    expect(system).toContain("researcher prefers citations");
+    expect(system).toContain("# Skills");
+    expect(system).toContain("cite-sources");
   });
 
   test("self-delegation rejected", async () => {

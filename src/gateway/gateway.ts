@@ -162,6 +162,8 @@ export class Gateway {
       policy: "read-only",
       extraTools,
       approve,
+      home: this.deps.home,
+      memoryDir: profile.memoryDir,
       sessionLogDir: profile.sessionsDir,
       sessionBot: profile.name,
       guard: this.deps.guard,

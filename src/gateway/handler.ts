@@ -132,6 +132,8 @@ export function createMessageHandler(deps: HandlerDeps) {
         pricing: deps.config.pricing,
         policy: deps.allowWrites ? "full" : "read-only",
         agentsMd: loadAgentsMd(deps.cwd),
+        home: deps.home,
+        memoryDir: profile.memoryDir,
         sessionLogDir: profile.sessionsDir,
         sessionBot: profile.name,
         guard: deps.guard,

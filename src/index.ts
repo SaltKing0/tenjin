@@ -79,6 +79,8 @@ interface AppContext {
   system: string;
   tools: ToolDef[];
   cwd: string;
+  home: string;
+  memoryDir: string;
   guard: ReturnType<typeof SecurityGuard.fromConfig>;
 }
 
@@ -240,7 +242,18 @@ async function main(): Promise<number> {
     const guard = SecurityGuard.fromConfig(config.security, (detail) =>
       audit.append("tool_block", "user", detail),
     );
-    const ctx: AppContext = { config, registry, defaultRef, cheapRef, system, tools, cwd, guard };
+    const ctx: AppContext = {
+      config,
+      registry,
+      defaultRef,
+      cheapRef,
+      system,
+      tools,
+      cwd,
+      home,
+      memoryDir: memDir,
+      guard,
+    };
 
     if (cli.print !== undefined) {
       return await oneShot(ctx, cli.print);
@@ -571,7 +584,7 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
   const result = await runHeadless({
     provider: ctx.registry.get(ctx.defaultRef.provider),
     model: ctx.defaultRef.model,
-    soulText: loadSoul(tenjinHome(), ctx.cwd).text,
+    soulText: loadSoul(ctx.home, ctx.cwd).text,
     cwd: ctx.cwd,
     message: prompt,
     maxTokens: ctx.config.maxTokens,
@@ -579,9 +592,11 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     pricing: ctx.config.pricing,
     policy: "read-only",
     agentsMd: loadAgentsMd(ctx.cwd),
+    home: ctx.home,
+    memoryDir: ctx.memoryDir,
     guard: ctx.guard,
     audit: (kind, detail) =>
-      new AuditLog(auditPath(tenjinHome())).append(kind, "user", detail),
+      new AuditLog(auditPath(ctx.home)).append(kind, "user", detail),
     redactor: Redactor.fromConfig(ctx.config.security),
   });
   stdout.write(`${result.text}\n`);
