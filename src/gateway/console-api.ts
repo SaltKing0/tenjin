@@ -64,6 +64,19 @@ function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
 }
 
+/**
+ * Parse a JSON request body, returning a discriminated result so callers can
+ * `if (!parsed.ok) return parsed.response` on a malformed body and otherwise
+ * read `parsed.body` as the typed payload.
+ */
+async function readJson<T>(req: Request): Promise<{ ok: true; body: T } | { ok: false; response: Response }> {
+  try {
+    return { ok: true, body: (await req.json()) as T };
+  } catch {
+    return { ok: false, response: json({ error: "invalid json" }, 400) };
+  }
+}
+
 /** List cards show the truncated summary; full input is GET /api/approvals/:id. */
 /**
  * #147: best-effort old/new extraction for an edit/write approval so the
@@ -195,12 +208,9 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     }
 
     if (path === "/api/settings" && req.method === "POST") {
-      let body: Parameters<typeof applySettings>[1];
-      try {
-        body = (await req.json()) as typeof body;
-      } catch {
-        return json({ error: "invalid json" }, 400);
-      }
+      const parsed = await readJson<Parameters<typeof applySettings>[1]>(req);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
       try {
         const settingsDeps = {
           home: deps.home,
@@ -219,12 +229,9 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     }
 
     if (path === "/api/settings/detect" && req.method === "POST") {
-      let body: { provider?: unknown; baseUrl?: unknown; apiKey?: unknown; timeoutMs?: unknown };
-      try {
-        body = (await req.json()) as typeof body;
-      } catch {
-        return json({ error: "invalid json" }, 400);
-      }
+      const parsed = await readJson<{ provider?: unknown; baseUrl?: unknown; apiKey?: unknown; timeoutMs?: unknown }>(req);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
       try {
         const models = await detectModels(
           {
@@ -244,12 +251,9 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     }
 
     if (path === "/api/settings/test" && req.method === "POST") {
-      let body: { provider?: unknown; baseUrl?: unknown; apiKey?: unknown; timeoutMs?: unknown };
-      try {
-        body = (await req.json()) as typeof body;
-      } catch {
-        return json({ error: "invalid json" }, 400);
-      }
+      const parsed = await readJson<{ provider?: unknown; baseUrl?: unknown; apiKey?: unknown; timeoutMs?: unknown }>(req);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
       const result = await testProvider(
         {
           provider: String(body.provider ?? ""),
@@ -300,12 +304,9 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     }
 
     if (path === "/api/bots/soul-preview" && req.method === "POST") {
-      let body: { role?: unknown; name?: unknown };
-      try {
-        body = (await req.json()) as typeof body;
-      } catch {
-        return json({ error: "invalid json" }, 400);
-      }
+      const parsed = await readJson<{ role?: unknown; name?: unknown }>(req);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
       const role = typeof body.role === "string" ? body.role : "";
       const name = typeof body.name === "string" ? body.name : "";
       if (!name.trim()) return json({ error: "name is required" }, 400);
@@ -317,12 +318,9 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     }
 
     if (path === "/api/bots" && req.method === "POST") {
-      let body: { name?: unknown; soul?: unknown; role?: unknown; model?: unknown };
-      try {
-        body = (await req.json()) as typeof body;
-      } catch {
-        return json({ error: "invalid json" }, 400);
-      }
+      const parsed = await readJson<{ name?: unknown; soul?: unknown; role?: unknown; model?: unknown }>(req);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
       const rawName = typeof body.name === "string" ? body.name : "";
       if (!rawName.trim()) return json({ error: "name is required" }, 400);
       // #253: an explicit soul wins over a role template; otherwise a role
@@ -357,12 +355,9 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
 
     if (botSingleMatch && req.method === "PUT") {
       const name = botSingleMatch[1]!;
-      let body: { soul?: unknown; rename?: unknown };
-      try {
-        body = (await req.json()) as typeof body;
-      } catch {
-        return json({ error: "invalid json" }, 400);
-      }
+      const parsed = await readJson<{ soul?: unknown; rename?: unknown }>(req);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
       try {
         // Apply the soul first so an invalid (empty) soul fails before any rename.
         if (body.soul !== undefined) {
@@ -563,12 +558,9 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     // #147: bulk approve/deny — resolve several pending requests at once,
     // emitting one audit event per request.
     if (path === "/api/approvals/bulk" && req.method === "POST") {
-      let body: { ids?: unknown; action?: unknown };
-      try {
-        body = (await req.json()) as typeof body;
-      } catch {
-        return json({ error: "invalid json" }, 400);
-      }
+      const parsed = await readJson<{ ids?: unknown; action?: unknown }>(req);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
       const action = body.action;
       if (action !== "approve" && action !== "deny") {
         return json({ error: 'action must be "approve" or "deny"' }, 400);
@@ -629,12 +621,9 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     if (approvalMatch && req.method === "POST") {
       const id = approvalMatch[1];
       if (!id) return json({ error: "missing id" }, 400);
-      let body: { action?: unknown };
-      try {
-        body = (await req.json()) as { action?: unknown };
-      } catch {
-        return json({ error: "invalid json" }, 400);
-      }
+      const parsed = await readJson<{ action?: unknown }>(req);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
       const action = body.action;
       if (action !== "approve" && action !== "deny") {
         return json({ error: 'action must be "approve" or "deny"' }, 400);
