@@ -16,9 +16,10 @@ import { CONFIG_SCHEMA_VERSION } from "./config/loader";
  * A backup is a .tar.gz (USTAR) of the tenjin home directory — config.yaml,
  * SOUL.md, sessions/, memory/, bots/, skills/ — plus a small manifest that
  * records the container format version and the config schema version at backup
- * time. Secrets are deliberately excluded: `providers.yaml` (API keys) and a
- * `secrets/` directory never enter the archive, and restore refuses to write
- * either back even if one shows up in a foreign archive.
+ * time. Secrets are deliberately excluded: `providers.yaml` (API keys), a
+ * `secrets/` directory and the machine-local `.tenjin-keyring` (the raw AES
+ * secret behind #132) never enter the archive, and restore refuses to write
+ * any of them back even if one shows up in a foreign archive.
  *
  * We hand-roll a USTAR writer/reader (plus node:zlib for gzip) mirroring the
  * bot package tooling in src/bots/package.ts, keeping the project's zero-dep
@@ -41,8 +42,12 @@ export interface BackupMeta {
   files: string[];
 }
 
-/** Top-level home entries that are never backed up (secrets / transient). */
-const BACKUP_EXCLUDES = new Set(["providers.yaml", "secrets"]);
+/**
+ * Top-level home entries that are never backed up (secrets / transient).
+ * `.tenjin-keyring` is the machine-local AES secret behind #132 — it must
+ * never travel with a backup, and restore must never overwrite it.
+ */
+const BACKUP_EXCLUDES = new Set(["providers.yaml", "secrets", ".tenjin-keyring"]);
 
 interface TarEntry {
   name: string;
@@ -256,8 +261,10 @@ export interface RestoreResult {
 
 /**
  * Restore a home backup into `home`, validating the whole archive before
- * writing anything. `providers.yaml` and `secrets/` are never written back,
- * even if a foreign archive happens to contain them.
+ * writing anything. `providers.yaml`, `secrets/` and `.tenjin-keyring` are
+ * never written back, even if a foreign archive happens to contain them — a
+ * keyring restore must happen out-of-band (`keyring init` + re-saving keys),
+ * so restore never clobbers a fresher machine-local secret.
  */
 export function restoreHome(home: string, archivePath: string): RestoreResult {
   let tar: Buffer;
@@ -304,7 +311,7 @@ export function restoreHome(home: string, archivePath: string): RestoreResult {
   const relFiles: string[] = [];
   for (const e of restoreFiles) {
     const parts = e.name.split("/");
-    if (parts[0] === "providers.yaml" || parts[0] === "secrets") continue;
+    if (parts[0] && BACKUP_EXCLUDES.has(parts[0])) continue;
     assertSafePath(e.name);
     relFiles.push(e.name);
   }
@@ -312,7 +319,7 @@ export function restoreHome(home: string, archivePath: string): RestoreResult {
   mkdirSync(home, { recursive: true });
   for (const e of restoreFiles) {
     const parts = e.name.split("/");
-    if (parts[0] === "providers.yaml" || parts[0] === "secrets") continue;
+    if (parts[0] && BACKUP_EXCLUDES.has(parts[0])) continue;
     const dest = join(home, e.name);
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, e.content);
