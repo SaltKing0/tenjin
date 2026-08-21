@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Provider } from "../provider/types";
@@ -9,7 +9,7 @@ import { runHeadless, capPolicy } from "../agent/headless";
 import { guardForBot } from "../security/guard";
 import { resolveParanoid } from "../security/injection";
 import { formatUSD } from "../agent/budget";
-import { sendMessage } from "./inbox";
+import { sendMessage, atomicWriteJson } from "./inbox";
 import { emit } from "../gateway/events";
 import type { ToolDef } from "../tools/registry";
 import { TreeBudget, type Budget } from "../agent/budget";
@@ -72,17 +72,41 @@ function taskPath(dir: string, id: string): string {
   return join(dir, `${id}.json`);
 }
 
+/**
+ * A synthetic, terminal error task describing a task JSON file that could not
+ * be parsed. Mirrors the inbox's skip-corrupted policy, but surfaces the
+ * broken task as `error` so it stays visible in `bot_task_status` and any
+ * dependent fails promptly instead of timing out.
+ */
+function corruptTask(bot: string, id: string, err: unknown): BotTask {
+  return {
+    id,
+    bot,
+    message: "",
+    status: "error",
+    error: `corrupt task file: ${(err as Error).message}`,
+    timeoutMs: DEFAULT_TASK_TIMEOUT_MS,
+    createdAt: new Date(0).toISOString(),
+  };
+}
+
 function readTask(home: string, bot: string, id: string): BotTask | null {
   const p = taskPath(tasksDir(home, bot), id);
   if (!existsSync(p)) return null;
-  return JSON.parse(readFileSync(p, "utf8")) as BotTask;
+  try {
+    return JSON.parse(readFileSync(p, "utf8")) as BotTask;
+  } catch (err) {
+    return corruptTask(bot, id, err);
+  }
 }
 
 /** @internal — exported so tests can fabricate a dependency graph. */
 export function writeTask(home: string, bot: string, task: BotTask): void {
   const dir = tasksDir(home, bot);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(taskPath(dir, task.id), JSON.stringify(task, null, 2), "utf8");
+  // Atomic write (tmp + rename) so a crash mid-write never leaves a corrupt
+  // task file behind (#183).
+  atomicWriteJson(taskPath(dir, task.id), task);
 }
 
 export function listTasks(home: string, bot: string): BotTask[] {
@@ -90,7 +114,14 @@ export function listTasks(home: string, bot: string): BotTask[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((f) => f.endsWith(".json"))
-    .map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")) as BotTask)
+    .map((f) => {
+      const id = f.slice(0, -".json".length);
+      try {
+        return JSON.parse(readFileSync(join(dir, f), "utf8")) as BotTask;
+      } catch (err) {
+        return corruptTask(bot, id, err);
+      }
+    })
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
