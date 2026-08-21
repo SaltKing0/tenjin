@@ -1,10 +1,11 @@
 import { describe, test, expect } from "bun:test";
 import {
+  OpenAIProvider,
   OpenAiStreamAssembler,
   buildRequestBody,
   toOpenAiMessages,
 } from "../src/provider/openai";
-import type { ChatMessage } from "../src/provider/types";
+import type { ChatMessage, ChatRequest } from "../src/provider/types";
 
 describe("openai message conversion", () => {
   test("system prompt first, string content mapped", () => {
@@ -148,5 +149,62 @@ describe("openai stream assembler", () => {
     const a = new OpenAiStreamAssembler();
     a.handle(chunk({ choices: [{ delta: {}, finish_reason: "stop" }] }));
     expect(a.done().usage).toEqual({ inputTokens: 0, outputTokens: 0 });
+  });
+});
+
+describe("openai provider chat completion guard (#309)", () => {
+  const data = (obj: unknown) => `data: ${JSON.stringify(obj)}\n\n`;
+
+  const req: ChatRequest = {
+    model: "gpt-4o",
+    system: "sys",
+    messages: [{ role: "user", content: "hi" }],
+    tools: [],
+    maxTokens: 64,
+  };
+
+  function sseResponse(sse: string): Response {
+    return new Response(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode(sse));
+          c.close();
+        },
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  }
+
+  async function withFetch(sse: string, fn: () => Promise<void>): Promise<void> {
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async () => sseResponse(sse)) as unknown as typeof fetch;
+    try {
+      await fn();
+    } finally {
+      globalThis.fetch = orig;
+    }
+  }
+
+  test("chat() throws when the stream ends before [DONE] (#309)", async () => {
+    const provider = new OpenAIProvider("test-key", "https://api.example.com");
+    const sse =
+      data({ choices: [{ delta: { content: "par" } }] }) +
+      data({ choices: [{ delta: { content: "tial" } }] });
+    // deliberately NO [DONE] → clean EOF mid-stream
+    await withFetch(sse, async () => {
+      await expect(provider.chat(req)).rejects.toThrow(/\[DONE\]/);
+    });
+  });
+
+  test("chat() succeeds when the stream ends with [DONE] (#309)", async () => {
+    const provider = new OpenAIProvider("test-key", "https://api.example.com");
+    const sse =
+      data({ choices: [{ delta: { content: "Hello" } }] }) +
+      data({ choices: [{ delta: {}, finish_reason: "stop" }] }) +
+      "data: [DONE]\n\n";
+    await withFetch(sse, async () => {
+      const resp = await provider.chat(req);
+      expect(resp.content[0]).toEqual({ type: "text", text: "Hello" });
+    });
   });
 });

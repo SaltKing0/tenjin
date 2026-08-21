@@ -636,12 +636,25 @@ describe("verifySettingsApply", () => {
   test("accepts a reachable provider — returns without throwing", async () => {
     const upstream = Bun.serve({
       port: 0,
+      // #309: the smoke-test request sends stream:true, so a real OpenAI
+      // endpoint answers with SSE ending in [DONE] — model that here (a plain
+      // JSON body would be rejected by the completion-marker guard).
       fetch: () =>
-        Response.json({
-          id: "chatcmpl-1",
-          choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
-          usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
-        }),
+        new Response(
+          new ReadableStream({
+            start(c) {
+              const enc = new TextEncoder();
+              c.enqueue(
+                enc.encode(
+                  'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n',
+                ),
+              );
+              c.enqueue(enc.encode("data: [DONE]\n\n"));
+              c.close();
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
     });
     try {
       const { deps } = setup();
