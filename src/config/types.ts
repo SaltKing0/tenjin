@@ -40,6 +40,7 @@ export interface HarnessConfig {
   memory?: {
     enabled?: boolean;
     vector?: { enabled?: boolean; model?: string };
+    summaries?: { onSessionEnd?: boolean };
   };
   inbox?: InboxConfig;
   retry?: RetryConfig;
