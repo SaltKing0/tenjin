@@ -524,6 +524,14 @@ export class Gateway {
     lines.push(
       `channels: ${channels.length ? channels.join(", ") : "(none — jobs still run)"}`,
     );
+    // #250: a freshly-seeded home has `gateway.listen` unset (the config
+    // template comments the gateway block out) — surface the console state so
+    // a silent no-HTTP boot is loud, not a mystery.
+    lines.push(
+      this.settings.listen
+        ? `web console: enabled at http://${this.settings.listen.host}:${this.settings.listen.port} (token in config.yaml)`
+        : `web console: disabled — set gateway.listen.port/token in config.yaml`,
+    );
     if (this.settings.telegram?.enabled) {
       lines.push(
         `telegram: enabled, defaultBot=${this.settings.telegram.defaultBot ?? "(unset)"}, allowlist=${this.settings.telegram.allowedUsers.length} user(s)`,
