@@ -18,7 +18,7 @@ import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
 import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { aggregateSpend, perBotBreakdown } from "../audit/spend";
-import { AuditLog, formatAuditMarkdown, type AuditKind, type AuditQuery } from "../audit/log";
+import { AuditLog, formatAuditMarkdown, AUDIT_KINDS, type AuditKind, type AuditQuery } from "../audit/log";
 import {
   approvalsDir,
   DEFAULT_APPROVAL_TTL_MS,
@@ -92,7 +92,12 @@ function auditQueryFromUrl(
   const opts: AuditQuery = {};
   if (from.ms !== undefined) opts.from = from.ms;
   if (to.ms !== undefined) opts.to = to.ms;
-  if (kindParam) opts.kind = kindParam as AuditKind;
+  if (kindParam) {
+    if (!(AUDIT_KINDS as readonly string[]).includes(kindParam)) {
+      return { error: `unknown audit kind \"${kindParam}\"` };
+    }
+    opts.kind = kindParam as AuditKind;
+  }
   if (tailParam) opts.tail = Number(tailParam);
   else if (defaultTail !== undefined) opts.tail = defaultTail;
   const correlationParam = url.searchParams.get("correlationId");
@@ -289,7 +294,19 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
       const bot = url.searchParams.get("bot");
       const dir = scopeSessionsDir(deps.home, bot);
       if (!dir) return json({ error: "unknown bot" }, 400);
-      const summaries = existsSync(dir)
+      const limitRaw = url.searchParams.get("limit");
+      const offsetRaw = url.searchParams.get("offset");
+      const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+      const limit = limitRaw ? Number(limitRaw) : 100;
+      const offset = offsetRaw ? Number(offsetRaw) : 0;
+      if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+        return json({ error: "limit must be an integer between 1 and 500" }, 400);
+      }
+      if (!Number.isInteger(offset) || offset < 0) {
+        return json({ error: "offset must be a non-negative integer" }, 400);
+      }
+      const scope = bot ?? "solo";
+      let summaries = existsSync(dir)
         ? SessionLog.list(dir).map((s) => ({
             id: s.id,
             mtimeMs: s.mtimeMs,
@@ -297,7 +314,17 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
             parentId: s.parentId ?? null,
           }))
         : [];
-      return json({ scope: bot ?? "solo", sessions: summaries.slice(0, 100) });
+      summaries.sort((a, b) => b.mtimeMs - a.mtimeMs);
+      if (q) {
+        summaries = summaries.filter(
+          (s) => s.preview.toLowerCase().includes(q) || scope.toLowerCase().includes(q),
+        );
+      }
+      return json({
+        scope,
+        total: summaries.length,
+        sessions: summaries.slice(offset, offset + limit),
+      });
     }
 
     const sessionMatch = /^\/api\/session\/([a-zA-Z0-9_-]+)$/.exec(path);
@@ -353,7 +380,7 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     if (path === "/api/audit" && req.method === "GET") {
       const parsed = auditQueryFromUrl(url, 100);
       if ("error" in parsed) return json({ error: parsed.error }, 400);
-      return json({ events: deps.audit.query(parsed.opts) });
+      return json({ events: deps.audit.query(parsed.opts), kinds: AUDIT_KINDS });
     }
 
     if (path === "/api/audit/export" && req.method === "GET") {

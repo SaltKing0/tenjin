@@ -325,32 +325,65 @@ async function panelSessions(main) {
         localStorage.setItem("tenjin_bot", value);
         await panelSessions(main);
       }),
+      el("input", { id: "session-q", placeholder: "search preview…" }),
       el("span", { class: "dim" }, "click a session to open its timeline"),
     ),
   );
   const list = el("div");
-  main.append(list);
+  const pager = el("div", { class: "toolbar", style: "margin-top:8px" });
+  main.append(list, pager);
+  const PER = 100;
+  let offset = 0;
+  let total = 0;
 
-  const data = await apiJson(`/api/sessions?bot=${encodeURIComponent(currentBot)}`);
-  if (data.sessions.length === 0) {
-    list.append(el("div", { class: "dim" }, "no sessions in this scope yet"));
-    return;
+  function searchTerm() {
+    return (main.querySelector("#session-q")?.value ?? "").trim();
   }
-  for (const session of data.sessions) {
-    const when = new Date(session.mtimeMs).toLocaleString();
-    const row = el(
-      "div",
-      {
-        class: "card",
-        style: "cursor:pointer",
-        onclick: async () => openReplay(main, session.id),
-      },
-      el("strong", {}, session.id),
-      session.parentId ? el("span", { class: "badge" }, `fork of ${session.parentId}`) : null,
-      el("div", { class: "dim" }, `${when} — ${session.preview}`),
-    );
-    list.append(row);
+
+  async function load() {
+    const q = encodeURIComponent(searchTerm());
+    const url = `/api/sessions?bot=${encodeURIComponent(currentBot)}&limit=${PER}&offset=${offset}${q ? `&q=${q}` : ""}`;
+    const data = await apiJson(url);
+    total = data.total ?? 0;
+    const count = data.sessions.length;
+    list.replaceChildren();
+    if (count === 0) {
+      list.append(el("div", { class: "dim" }, "no sessions in this scope yet"));
+    }
+    for (const session of data.sessions) {
+      const when = new Date(session.mtimeMs).toLocaleString();
+      const row = el(
+        "div",
+        {
+          class: "card",
+          style: "cursor:pointer",
+          onclick: async () => openReplay(main, session.id),
+        },
+        el("strong", {}, session.id),
+        session.parentId ? el("span", { class: "badge" }, `fork of ${session.parentId}`) : null,
+        el("div", { class: "dim" }, `${when} — ${session.preview}`),
+      );
+      list.append(row);
+    }
+    pager.replaceChildren();
+    if (total === 0) return;
+    const prev = el("button", { onclick: () => { offset = Math.max(0, offset - PER); load(); } }, "‹ prev");
+    if (offset === 0) prev.disabled = true;
+    const next = el("button", { onclick: () => { offset += PER; load(); } }, "next ›");
+    if (offset + count >= total) next.disabled = true;
+    pager.append(prev, el("span", { class: "dim" }, `${offset + 1}–${Math.min(offset + count, total)} of ${total}`), next);
   }
+
+  const searchBtn = main.querySelector("#session-q");
+  if (searchBtn) {
+    searchBtn.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        offset = 0;
+        load();
+      }
+    });
+  }
+  await load();
 }
 
 async function openReplay(main, id) {
@@ -531,21 +564,19 @@ async function panelSpend(main) {
 
 async function panelAudit(main) {
   main.replaceChildren(el("h1", {}, "Audit"));
-  const kinds = ["", "tool_block", "approval", "write_exec", "budget_halt", "channel_reject", "delegation", "gateway_msg", "data_delete"];
-  const select = el(
-    "select",
-    {
-      onchange: () => refresh(select.value),
-    },
-    kinds.map((k) => el("option", { value: k }, k || "(all kinds)")),
-  );
-  main.append(el("div", { class: "toolbar" }, select));
-
+  const select = el("select", {
+    onchange: () => refresh(select.value),
+  });
   const out = el("pre");
-  main.append(out);
+  main.append(el("div", { class: "toolbar" }, select), out);
 
   async function refresh(kind) {
     const data = await apiJson(`/api/audit?tail=200${kind ? `&kind=${kind}` : ""}`);
+    // Build the kind filter from the backend list, not a duplicated copy.
+    if (select.options.length === 0 && Array.isArray(data.kinds)) {
+      select.append(el("option", { value: "" }, "(all kinds)"));
+      for (const k of data.kinds) select.append(el("option", { value: k }, k));
+    }
     if (data.events.length === 0) {
       out.textContent = "(no audit events)";
       return;

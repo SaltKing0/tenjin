@@ -14,6 +14,19 @@ export type AuditKind =
   | "settings_changed"
   | "guard_disabled";
 
+export const AUDIT_KINDS: readonly AuditKind[] = [
+  "tool_block",
+  "approval",
+  "write_exec",
+  "budget_halt",
+  "channel_reject",
+  "delegation",
+  "gateway_msg",
+  "data_delete",
+  "settings_changed",
+  "guard_disabled",
+];
+
 export interface AuditEvent {
   ts: string;
   kind: AuditKind;
