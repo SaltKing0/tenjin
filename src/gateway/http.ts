@@ -8,7 +8,7 @@ export interface HttpListenConfig {
   port: number;
   host: string;
   token: string;
-  /** Max requests per IP per window on /api/*; 429 beyond this. */
+  /** Max requests per IP per window on authenticated routes; 429 beyond this. */
   rateLimitMax?: number;
   /** Rate-limit window in ms. */
   rateLimitWindowMs?: number;
@@ -130,20 +130,20 @@ export function startHttpServer(deps: HttpDeps): HttpServerHandle {
         if (staticResponse) return staticResponse;
       }
 
-      // Rate-limit /api/* per IP before any auth work, so a brute-force
-      // attempt on the token is throttled regardless of success/failure.
-      if (url.pathname.startsWith("/api/")) {
-        rateLimiter.sweep();
-        const ip = server.requestIP(req)?.address ?? "unknown";
-        if (rateLimiter.limited(ip)) {
-          return Response.json(
-            { error: "too many requests" },
-            {
-              status: 429,
-              headers: { "retry-after": String(Math.ceil(rateLimitWindowMs / 1000)) },
-            },
-          );
-        }
+      // Rate-limit every authenticated route per IP before any auth work, so a
+      // brute-force attempt on the token is throttled regardless of success or
+      // failure — on /message, /status, /metrics and /api/* alike. Static
+      // console files above are public and are not throttled.
+      rateLimiter.sweep();
+      const ip = server.requestIP(req)?.address ?? "unknown";
+      if (rateLimiter.limited(ip)) {
+        return Response.json(
+          { error: "too many requests" },
+          {
+            status: 429,
+            headers: { "retry-after": String(Math.ceil(rateLimitWindowMs / 1000)) },
+          },
+        );
       }
 
       const auth = req.headers.get("authorization");

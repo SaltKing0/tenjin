@@ -138,14 +138,61 @@ test("rate limit rejects requests beyond the per-IP budget on /api/*", async () 
   expect(limited.headers.get("retry-after")).toBe("60");
 });
 
-test("rate limit does not affect non-api routes", async () => {
-  const base = start({ config: { rateLimitMax: 1, rateLimitWindowMs: 60_000 } });
-  const first = await fetch(`${base}/status`, {
-    headers: { authorization: "Bearer SECRETTOKEN" },
+test("rate limit applies to non-api authenticated routes like /status", async () => {
+  const base = start({ config: { rateLimitMax: 2, rateLimitWindowMs: 60_000 } });
+  const statuses: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    const res = await fetch(`${base}/status`, {
+      headers: { authorization: "Bearer SECRETTOKEN" },
+    });
+    statuses.push(res.status);
+  }
+  expect(statuses).toEqual([200, 200, 429, 429]);
+});
+
+test("rate limit throttles /message beyond the per-IP budget", async () => {
+  const base = start({ config: { rateLimitMax: 3, rateLimitWindowMs: 60_000 } });
+  const statuses: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    const res = await fetch(`${base}/message`, {
+      method: "POST",
+      headers: { authorization: "Bearer SECRETTOKEN", "content-type": "application/json" },
+      body: JSON.stringify({ text: `probe-${i}` }),
+    });
+    statuses.push(res.status);
+  }
+  expect(statuses).toEqual([200, 200, 200, 429, 429]);
+
+  const limited = await fetch(`${base}/message`, {
+    method: "POST",
+    headers: { authorization: "Bearer SECRETTOKEN", "content-type": "application/json" },
+    body: JSON.stringify({ text: "probe-limit" }),
   });
-  const second = await fetch(`${base}/status`, {
-    headers: { authorization: "Bearer SECRETTOKEN" },
+  expect(limited.status).toBe(429);
+  expect(limited.headers.get("retry-after")).toBe("60");
+});
+
+test("rate limit throttles unauthenticated brute-force on /message", async () => {
+  const base = start({ config: { rateLimitMax: 2, rateLimitWindowMs: 60_000 } });
+  const statuses: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    const res = await fetch(`${base}/message`, {
+      method: "POST",
+      headers: { authorization: "Bearer WRONG", "content-type": "application/json" },
+      body: JSON.stringify({ text: "hi" }),
+    });
+    statuses.push(res.status);
+  }
+  expect(statuses).toEqual([401, 401, 429, 429]);
+});
+
+test("console static files stay unthrottled", async () => {
+  const base = start({
+    consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
+    config: { rateLimitMax: 1, rateLimitWindowMs: 60_000 },
   });
+  const first = await fetch(`${base}/console`);
+  const second = await fetch(`${base}/console/markdown.js`);
   expect(first.status).toBe(200);
   expect(second.status).toBe(200);
 });
