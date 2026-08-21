@@ -53,6 +53,7 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   "/console/job-status.js": { file: "job-status.js", type: "application/javascript; charset=utf-8" },
 
   "/console/approval-badge.js": { file: "approval-badge.js", type: "application/javascript; charset=utf-8" },
+  "/console/approval-card.js": { file: "approval-card.js", type: "application/javascript; charset=utf-8" },
   "/console/chat-history.js": { file: "chat-history.js", type: "application/javascript; charset=utf-8" },
   "/console/style.css": { file: "style.css", type: "text/css; charset=utf-8" },
 };

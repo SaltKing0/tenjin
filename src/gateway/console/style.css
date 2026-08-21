@@ -235,6 +235,21 @@ input, select {
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
 
 .chat-log { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+/* #295: inline approval cards inside the chat log. */
+.chat-approval {
+  align-self: flex-start;
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.chat-approval.pending { border-color: var(--warn); }
+.chat-approval.approved { border-color: var(--ok); }
+.chat-approval.denied { border-color: var(--err); }
+.chat-approval-title { font-weight: 600; }
+.chat-approval-result { color: var(--ok); }
+.chat-approval.denied .chat-approval-result { color: var(--err); }
 .msg { max-width: 80%; padding: 8px 12px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; }
 .msg.you { align-self: flex-end; background: #1f6feb33; border: 1px solid #1f6feb66; }
 .msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); }
