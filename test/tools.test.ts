@@ -6,6 +6,7 @@ import { dispatch, schemas } from "../src/tools/registry";
 import { readTool } from "../src/tools/read";
 import { globTool } from "../src/tools/glob";
 import { grepTool } from "../src/tools/grep";
+import { SecurityGuard } from "../src/security/guard";
 
 const tools = [readTool, globTool, grepTool];
 
@@ -111,5 +112,16 @@ describe("grep", () => {
     const r = await dispatch(tools, "grep", { pattern: "." }, { cwd: dir });
     expect(r.ok).toBe(true);
     expect(r.output).not.toContain("bin.dat");
+  });
+
+  test("skips files blocked by the security guard (#307)", async () => {
+    writeFileSync(join(dir, ".env"), "SECRET=needle\n");
+    const guard = new SecurityGuard([".env"]);
+    const r = await dispatch(tools, "grep", { pattern: "needle" }, { cwd: dir, guard });
+    expect(r.ok).toBe(true);
+    // the guarded .env must not leak its contents, but a normal file still matches
+    expect(r.output).toContain(join("sub", "c.ts") + ":1:");
+    expect(r.output).not.toContain(".env");
+    expect(r.output).not.toContain("SECRET");
   });
 });

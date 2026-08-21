@@ -222,6 +222,15 @@ export class WebhookChannel implements Channel {
       });
     }
     const rawBody = await req.text();
+    // #307: the header cap above is skipped when `content-length` is absent
+    // (chunked / HTTP-2), so also enforce the cap on the actual body size after
+    // reading it — closes the pre-auth memory-exhaustion bypass for unsigned
+    // flood traffic.
+    if (rawBody.length > maxBytes) {
+      return this.reject({ sender: "unknown", reason: "too_long" }, 413, {
+        error: `payload too large (max ${maxBytes} bytes)`,
+      });
+    }
     const signature = req.headers.get("x-webhook-signature");
     const timestamp = req.headers.get("x-webhook-timestamp");
     if (!verifyWebhookSignature(this.opts.secret, rawBody, signature, timestamp)) {

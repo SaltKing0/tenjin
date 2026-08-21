@@ -212,6 +212,36 @@ describe("WebhookChannel HTTP handler", () => {
     expect(called).toBe(false); // never reached the handler
   });
 
+  // #307: an oversized chunked body with no content-length header must still be
+  // rejected (413) after read — the header cap is skipped when length is absent.
+  test("oversized chunked body (no content-length) is rejected (413) after read", async () => {
+    const ch = new WebhookChannel(
+      { secret: SECRET, defaultBot: "researcher", allowedSenders: [], maxMessageLength: 64 },
+      () => {},
+    );
+    let called = false;
+    ch.onMessage(async (m) => {
+      called = true;
+      return `echo:${m.text}`;
+    });
+    const bigRaw = JSON.stringify({ text: "x".repeat(500) }); // ~520 bytes > 64 cap
+    const stream = new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(bigRaw));
+        c.close();
+      },
+    });
+    const req = new Request("http://127.0.0.1:1/channel/webhook", {
+      method: "POST",
+      headers: { "content-type": "application/json" }, // no content-length → chunked-style
+      body: stream,
+    });
+    const eh = (ch as unknown as { eventHandler: (r: Request) => Promise<Response> }).eventHandler;
+    const res = await eh(req);
+    expect(res.status).toBe(413);
+    expect(called).toBe(false); // never reached the handler
+  });
+
   // #203: per-IP rate limit applies BEFORE auth, keyed by connection IP, so an
   // unsigned flood is throttled regardless of the (attacker-controlled) sender.
   test("per-IP rate limit applies pre-auth and caps actual runs", async () => {
