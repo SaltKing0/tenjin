@@ -133,12 +133,28 @@ inbox:
   maxMessages: 500   # keep newest N per inbox (0 = unlimited)
 ```
 
+## Portable packages (export / import)
+
+Bots can be moved between machines or shared without copying keys or runtime
+state around by hand:
+
+- `tenjin bot export <name>` writes `<name>.tar.gz` (in the current directory)
+  containing the bot's portable content — `SOUL.md`, `config.yaml`, and any
+  bundled folders such as `skills/`. Sessions, memory, inbox and the global
+  `providers.yaml` (API keys) are **never** packaged.
+- `tenjin bot import <file.tar.gz>` restores a bot from a package. If a bot with
+  the same name already exists, the imported bot gets a numeric suffix
+  (`name-2`) instead of overwriting. The imported configuration is validated
+  like any other bot before the bot is left behind.
+
 ## Reference
 
 | Need | Command / file |
 | --- | --- |
 | Create a bot | `tenjin bot new <name>` |
 | List bots | `tenjin bot list` |
+| Export a bot (portable package) | `tenjin bot export <name>` |
+| Import a bot | `tenjin bot import <file.tar.gz>` |
 | Seed examples | `tenjin bot init-examples` |
 | Run as a bot | `tenjin --bot <name>` |
 | Bot profile code | `src/bots/profile.ts` |
