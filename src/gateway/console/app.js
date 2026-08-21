@@ -1693,7 +1693,7 @@ async function render() {
   const sidebar = el(
     "div",
     { class: "sidebar" },
-    el("div", { class: "logo" }, "TENJIN"),
+    el("img", { class: "logo", src: "/console/tenjinlogo.png", alt: "Tenjin" }),
     el(
       "nav",
       {},
@@ -1775,6 +1775,7 @@ function renderLogin() {
   const box = el(
     "div",
     { class: "login-box" },
+    el("img", { class: "login-logo", src: "/console/tenjinlogo.png", alt: "Tenjin" }),
     el("h1", {}, "Tenjin Console"),
     el("div", { class: "dim" }, "enter the gateway.listen.token from your config"),
     input,
