@@ -17,6 +17,7 @@ export interface HarnessConfig {
   pricing?: PricingOverride;
   providers?: { openai?: { baseUrl?: string } };
   models?: { default?: string; cheap?: string };
+  gateway?: unknown;
   memory?: {
     enabled?: boolean;
     vector?: { enabled?: boolean; model?: string };

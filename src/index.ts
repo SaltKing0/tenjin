@@ -41,6 +41,7 @@ import {
 } from "./bots/profile";
 import { createSendMessageTool, createCheckInboxTool } from "./bots/tools";
 import { createAskBotTool } from "./bots/delegate";
+import { Gateway } from "./gateway/gateway";
 import { unreadMessages } from "./bots/inbox";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
@@ -65,6 +66,10 @@ interface AppContext {
 async function main(): Promise<number> {
   if (process.argv[2] === "bot") {
     return botCommand(process.argv.slice(3));
+  }
+
+  if (process.argv[2] === "gateway") {
+    return gatewayCommand(process.argv.slice(3));
   }
 
   let cli: CliArgs;
@@ -274,6 +279,36 @@ function botCommand(args: string[]): number {
         stdout.write("usage: tenjin bot new|list|init-examples\n");
         return 2;
     }
+  } catch (e) {
+    if (e instanceof ConfigError) {
+      stdout.write(`config error: ${e.message}\n`);
+      return 2;
+    }
+    stdout.write(`error: ${(e as Error).message}\n`);
+    return 1;
+  }
+}
+
+async function gatewayCommand(args: string[]): Promise<number> {
+  const dryRun = args.includes("--dry-run");
+  const home = tenjinHome();
+  const cwd = process.cwd();
+  try {
+    const { config } = loadConfig(cwd, home, { skipModelCheck: dryRun });
+    if (!dryRun) validateConfig(config);
+    const registry = new ProviderRegistry(config.providers?.openai?.baseUrl);
+    const gateway = new Gateway({ home, cwd, config, registry, log: (l) => stdout.write(`${l}\n`) });
+    if (dryRun) {
+      stdout.write("gateway dry-run:\n");
+      for (const line of gateway.describe()) stdout.write(`  ${line}\n`);
+      return 0;
+    }
+    const controller = new AbortController();
+    process.on("SIGINT", () => controller.abort());
+    process.on("SIGTERM", () => controller.abort());
+    stdout.write(`gateway running — Ctrl-C to stop\n`);
+    await gateway.run(controller.signal);
+    return 0;
   } catch (e) {
     if (e instanceof ConfigError) {
       stdout.write(`config error: ${e.message}\n`);
