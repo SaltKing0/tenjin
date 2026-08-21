@@ -2,13 +2,16 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { appendFileSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { startHttpServer, type HttpServerHandle } from "../src/gateway/http";
-import { createConsoleApi } from "../src/gateway/console-api";
+import { createConsoleApi, type JobsApi } from "../src/gateway/console-api";
+import { Gateway } from "../src/gateway/gateway";
 import { createBot } from "../src/bots/profile";
 import { AuditLog } from "../src/audit/log";
 import type { AuditEvent, AuditKind } from "../src/audit/log";
 import { createRequest } from "../src/gateway/approvals";
 import type { HarnessConfig } from "../src/config/types";
+import type { ChatResponse, Provider } from "../src/provider/types";
 
 let home: string;
 let server: HttpServerHandle | null = null;
@@ -49,8 +52,12 @@ function seedSession(bot: string | null, id: string): void {
   );
 }
 
-function startServer(): string {
+function startServer(opts: {
+  config?: HarnessConfig;
+  jobs?: JobsApi;
+} = {}): string {
   const audit = new AuditLog(join(home, "audit.jsonl"));
+  const cfg = opts.config ?? config();
   server = startHttpServer({
     config: { port: 0, host: "127.0.0.1", token: TOKEN },
     handleMessage: async () => null,
@@ -58,9 +65,10 @@ function startServer(): string {
     api: createConsoleApi({
       home,
       cwd: home,
-      config: config(),
+      config: cfg,
       registry: { get: () => ({ name: "mock", chat: async () => ({ stopReason: "end_turn", content: [], usage: { inputTokens: 0, outputTokens: 0 } }) }) } as never,
       audit,
+      jobs: opts.jobs,
     }),
     consoleDir: join(import.meta.dir, "..", "src", "gateway", "console"),
   });
@@ -377,4 +385,217 @@ test("POST /api/settings/test reports a rejected key as ok:false", async () => {
   } finally {
     upstream.stop(true);
   }
+});
+
+function mockProvider(reply = "job output"): Provider {
+  return {
+    name: "mock",
+    async chat(): Promise<ChatResponse> {
+      return {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: reply }],
+        usage: { inputTokens: 100, outputTokens: 10 },
+      };
+    },
+  };
+}
+
+interface JobRow {
+  name: string;
+  bot: string;
+  prompt: string;
+  cron: string | null;
+  every: string | null;
+  policy: string;
+  lastRun: { at: string; stopReason: string; costUSD: number; error?: string } | null;
+  nextDue: string;
+  nextDueMs: number;
+  running: boolean;
+}
+
+describe("jobs API", () => {
+  test("GET /api/jobs lists defined jobs with cron, policy, lastRun, nextDue", async () => {
+    const base = startServer({
+      config: {
+        ...config(),
+        gateway: {
+          jobs: [
+            { name: "digest", bot: "researcher", prompt: "summarize today", cron: "0 9 * * *" },
+            { name: "ping", bot: "researcher", prompt: "ping", every: "15m" },
+          ],
+        },
+      },
+    });
+    const res = await fetch(`${base}/api/jobs`, { headers: auth });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { jobs: JobRow[] };
+    expect(data.jobs.map((j) => j.name)).toEqual(["digest", "ping"]);
+
+    const digest = data.jobs[0];
+    if (!digest) throw new Error("missing digest");
+    expect(digest.bot).toBe("researcher");
+    expect(digest.prompt).toBe("summarize today");
+    expect(digest.cron).toBe("0 9 * * *");
+    expect(digest.every).toBeNull();
+    expect(digest.policy).toBe("read-only");
+    expect(digest.lastRun).toBeNull();
+    expect(digest.running).toBe(false);
+    expect(digest.nextDueMs).toBeGreaterThan(Date.now() - 1000);
+    expect(new Date(digest.nextDue).getTime()).toBe(digest.nextDueMs);
+
+    const ping = data.jobs[1];
+    if (!ping) throw new Error("missing ping");
+    expect(ping.every).toBe("15m");
+    expect(ping.cron).toBeNull();
+    expect(ping.policy).toBe("read-only");
+  });
+
+  test("GET /api/jobs includes the heartbeat when enabled", async () => {
+    const base = startServer({
+      config: {
+        ...config(),
+        gateway: { heartbeat: { enabled: true, bot: "researcher", every: "30m" } },
+      },
+    });
+    const data = (await (await fetch(`${base}/api/jobs`, { headers: auth })).json()) as {
+      jobs: JobRow[];
+    };
+    expect(data.jobs.some((j) => j.name === "heartbeat")).toBe(true);
+  });
+
+  test("POST /api/jobs/:id/run fires immediately, records lastRun, leaves nextDue unchanged", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: {
+        ...config(),
+        gateway: {
+          jobs: [{ name: "digest", bot: "researcher", prompt: "summarize", every: "1h" }],
+        },
+      },
+      registry: { get: () => mockProvider("DIGEST BODY") } as never,
+    });
+    const before = gw.jobs[0]?.nextDueMs;
+    expect(before).toBeGreaterThan(0);
+
+    const base = startServer({
+      jobs: {
+        list: () => gw.listJobs(),
+        runNow: (name) => gw.runNow(name),
+      },
+    });
+
+    const res = await fetch(`${base}/api/jobs/${encodeURIComponent("digest")}/run`, {
+      method: "POST",
+      headers: auth,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      name: string;
+      stopReason: string;
+      costUSD: number;
+      text: string;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.name).toBe("digest");
+    expect(body.stopReason).toBe("end_turn");
+    expect(body.text).toContain("DIGEST BODY");
+    expect(body.costUSD).toBeGreaterThan(0);
+
+    const listed = (await (await fetch(`${base}/api/jobs`, { headers: auth })).json()) as {
+      jobs: JobRow[];
+    };
+    const digest = listed.jobs.find((j) => j.name === "digest");
+    expect(digest?.nextDueMs).toBe(before);
+    expect(digest?.lastRun?.stopReason).toBe("end_turn");
+    expect(digest?.lastRun?.costUSD).toBe(body.costUSD);
+    expect(typeof digest?.lastRun?.at).toBe("string");
+  });
+
+  test("POST /api/jobs/:id/run unknown job is 404", async () => {
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: {
+        ...config(),
+        gateway: { jobs: [{ name: "digest", bot: "researcher", prompt: "p", every: "1h" }] },
+      },
+      registry: { get: () => mockProvider() } as never,
+    });
+    const base = startServer({
+      jobs: { list: () => gw.listJobs(), runNow: (name) => gw.runNow(name) },
+    });
+    const res = await fetch(`${base}/api/jobs/nope/run`, { method: "POST", headers: auth });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: string }).error).toMatch(/unknown job/i);
+  });
+
+  test("POST /api/jobs/:id/run while already running is 409", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const gw = new Gateway({
+      home,
+      cwd: home,
+      config: {
+        ...config(),
+        gateway: { jobs: [{ name: "digest", bot: "researcher", prompt: "p", every: "1h" }] },
+      },
+      registry: {
+        get: () => ({
+          name: "mock",
+          async chat(): Promise<ChatResponse> {
+            await gate;
+            return {
+              stopReason: "end_turn",
+              content: [{ type: "text", text: "done" }],
+              usage: { inputTokens: 1, outputTokens: 1 },
+            };
+          },
+        }),
+      } as never,
+    });
+    const base = startServer({
+      jobs: { list: () => gw.listJobs(), runNow: (name) => gw.runNow(name) },
+    });
+
+    const first = fetch(`${base}/api/jobs/digest/run`, { method: "POST", headers: auth });
+    let listed: JobRow[] = [];
+    for (let i = 0; i < 50; i++) {
+      await Bun.sleep(10);
+      listed = ((await (await fetch(`${base}/api/jobs`, { headers: auth })).json()) as {
+        jobs: JobRow[];
+      }).jobs;
+      if (listed[0]?.running) break;
+    }
+    expect(listed[0]?.running).toBe(true);
+
+    const second = await fetch(`${base}/api/jobs/digest/run`, { method: "POST", headers: auth });
+    expect(second.status).toBe(409);
+    expect(((await second.json()) as { error: string }).error).toMatch(/already running/i);
+
+    release();
+    const firstRes = await first;
+    expect(firstRes.status).toBe(200);
+    expect(((await firstRes.json()) as { ok: boolean }).ok).toBe(true);
+  });
+
+  test("POST /api/jobs/:id/run without a live gateway is 503", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/jobs/digest/run`, { method: "POST", headers: auth });
+    expect(res.status).toBe(503);
+  });
+
+  test("console jobs panel JS lists jobs, shows details, and posts run now", () => {
+    const js = readFileSync(
+      join(import.meta.dir, "..", "src", "gateway", "console", "app.js"),
+      "utf8",
+    );
+    expect(js).toContain('["jobs", "Jobs"');
+    expect(js).toContain("/api/jobs");
+    expect(js).toContain("/run");
+    expect(js).toContain("Run now");
+  });
 });

@@ -11,6 +11,12 @@ import { AuditLog, formatAuditMarkdown, type AuditKind, type AuditQuery } from "
 import { approvalsDir, getRequest, resolveRequest } from "./approvals";
 import { getSettings, applySettings, detectModels, testProvider, DetectTimeoutError } from "./settings";
 import { sessionsDir } from "../config/loader";
+import { listConfiguredJobs, type JobRunResult, type JobView } from "./gateway";
+
+export interface JobsApi {
+  list(): JobView[];
+  runNow(name: string): Promise<JobRunResult>;
+}
 
 export interface ConsoleApiDeps {
   home: string;
@@ -18,6 +24,7 @@ export interface ConsoleApiDeps {
   config: HarnessConfig;
   registry: ProviderRegistry;
   audit: AuditLog;
+  jobs?: JobsApi;
 }
 
 const ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
@@ -234,6 +241,31 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
         "text/markdown; charset=utf-8",
         `audit-${day}.md`,
       );
+    }
+
+    if (path === "/api/jobs" && req.method === "GET") {
+      const jobs = deps.jobs ? deps.jobs.list() : listConfiguredJobs(deps.config.gateway);
+      return json({ jobs });
+    }
+
+    const jobRunMatch = /^\/api\/jobs\/([^/]+)\/run$/.exec(path);
+    if (jobRunMatch && req.method === "POST") {
+      if (!deps.jobs) return json({ error: "gateway jobs not running" }, 503);
+      let name = "";
+      try {
+        name = decodeURIComponent(jobRunMatch[1] ?? "");
+      } catch {
+        return json({ error: "invalid job id" }, 400);
+      }
+      if (!name) return json({ error: "missing id" }, 400);
+      const result = await deps.jobs.runNow(name);
+      if (!result.ok && result.code === "not_found") {
+        return json({ error: result.error }, 404);
+      }
+      if (!result.ok && result.code === "busy") {
+        return json({ error: result.error }, 409);
+      }
+      return json(result, result.ok ? 200 : 500);
     }
 
     if (path === "/api/approvals" && req.method === "GET") {
