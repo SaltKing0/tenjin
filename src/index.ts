@@ -26,6 +26,7 @@ import { indexPendingSessions } from "./memory/indexer";
 import { createEmbeddings } from "./provider/embeddings";
 import { vectorEnabled } from "./config/loader";
 import { createRecallTool, createRememberTool, readFacts } from "./tools/memory";
+import { createUseSkillTool } from "./skills/activate";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
@@ -140,6 +141,7 @@ async function main(): Promise<number> {
       tools.push(createRememberTool({ memoryDirPath: memDir }));
       tools.push(createRecallTool({ memoryDirPath: memDir, projectPath: cwd, embeddings }));
     }
+    tools.push(createUseSkillTool({ home, projectDir: cwd }));
     const ctx: AppContext = { config, registry, defaultRef, cheapRef, system, tools, cwd };
 
     if (cli.print !== undefined) {
@@ -166,6 +168,7 @@ async function main(): Promise<number> {
       logger: log,
       sessionsDir: dir,
       memoryDir: memDir,
+      home,
     });
     return 0;
   } catch (e) {
@@ -191,6 +194,7 @@ async function continueSession(
     logger: log,
     sessionsDir: dir,
     memoryDir: memDir,
+    home: tenjinHome(),
     initialMessages: rebuildMessages(events),
     initialSpentUSD: sumUsage(events).spentUSD,
   });

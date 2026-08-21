@@ -13,6 +13,8 @@ import type { EventLogger, SessionEvent } from "../session/events";
 import { rebuildMessages, sumUsage } from "../session/events";
 import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
+import { buildSkillsSection, summarizeSkills } from "../skills/activate";
+import { getSkill, listSkills } from "../skills/loader";
 import { listSummaries, sessionsWithoutSummary } from "../memory/summaries";
 import { loadChunks, indexedSessionIds } from "../memory/vector-store";
 import { readFacts } from "../tools/memory";
@@ -29,6 +31,7 @@ export interface ReplOptions {
   registry: ProviderRegistry;
   defaultRef: ModelRef;
   cheapRef: ModelRef | null;
+  home: string;
   system: string;
   tools: ToolDef[];
   cwd: string;
@@ -48,6 +51,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     logger: opts.logger,
     sessionId: opts.sessionId,
     active: opts.defaultRef,
+    pinnedSkills: new Set<string>(),
   };
   state.budget.spentUSD = opts.initialSpentUSD ?? 0;
   const sessionAllowed = new Set<string>();
@@ -98,11 +102,13 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       controller = new AbortController();
       turnActive = true;
       stdout.write("\n");
+      const skillsSection = buildSkillsSection(opts.home, opts.cwd, state.pinnedSkills);
+      const turnSystem = skillsSection ? `${opts.system}\n\n${skillsSection}` : opts.system;
       try {
         const result = await runAgentTurn({
           provider: activeProvider(opts, state),
           model: state.active.model,
-          system: opts.system,
+          system: turnSystem,
           tools: opts.tools,
           messages: state.messages,
           budget: state.budget,
@@ -151,6 +157,7 @@ interface ReplState {
   logger: SessionLog | undefined;
   sessionId: string;
   active: ModelRef;
+  pinnedSkills: Set<string>;
 }
 
 function activeProvider(opts: ReplOptions, state: ReplState): Provider {
@@ -179,6 +186,8 @@ async function handleCommand(
           "/fork [n]        branch current conversation at event n",
           "/replay          print trajectory of this session",
           "/memory          memory layer status",
+          "/skills          list installed skills",
+          "/skill <n> [off] pin a skill into every turn",
           "",
         ].join("\n"),
       );
@@ -223,6 +232,40 @@ async function handleCommand(
         stdout.write(dim(`${t.name.padEnd(12)} ${t.group}${sessionAllowed.has(t.name) ? " (approved this session)" : ""}\n`));
       }
       return;
+    case "/skills": {
+      const all = listSkills(opts.home, opts.cwd);
+      if (all.length === 0) {
+        stdout.write(dim("no skills installed (~/.tenjin/skills or .tenjin/skills)\n"));
+        return;
+      }
+      for (const s of all) {
+        const pin = state.pinnedSkills.has(s.name) ? green(" ●") : "";
+        stdout.write(`${s.name.padEnd(20)}${dim(` ${s.source}  ${s.description}`)}${pin}\n`);
+      }
+      return;
+    }
+    case "/skill": {
+      const name = rest[0];
+      if (!name) {
+        stdout.write(red("usage: /skill <name> [off]\n"));
+        return;
+      }
+      if (rest[1] === "off") {
+        state.pinnedSkills.delete(name);
+        stdout.write(dim(`unpinned ${name}\n`));
+        return;
+      }
+      const skill = getSkill(opts.home, opts.cwd, name);
+      if (!skill) {
+        stdout.write(red(`unknown skill "${name}" — /skills to list\n`));
+        return;
+      }
+      state.pinnedSkills.add(skill.name);
+      stdout.write(
+        dim(`pinned ${skill.name} — active from next message (/skill ${skill.name} off to unpin)\n`),
+      );
+      return;
+    }
     case "/sessions": {
       if (!opts.sessionsDir) {
         stdout.write(red("sessions not available\n"));

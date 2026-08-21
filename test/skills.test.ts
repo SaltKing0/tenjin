@@ -9,6 +9,8 @@ import {
   saveSkill,
   skillTemplate,
 } from "../src/skills/loader";
+import { buildSkillsSection, createUseSkillTool, summarizeSkills } from "../src/skills/activate";
+import { dispatch } from "../src/tools/registry";
 
 let home: string;
 let project: string;
@@ -132,4 +134,65 @@ test("skillTemplate produces valid parseable scaffold", () => {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), md);
   expect(getSkill(home, project, "my-new-skill")?.name).toBe("my-new-skill");
+});
+
+describe("buildSkillsSection", () => {
+  beforeEach(() => {
+    writeSkill(home, "testing", 'name: "testing"\ndescription: "How to test"', "RUN bun test", "global");
+    writeSkill(project, "deploy", 'name: "deploy"\ndescription: "How to deploy"', "RUN deploy.sh", "project");
+  });
+
+  test("null when nothing pinned", () => {
+    expect(buildSkillsSection(home, project, [])).toBeNull();
+  });
+
+  test("renders pinned skill with header and content", () => {
+    const section = buildSkillsSection(home, project, ["testing"]);
+    expect(section).toContain("# Active skills");
+    expect(section).toContain("## testing — How to test");
+    expect(section).toContain("RUN bun test");
+  });
+
+  test("multiple pinned skills separated; unknown names skipped", () => {
+    const section = buildSkillsSection(home, project, ["testing", "deploy", "ghost"]);
+    expect(section).toContain("RUN bun test");
+    expect(section).toContain("RUN deploy.sh");
+    expect(section).not.toContain("ghost");
+  });
+});
+
+describe("use_skill tool", () => {
+  beforeEach(() => {
+    writeSkill(home, "testing", 'name: "testing"\ndescription: "How to test"', "RUN bun test", "global");
+  });
+
+  const dispatchUse = (name: string) =>
+    dispatch(
+      [createUseSkillTool({ home, projectDir: project })],
+      "use_skill",
+      { name },
+      { cwd: project },
+    );
+
+  test("returns skill body for known name", async () => {
+    const r = await dispatchUse("testing");
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("# testing (How to test)");
+    expect(r.output).toContain("RUN bun test");
+  });
+
+  test("unknown skill is an error result", async () => {
+    const r = await dispatchUse("nope");
+    expect(r.ok).toBe(false);
+    expect(r.output).toContain('unknown skill "nope"');
+  });
+});
+
+test("summarizeSkills formats listing lines", () => {
+  writeSkill(home, "aa-first", 'name: "aa-first"\ndescription: "First one"');
+  const lines = summarizeSkills(listSkills(home, project)).split("\n");
+  expect(lines[0]).toContain("aa-first");
+  expect(lines[0]).toContain("global");
+  expect(lines[0]).toContain("First one");
+  expect(summarizeSkills([])).toBe("no skills installed");
 });
