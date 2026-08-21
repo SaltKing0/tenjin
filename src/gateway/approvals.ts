@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { emit } from "./events";
 
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
 
@@ -60,6 +61,7 @@ export function createRequest(
     status: "pending",
   };
   writeFileSync(requestPath(home, req.id), JSON.stringify(req, null, 2));
+  emit("approval.new", { id: req.id });
   return req;
 }
 
@@ -132,6 +134,7 @@ export function resolveRequest(
     req.status = status;
     writeFileSync(lock, JSON.stringify(req, null, 2));
     renameSync(lock, path);
+    emit("approval.resolved", { id, status });
     return true;
   } catch {
     rmSync(lock, { force: true });

@@ -17,6 +17,7 @@ import { createCheckInboxTool, createSendMessageTool } from "../bots/tools";
 import { createRememberTool } from "../tools/memory";
 import { formatInbox, inboxPolicyFromConfig, markRead, unreadMessages } from "../bots/inbox";
 import type { ToolDef } from "../tools/registry";
+import { emit } from "./events";
 
 export interface JobLastRun {
   atMs: number;
@@ -451,6 +452,7 @@ export class Gateway {
 
   private async execute(job: ScheduledJob): Promise<HeadlessResult> {
     this.log(`job ${job.name} start (bot=${job.botName})`);
+    emit("job.status", { name: job.name, bot: job.botName, running: true });
     try {
       const profile = resolveBot(this.deps.home, job.botName);
       const ref = botModelRef(profile, this.deps.config);
@@ -570,6 +572,16 @@ export class Gateway {
         this.persistJob(job);
       }
       throw e;
+    } finally {
+      const lr = job.lastRun;
+      emit("job.status", {
+        name: job.name,
+        bot: job.botName,
+        running: false,
+        stopReason: lr?.stopReason ?? "error",
+        costUSD: lr?.costUSD ?? 0,
+        ...(lr?.error ? { error: lr.error } : {}),
+      });
     }
   }
 

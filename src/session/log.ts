@@ -10,6 +10,7 @@ import {
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SessionEvent } from "./events";
+import { emit } from "../gateway/events";
 
 export interface SessionSummary {
   id: string;
@@ -126,6 +127,9 @@ export class SessionLog {
   append(event: SessionEvent): void {
     appendFileSync(this.path, `${JSON.stringify(event)}\n`);
     this.updateMeta(event);
+    if (event.t === "session_start") {
+      emit("session.event", { id: this.id, t: "session_start" });
+    }
   }
 
   events(): SessionEvent[] {

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { timingSafeEqual, createHash } from "node:crypto";
 import { ConfigError } from "../config/types";
+import { subscribe, historySince, formatEvent, type GatewayEvent } from "./events";
 
 export interface HttpListenConfig {
   port: number;
@@ -174,6 +175,10 @@ export function startHttpServer(deps: HttpDeps): HttpServerHandle {
         const streamed = await deps.streamChat(req);
         return streamed ?? Response.json({ error: "not found" }, { status: 404 });
       }
+      if (req.method === "GET" && url.pathname === "/api/events") {
+        const lastId = Number(req.headers.get("last-event-id")) || 0;
+        return eventsStream(lastId);
+      }
       if (url.pathname.startsWith("/api/")) {
         if (deps.api) {
           const response = await deps.api(req, url);
@@ -186,4 +191,44 @@ export function startHttpServer(deps: HttpDeps): HttpServerHandle {
   });
   const port = server.port ?? deps.config.port;
   return { port, stop: () => server.stop(true) };
+}
+
+function eventsStream(fromId: number): Response {
+  const encoder = new TextEncoder();
+  let lastId = fromId;
+  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let unsub: (() => void) | null = null;
+  let cleanup: (() => void) | null = null;
+  const send = (e: GatewayEvent) => {
+    controller?.enqueue(encoder.encode(formatEvent(e)));
+    lastId = e.id;
+  };
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+      for (const e of historySince(fromId)) send(e);
+      unsub = subscribe(send);
+      const hb = setInterval(
+        () => controller?.enqueue(encoder.encode(": ping\n\n")),
+        15_000,
+      );
+      cleanup = () => {
+        unsub?.();
+        unsub = null;
+        controller = null;
+        clearInterval(hb);
+      };
+    },
+    cancel() {
+      cleanup?.();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    },
+  });
 }
