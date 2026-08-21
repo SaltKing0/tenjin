@@ -20,6 +20,24 @@ export interface SessionSummary {
   parentId?: string;
 }
 
+/** One `compression` event as surfaced in the session-tree view. */
+export interface SessionTreeCompression {
+  beforeTokens: number;
+  afterTokens: number;
+  elidedTokens: number;
+  ts: string;
+}
+
+/** One session in the lineage chain (current first, then its ancestors). */
+export interface SessionTreeNode {
+  id: string;
+  parentId: string | null;
+  preview: string;
+  mtimeMs: number;
+  /** Compression (elision) boundaries that occurred inside this session. */
+  compressions: SessionTreeCompression[];
+}
+
 export interface CorruptLine {
   path: string;
   line: number;
@@ -206,6 +224,52 @@ export class SessionLog {
 function newId(): string {
   const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12);
   return `${ts}-${randomUUID().slice(0, 4)}`;
+}
+
+/**
+ * Build the lineage view for a session (#131): the session itself followed by
+ * its ancestors up the `parent.id` chain, with each node's compression
+ * (elision) events marked. Resolves the id by prefix like the rest of the
+ * session API; a missing start/parent simply stops the walk. Never throws after
+ * the initial resolve.
+ */
+export function sessionTree(dir: string, idPrefix: string): SessionTreeNode[] {
+  const summaries = new Map<string, { preview: string; mtimeMs: number }>();
+  for (const s of SessionLog.list(dir)) summaries.set(s.id, s);
+
+  const nodes: SessionTreeNode[] = [];
+  const seen = new Set<string>();
+  let current = SessionLog.resolve(dir, idPrefix);
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    const events = current.readEvents().events;
+    const start = events.find((e) => e.t === "session_start");
+    const parentId =
+      start?.t === "session_start" && start.parent ? start.parent.id : null;
+    const compressions: SessionTreeCompression[] = events
+      .filter((e): e is SessionEvent & { t: "compression" } => e.t === "compression")
+      .map((e) => ({
+        beforeTokens: e.beforeTokens,
+        afterTokens: e.afterTokens,
+        elidedTokens: e.elidedTokens,
+        ts: e.ts,
+      }));
+    const meta = summaries.get(current.id);
+    nodes.push({
+      id: current.id,
+      parentId,
+      preview: meta?.preview ?? "",
+      mtimeMs: meta?.mtimeMs ?? 0,
+      compressions,
+    });
+    if (!parentId) break;
+    try {
+      current = SessionLog.resolve(dir, parentId);
+    } catch {
+      break;
+    }
+  }
+  return nodes;
 }
 
 export function idFromPath(filePath: string): string {

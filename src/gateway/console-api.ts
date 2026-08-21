@@ -15,7 +15,7 @@ import {
 } from "../bots/profile";
 import { sanitizeSkillName } from "../skills/loader";
 import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
-import { SessionLog } from "../session/log";
+import { SessionLog, sessionTree } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { aggregateSpend, perBotBreakdown } from "../audit/spend";
 import { AuditLog, formatAuditMarkdown, AUDIT_KINDS, type AuditKind, type AuditQuery } from "../audit/log";
@@ -362,6 +362,21 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
         if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
         const forked = SessionLog.fork(dir, id);
         return json({ ok: true, id: forked.id, parentId: id });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 404);
+      }
+    }
+
+    const treeMatch = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/tree$/.exec(path);
+    if (treeMatch && req.method === "GET") {
+      const id = treeMatch[1];
+      if (!id) return json({ error: "missing id" }, 400);
+      const bot = url.searchParams.get("bot");
+      const dir = scopeSessionsDir(deps.home, bot);
+      if (!dir) return json({ error: "unknown bot" }, 400);
+      try {
+        const nodes = sessionTree(dir, id);
+        return json({ id: nodes[0]?.id ?? id, nodes });
       } catch (e) {
         return json({ error: (e as Error).message }, 404);
       }
