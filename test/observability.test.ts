@@ -217,6 +217,32 @@ describe("observability spend cache (#186)", () => {
   });
 });
 
+describe("observability disk-count cache (#317)", () => {
+  test("sessions/approvals are cached within TTL and rescanned after expiry", () => {
+    seedSession("s1", 0.5);
+    const t = new Date();
+    const stats = new ProviderStats();
+    const h1 = buildHealth(t.getTime(), { home, stats, jobs: [] });
+    expect(h1.sessions).toBe(1);
+    expect(h1.pendingApprovals).toBe(0);
+
+    // A new session + approval land after the first computation, but within the
+    // TTL the cached counts are returned — no per-scrape FS rescan.
+    seedSession("s2", 0.25);
+    createRequest(home, { bot: "researcher", tool: "write_file" });
+    const withinTtl = new Date(t.getTime() + OBSERVABILITY_CACHE_TTL_MS - 1);
+    const h2 = buildHealth(withinTtl.getTime(), { home, stats, jobs: [] });
+    expect(h2.sessions).toBe(1); // stale-by-design within TTL
+    expect(h2.pendingApprovals).toBe(0);
+
+    // After the TTL expires the rescan picks up the new session + approval.
+    const pastTtl = new Date(t.getTime() + OBSERVABILITY_CACHE_TTL_MS + 1);
+    const h3 = buildHealth(pastTtl.getTime(), { home, stats, jobs: [] });
+    expect(h3.sessions).toBe(2);
+    expect(h3.pendingApprovals).toBe(1);
+  });
+});
+
 describe("http endpoints", () => {
   function start(): string {
     const stats = new ProviderStats();

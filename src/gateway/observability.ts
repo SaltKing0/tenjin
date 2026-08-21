@@ -36,9 +36,44 @@ interface SpendCacheEntry {
 // (TTL ~20s, keyed by home + calendar day).
 let spendCache: SpendCacheEntry | null = null;
 
-/** Clear the in-process spend cache (mainly for tests). */
+interface DiskCountCacheEntry {
+  home: string;
+  computedAtMs: number;
+  sessions: number;
+  pendingApprovals: number;
+}
+
+// #317: health/metrics also synchronously readdir-scanned every session scope
+// and every pending approval per scrape, on the same event loop that serves SSE
+// and /message. Cache those counts with the same ~20s TTL as the spend totals.
+let diskCountCache: DiskCountCacheEntry | null = null;
+
+function diskCounts(
+  home: string,
+  nowMs: number,
+): { sessions: number; pendingApprovals: number } {
+  if (
+    diskCountCache &&
+    diskCountCache.home === home &&
+    nowMs - diskCountCache.computedAtMs < OBSERVABILITY_CACHE_TTL_MS
+  ) {
+    return {
+      sessions: diskCountCache.sessions,
+      pendingApprovals: diskCountCache.pendingApprovals,
+    };
+  }
+  const counts = {
+    sessions: countSessions(home),
+    pendingApprovals: countPendingApprovals(home),
+  };
+  diskCountCache = { home, computedAtMs: nowMs, ...counts };
+  return counts;
+}
+
+/** Clear the in-process spend + disk-count caches (mainly for tests). */
 export function resetObservabilityCache(): void {
   spendCache = null;
+  diskCountCache = null;
 }
 
 export interface ObservabilityDeps {
@@ -102,13 +137,14 @@ export function buildHealth(nowMs: number, deps: ObservabilityDeps): Record<stri
   const activeJobs = jobs.filter((j) => j.running).length;
   const pendingJobs = jobs.filter((j) => !j.running && j.nextDueMs <= nowMs).length;
   const spend = spendTotals(deps.home, new Date(nowMs));
+  const counts = diskCounts(deps.home, nowMs);
   return {
     activeJobs,
     pendingJobs,
-    pendingApprovals: countPendingApprovals(deps.home),
+    pendingApprovals: counts.pendingApprovals,
     budgetSpentTodayUSD: spend.todayUSD,
     spentTodayDay: spend.today,
-    sessions: countSessions(deps.home),
+    sessions: counts.sessions,
     spendUSDTotal: spend.totalUSD,
     providers: deps.stats.reachability(),
   };
@@ -128,6 +164,7 @@ export function buildMetrics(nowMs: number, deps: ObservabilityDeps): string {
   const jobs = deps.jobs ?? [];
   const pendingJobs = jobs.filter((j) => !j.running && j.nextDueMs <= nowMs).length;
   const spend = spendTotals(deps.home, new Date(nowMs));
+  const counts = diskCounts(deps.home, nowMs);
   const reach = deps.stats.reachability();
   const lines: string[] = [];
   lines.push("# HELP tenjin_spend_usd_total Total spend recorded across all sessions, USD.");
@@ -138,7 +175,7 @@ export function buildMetrics(nowMs: number, deps: ObservabilityDeps): string {
   lines.push(`tenjin_jobs_pending ${pendingJobs}`);
   lines.push("# HELP tenjin_sessions_total Number of persisted session logs across all scopes.");
   lines.push("# TYPE tenjin_sessions_total gauge");
-  lines.push(`tenjin_sessions_total ${countSessions(deps.home)}`);
+  lines.push(`tenjin_sessions_total ${counts.sessions}`);
   lines.push("# HELP tenjin_provider_errors_total Provider chat calls that failed since boot.");
   lines.push("# TYPE tenjin_provider_errors_total counter");
   lines.push(`tenjin_provider_errors_total ${deps.stats.total()}`);
