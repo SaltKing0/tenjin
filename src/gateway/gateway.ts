@@ -9,7 +9,7 @@ import { Redactor } from "../security/redact";
 import { parseGatewaySettings, type GatewaySettings } from "./config";
 import { createCheckInboxTool, createSendMessageTool } from "../bots/tools";
 import { createRememberTool } from "../tools/memory";
-import { formatInbox, inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
+import { formatInbox, inboxPolicyFromConfig, markRead, unreadMessages } from "../bots/inbox";
 import type { ToolDef } from "../tools/registry";
 
 export interface ScheduledJob {
@@ -140,6 +140,12 @@ export class Gateway {
         `Heartbeat check. ${inboxPart}` +
         `If a message needs a reply, answer the sender with send_message. ` +
         `Briefly note anything actionable; if nothing needs attention reply with just "ok".`;
+      if (unread.length > 0) {
+        markRead(
+          profile.inboxDir,
+          unread.map((m) => m.id),
+        );
+      }
       const tools: ToolDef[] = [
         createCheckInboxTool({ profile, policy: inboxPolicy }),
         createSendMessageTool({ home: this.deps.home, fromBot: profile.name, policy: inboxPolicy }),

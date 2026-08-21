@@ -294,6 +294,50 @@ describe("heartbeat", () => {
     expect(toolNames).toContain("use_skill");
   });
 
+  test("heartbeat surfaces user messages first and marks them read", async () => {
+    mkdirSync(join(home, "bots", "worker", "inbox"), { recursive: true });
+    writeFileSync(
+      join(home, "bots", "worker", "inbox", "m-bot.json"),
+      JSON.stringify({
+        id: "m-bot",
+        from: "alice",
+        to: "worker",
+        subject: "bot note",
+        body: "from another bot",
+        ts: "2026-08-21T10:00:00.000Z",
+        read: false,
+      }),
+    );
+    writeFileSync(
+      join(home, "bots", "worker", "inbox", "m-user.json"),
+      JSON.stringify({
+        id: "m-user",
+        from: "user",
+        to: "worker",
+        subject: "idea for tomorrow",
+        body: "please sketch the auth refactor",
+        ts: "2026-08-21T11:00:00.000Z",
+        read: false,
+      }),
+    );
+
+    const capture: { req?: ChatRequest } = {};
+    const gw = makeGateway("ok", capture);
+    await gw.fireDue(Date.now() + 60 * 60_000);
+    await Bun.sleep(30);
+
+    const message = String(capture.req?.messages[0]?.content);
+    expect(message).toContain("2 unread message(s)");
+    const userAt = message.indexOf("from user:");
+    const botAt = message.indexOf("from alice:");
+    expect(userAt).toBeGreaterThan(-1);
+    expect(botAt).toBeGreaterThan(-1);
+    expect(userAt).toBeLessThan(botAt);
+    expect(message).toContain("please sketch the auth refactor");
+
+    expect(listMessages(join(home, "bots", "worker", "inbox")).every((m) => m.read)).toBe(true);
+  });
+
   test("heartbeat replies to the sender via send_message, landing in the sender inbox", async () => {
     createBot(home, "alice");
     // alice leaves a message in worker's inbox

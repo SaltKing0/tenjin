@@ -61,7 +61,7 @@ import {
   waitApproval,
   summarizeInput,
 } from "./gateway/approvals";
-import { inboxPolicyFromConfig, unreadMessages } from "./bots/inbox";
+import { inboxPolicyFromConfig, leaveUserMessage, unreadMessages } from "./bots/inbox";
 import { readTool } from "./tools/read";
 import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
@@ -88,6 +88,10 @@ interface AppContext {
 async function main(): Promise<number> {
   if (process.argv[2] === "bot") {
     return botCommand(process.argv.slice(3));
+  }
+
+  if (process.argv[2] === "tell") {
+    return tellCommand(process.argv.slice(3));
   }
 
   if (process.argv[2] === "gateway") {
@@ -302,6 +306,29 @@ async function main(): Promise<number> {
       return 2;
     }
     stdout.write(`error: ${(e as Error)?.message ?? e}\n`);
+    return 1;
+  }
+}
+
+function tellCommand(args: string[]): number {
+  const name = args[0];
+  const text = args.slice(1).join(" ");
+  if (!name || !text.trim()) {
+    stdout.write("usage: tenjin tell <bot> <text>\n");
+    return 2;
+  }
+  const home = tenjinHome();
+  try {
+    const profile = resolveBot(home, name);
+    const msg = leaveUserMessage(profile.inboxDir, profile.name, text);
+    stdout.write(`left message for ${profile.name} (id ${msg.id})\n`);
+    return 0;
+  } catch (e) {
+    if (e instanceof ConfigError) {
+      stdout.write(`config error: ${e.message}\n`);
+      return 2;
+    }
+    stdout.write(`error: ${(e as Error).message}\n`);
     return 1;
   }
 }
