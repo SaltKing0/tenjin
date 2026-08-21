@@ -202,6 +202,34 @@ function capturingProvider(reply: string): Provider & { requests: ChatRequest[] 
   };
 }
 
+/**
+ * Provider that resolves after `delayMs` but aborts (rejects) if the abort
+ * signal fires first — like a real provider that honors the signal. Used to
+ * prove the dependent's run actually gets its full budget after the wait.
+ */
+function abortableDelayed(delayMs: number, reply: string): Provider {
+  return {
+    name: "abortable",
+    async chat(_req: ChatRequest, _callbacks?: unknown, signal?: AbortSignal): Promise<ChatResponse> {
+      return await new Promise<ChatResponse>((resolve, reject) => {
+        const timer = setTimeout(
+          () =>
+            resolve({
+              stopReason: "end_turn",
+              content: [{ type: "text", text: reply }],
+              usage: { inputTokens: 1, outputTokens: 1 },
+            }),
+          delayMs,
+        );
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new Error("aborted"));
+        });
+      });
+    },
+  };
+}
+
 describe("delegation chains", () => {
   test("dependsOn waits for the dependency and injects its result into the prompt", async () => {
     const dep = startAsyncTask(deps(delayedProvider(0, "RESULT_A")), {
@@ -305,6 +333,71 @@ describe("delegation chains", () => {
     const chainFinal = await chain.settled;
     expect(chainFinal.status).toBe("error");
     expect(chainFinal.error).toMatch(/dependency/);
+  });
+
+  // #182: the wait phase and the run phase are budgeted separately — the run
+  // gets its own full budget after a slow dependency finally resolves, instead
+  // of whatever remained of a single shared deadline.
+  test("slow dependency + short run — the run gets its own full budget", async () => {
+    // Dependency resolves in ~20ms, but the dependent polls every DEP_POLL_MS
+    // (100ms), so the wait phase visibly consumes ~100ms of a 200ms budget. The
+    // run then needs (and must get) its own ~150ms — a total that would exceed
+    // the old single 200ms deadline and abort the run in flight.
+    const dep = startAsyncTask(deps(delayedProvider(20, "SLOW_RESULT")), {
+      targetBot: "researcher",
+      message: "slow dep",
+    });
+    const chain = startAsyncTask(deps(abortableDelayed(150, "FULL_RUN")), {
+      targetBot: "researcher",
+      message: "after slow dep",
+      dependsOn: dep.task_id,
+      timeoutMs: 200,
+    });
+    // Old single-deadline behaviour: wait(~100) + run(~150) = ~250 > 200 would
+    // abort the run (its provider honors the signal); the fix gives the run a
+    // fresh 200ms budget so it completes.
+    const chainFinal = await chain.settled;
+    expect(chainFinal.status).toBe("done");
+    expect(chainFinal.result).toContain("FULL_RUN");
+    expect(chainFinal.error).toBeUndefined();
+  });
+
+  // #182: the run-phase timeout error is distinct from a dependency-wait timeout.
+  test("run-phase timeout reports 'timeout during run'", async () => {
+    // Dependency completes instantly so the task reaches the run phase, then the
+    // provider hangs and the run-phase budget trips.
+    const dep = startAsyncTask(deps(delayedProvider(0, "OK")), {
+      targetBot: "researcher",
+      message: "quick dep",
+    });
+    await dep.settled;
+    const chain = startAsyncTask(deps(hangProvider(), { defaultTimeoutMs: 30 }), {
+      targetBot: "researcher",
+      message: "hangs in run",
+      dependsOn: dep.task_id,
+      timeoutMs: 30,
+    });
+    const chainFinal = await chain.settled;
+    expect(chainFinal.status).toBe("error");
+    expect(chainFinal.error).toMatch(/timeout during run/);
+  });
+
+  // #182: the dependency-wait timeout error is distinct from a run timeout.
+  test("dependency-wait timeout reports 'timed out waiting for dependency task'", async () => {
+    // A dependency that takes longer than the dependent's wait budget to finish.
+    const pending = startAsyncTask(deps(delayedProvider(600, "later")), {
+      targetBot: "researcher",
+      message: "still slow",
+    });
+    const chain = startAsyncTask(deps(delayedProvider(0, "SHOULD NOT RUN")), {
+      targetBot: "researcher",
+      message: "after pending dep",
+      dependsOn: pending.task_id,
+      timeoutMs: 40,
+    });
+    const chainFinal = await chain.settled;
+    expect(chainFinal.status).toBe("error");
+    expect(chainFinal.error).toMatch(/timed out waiting for dependency task/);
   });
 
   test("notifyBot writes a completion message to that bot's inbox", async () => {

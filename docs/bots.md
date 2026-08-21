@@ -144,7 +144,11 @@ See [docs/architecture.md](architecture.md#gateway) for the full gateway config.
   (`src/bots/tasks.ts`): `ask_bot_async` returns a `task_id` immediately and
   runs the target bot headless in the background; each task has a configurable
   timeout (default 5 min) and its status/result is persisted under the target
-  bot at `~/.tenjin/bots/<name>/tasks/`. Tasks can be chained into pipelines:
+  bot at `~/.tenjin/bots/<name>/tasks/`. For a `dependsOn` task, the
+  dependency-wait phase and the run phase are budgeted separately — a slow
+  dependency may use up its own wait budget, and the run still gets a fresh
+  full timeout, never whatever the wait left over. Tasks can be chained into
+  pipelines:
   a task with `dependsOn: <task_id>` only starts once that dependency is
   `done` and receives the dependency's result in its prompt (a dependency that
   errors or times out fails the chain); a task with `notifyBot: <name>` writes
