@@ -2,12 +2,13 @@ import type { HarnessConfig } from "../config/types";
 import { ConfigError } from "../config/types";
 import { ProviderRegistry } from "../provider/registry";
 import { resolveBot, botModelRef, botBudgetUSD } from "../bots/profile";
-import { runHeadless } from "../agent/headless";
+import { runHeadless, type HeadlessOptions } from "../agent/headless";
 import { formatUSD } from "../agent/budget";
 import { parseSchedule, nextRun, type Schedule } from "./schedule";
 import { Redactor } from "../security/redact";
 import { parseGatewaySettings, type GatewaySettings } from "./config";
-import { createCheckInboxTool } from "../bots/tools";
+import { createCheckInboxTool, createSendMessageTool } from "../bots/tools";
+import { createRememberTool } from "../tools/memory";
 import { formatInbox, unreadMessages } from "../bots/inbox";
 import type { ToolDef } from "../tools/registry";
 
@@ -127,6 +128,7 @@ export class Gateway {
 
     let message = job.prompt;
     let extraTools: ToolDef[] | undefined;
+    let approve: HeadlessOptions["approve"];
     if (job.kind === "heartbeat") {
       const unread = unreadMessages(profile.inboxDir);
       const inboxPart =
@@ -135,8 +137,17 @@ export class Gateway {
           : "Your inbox is empty.\n";
       message =
         `Heartbeat check. ${inboxPart}` +
+        `If a message needs a reply, answer the sender with send_message. ` +
         `Briefly note anything actionable; if nothing needs attention reply with just "ok".`;
-      extraTools = [createCheckInboxTool({ profile })];
+      const tools: ToolDef[] = [
+        createCheckInboxTool({ profile }),
+        createSendMessageTool({ home: this.deps.home, fromBot: profile.name }),
+        createRememberTool({ memoryDirPath: profile.memoryDir }),
+      ];
+      extraTools = tools;
+      // The heartbeat is fully autonomous: allow its own tools, keep read access.
+      approve = async (name, group) =>
+        group === "read" || tools.some((t) => t.name === name);
     }
 
     const result = await runHeadless({
@@ -150,6 +161,7 @@ export class Gateway {
       pricing: this.deps.config.pricing,
       policy: "read-only",
       extraTools,
+      approve,
       sessionLogDir: profile.sessionsDir,
       sessionBot: profile.name,
       guard: this.deps.guard,
