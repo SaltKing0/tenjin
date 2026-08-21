@@ -63,6 +63,7 @@ import { Redactor } from "./security/redact";
 import { AuditLog, formatAudit, auditPath } from "./audit/log";
 import { aggregateSpend, renderSpend } from "./audit/spend";
 import { TelegramChannel } from "./gateway/telegram";
+import { SlackChannel } from "./gateway/slack";
 import { createMessageHandler, chatStreamResponse, type HandleContext } from "./gateway/handler";
 import { startHttpServer } from "./gateway/http";
 import { createConsoleApi } from "./gateway/console-api";
@@ -709,6 +710,7 @@ async function gatewayCommand(args: string[]): Promise<number> {
     });
 
     const tg = gateway.settings.telegram;
+    const sl = gateway.settings.slack;
     let telegramHandle:
       | ((
           text: string,
@@ -794,6 +796,68 @@ async function gatewayCommand(args: string[]): Promise<number> {
             userId: msg.userId,
           }),
         log,
+      );
+      return channel;
+    });
+
+    registerChannel("slack", () => {
+      if (!sl?.enabled) throw new ConfigError("gateway.slack is not enabled");
+      const botToken = sl.botToken;
+      if (!botToken) throw new ConfigError("gateway.slack.enabled requires botToken");
+      const signingSecret = sl.signingSecret;
+      if (!signingSecret) throw new ConfigError("gateway.slack.enabled requires signingSecret");
+      const defaultBot = sl.defaultBot as string;
+      const available = listBots(home);
+      const allowWrites = sl.allowWrites === true;
+      const approvalTimeoutMs = sl.approvalTimeoutMs ?? 120_000;
+      let channel: SlackChannel;
+      const notifyApproval =
+        sl.adminChannel !== undefined
+          ? async (chatId: number, text: string) => channel.sendTo(chatId, text)
+          : undefined;
+      const handleForSlack = createMessageHandler({
+        home,
+        cwd,
+        config,
+        registry,
+        availableBots: available,
+        defaultBot,
+        allowWrites,
+        approvalTimeoutMs,
+        guard,
+        audit,
+        log,
+        notifyApproval,
+      });
+      channel = new SlackChannel(
+        {
+          botToken,
+          signingSecret,
+          defaultBot,
+          allowedChannels: sl.allowedChannels,
+          adminChannel: sl.adminChannel,
+          port: process.env.SLACK_WEBHOOK_PORT
+            ? Number(process.env.SLACK_WEBHOOK_PORT)
+            : undefined,
+          rateLimitMax: sl.rateLimitMax,
+          rateLimitWindowMs: sl.rateLimitWindowMs,
+          maxMessageLength: sl.maxMessageLength,
+          onRejected: (info) =>
+            audit.append(
+              "channel_reject",
+              info.userId,
+              `slack message rejected (${info.reason})`,
+            ),
+        },
+        log,
+      );
+      channel.onMessage((msg) =>
+        handleForSlack(msg.text, {
+          actor: String(msg.userId),
+          source: "slack",
+          chatId: msg.chatId,
+          userId: msg.userId,
+        }),
       );
       return channel;
     });

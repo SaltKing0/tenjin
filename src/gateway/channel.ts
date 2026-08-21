@@ -36,3 +36,7 @@ export function knownChannel(kind: string): boolean {
 registerChannel("telegram", () => {
   throw new ConfigError("telegram channel factory not wired");
 });
+
+registerChannel("slack", () => {
+  throw new ConfigError("slack channel factory not wired");
+});

@@ -256,7 +256,7 @@ gateway:
   catchUp:                    # re-run jobs missed while the gateway was down
     enabled: true             # default true
     max: 50                   # max runs caught up per boot
-  channels: [telegram]        # active channel kinds; default [telegram] when telegram.enabled
+  channels: [telegram]        # active channel kinds; defaults to each channel whose *.enabled is true
   telegram:
     enabled: true
     defaultBot: researcher
@@ -266,6 +266,13 @@ gateway:
     adminChatId: 123456789
     allowWrites: true
     approvalTimeoutMs: 120000
+  slack:
+    enabled: true
+    defaultBot: researcher
+    allowedChannels: [C1234567890]  # REQUIRED allowlist (security)
+    botToken: xoxb-your-token       # required
+    signingSecret: your-secret      # required
+    adminChannel: C1234567890
   heartbeat:
     enabled: true
     bot: researcher
@@ -296,10 +303,19 @@ gateway:
   caught up when the next scheduled run after its last run is already in the
   past; the last run of each job is persisted in `~/.tenjin/gateway-state.json`.
 - **`channels`** — the list of channel kinds the gateway starts. Each name must
-  be a registered channel (an unknown name is a config error). Defaults to
-  `[telegram]` when `telegram.enabled` is true, else empty.
+  be a registered channel (an unknown name is a config error). Defaults to the
+  set of channels with `enabled: true` (e.g. `[telegram]`, `[slack]`, or both);
+  empty when none are enabled.
 - **`telegram`** — requires a non-empty `allowedUsers` allowlist and a
   `TELEGRAM_BOT_TOKEN` env var.
+- **`slack`** — requires a non-empty `allowedChannels` allowlist, a `botToken`,
+  and a `signingSecret`. Receives Events API webhook POSTs (signed; the
+  `url_verification` challenge is answered automatically) and sends replies via
+  `chat.postMessage`. `adminChannel` is the destination for channel-level
+  `send(text)` (e.g. `postTo: slack`). Optional `rateLimitMax`,
+  `rateLimitWindowMs`, `maxMessageLength` mirror Telegram's #69 limits. By
+  default the webhook listens on an ephemeral port on `127.0.0.1`; set the
+  `SLACK_WEBHOOK_PORT` env var to pin a port.
 - **`jobs`** — scheduled prompts to a bot on a cron or `every` schedule
   (`postTo` routes the result to a channel). Optional `tz` (IANA name) interprets
   cron fields in that zone, including across DST; omitted `tz` keeps server local time.

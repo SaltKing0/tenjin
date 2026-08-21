@@ -28,6 +28,20 @@ export interface TelegramChannelConfig {
   maxMessageLength?: number;
 }
 
+export interface SlackChannelConfig {
+  enabled: boolean;
+  defaultBot?: string;
+  allowedChannels: string[];
+  botToken?: string;
+  signingSecret?: string;
+  adminChannel?: string;
+  allowWrites?: boolean;
+  approvalTimeoutMs?: number;
+  rateLimitMax?: number;
+  rateLimitWindowMs?: number;
+  maxMessageLength?: number;
+}
+
 export interface HeartbeatConfig {
   bot: string;
   intervalMs: number;
@@ -52,6 +66,7 @@ export interface CatchUpConfig {
 export interface GatewaySettings {
   jobs: JobConfig[];
   telegram: TelegramChannelConfig | null;
+  slack: SlackChannelConfig | null;
   channels: string[];
   heartbeat: HeartbeatConfig | null;
   listen: ListenConfig | null;
@@ -91,6 +106,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     return {
       jobs: [],
       telegram: null,
+      slack: null,
       channels: [],
       heartbeat: null,
       listen: null,
@@ -105,6 +121,7 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
   const settings: GatewaySettings = {
     jobs: [],
     telegram: null,
+    slack: null,
     channels: [],
     heartbeat: null,
     listen: null,
@@ -216,6 +233,45 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     };
   }
 
+  const rawSlack = gw.slack;
+  if (rawSlack !== undefined && rawSlack !== null) {
+    if (typeof rawSlack !== "object") throw new ConfigError("gateway.slack must be a mapping");
+    const sl = rawSlack as Record<string, unknown>;
+    const enabled = sl.enabled === true;
+    const allowedChannels = Array.isArray(sl.allowedChannels)
+      ? (sl.allowedChannels as unknown[]).map((c) => {
+          if (typeof c !== "string" || !c.trim()) {
+            throw new ConfigError("gateway.slack.allowedChannels must be channel id strings");
+          }
+          return c.trim();
+        })
+      : [];
+    if (enabled && allowedChannels.length === 0) {
+      throw new ConfigError(
+        "gateway.slack.enabled requires a non-empty allowedChannels allowlist (security)",
+      );
+    }
+    if (enabled && (typeof sl.defaultBot !== "string" || !sl.defaultBot.trim())) {
+      throw new ConfigError("gateway.slack.enabled requires a defaultBot");
+    }
+    settings.slack = {
+      enabled,
+      defaultBot: typeof sl.defaultBot === "string" ? sl.defaultBot : undefined,
+      allowedChannels,
+      botToken: typeof sl.botToken === "string" ? sl.botToken : undefined,
+      signingSecret: typeof sl.signingSecret === "string" ? sl.signingSecret : undefined,
+      adminChannel: typeof sl.adminChannel === "string" ? sl.adminChannel : undefined,
+      allowWrites: sl.allowWrites === true,
+      approvalTimeoutMs:
+        typeof sl.approvalTimeoutMs === "number" ? sl.approvalTimeoutMs : undefined,
+      rateLimitMax: typeof sl.rateLimitMax === "number" ? sl.rateLimitMax : undefined,
+      rateLimitWindowMs:
+        typeof sl.rateLimitWindowMs === "number" ? sl.rateLimitWindowMs : undefined,
+      maxMessageLength:
+        typeof sl.maxMessageLength === "number" ? sl.maxMessageLength : undefined,
+    };
+  }
+
   const rawChannels = gw.channels;
   if (rawChannels !== undefined && rawChannels !== null) {
     if (!Array.isArray(rawChannels)) {
@@ -234,7 +290,10 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
     }
     settings.channels = list;
   } else {
-    settings.channels = settings.telegram?.enabled ? ["telegram"] : [];
+    const defaults: string[] = [];
+    if (settings.telegram?.enabled) defaults.push("telegram");
+    if (settings.slack?.enabled) defaults.push("slack");
+    settings.channels = defaults;
   }
 
   const rawHb = gw.heartbeat;
@@ -269,7 +328,8 @@ export function parseGatewaySettings(raw: unknown): GatewaySettings {
   }
 
   if (settings.allowWrites === undefined) {
-    settings.allowWrites = settings.telegram?.allowWrites === true;
+    settings.allowWrites =
+      settings.telegram?.allowWrites === true || settings.slack?.allowWrites === true;
   }
 
   return settings;

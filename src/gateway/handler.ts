@@ -40,7 +40,7 @@ export interface HandlerDeps {
 
 export interface HandleContext {
   actor: string;
-  source: "telegram" | "http";
+  source: "telegram" | "http" | "slack";
   chatId?: number;
   userId?: number;
   onDelta?: (delta: string) => void;
