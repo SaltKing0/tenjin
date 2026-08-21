@@ -5,11 +5,12 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   unlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SessionLog } from "../src/session/log";
+import { SessionLog, idFromPath } from "../src/session/log";
 import {
   rebuildMessages,
   sumUsage,
@@ -195,7 +196,7 @@ describe("fork", () => {
     return log;
   }
 
-  test("fork copies all events by default and records parent", () => {
+  test("fork records parent and events() returns full history", () => {
     const source = seedSource();
     const fork = SessionLog.fork(dir, source.id);
 
@@ -281,4 +282,79 @@ describe("fork", () => {
     SessionLog.fork(dir, source.id, 2);
     expect(source.events().length).toBe(before);
   });
+
+  test("forked session delivers identical event history via the parent chain", () => {
+    const source = seedSource();
+    const fork = SessionLog.fork(dir, source.id);
+    const src = source.events();
+    const got = fork.events();
+    expect(got).toHaveLength(src.length);
+    expect(got.slice(1)).toEqual(src.slice(1));
+  });
+
+  test("fork writes a back-reference and does not copy parent events onto disk", () => {
+    const source = seedSource();
+    source.append(userMsg("x".repeat(8_000)));
+    const sourceSize = statSync(source.path).size;
+    const fork = SessionLog.fork(dir, source.id);
+    const raw = readFileSync(fork.path, "utf8").trim();
+    const lines = raw.split("\n");
+    expect(lines).toHaveLength(1);
+    const start = JSON.parse(lines[0]!);
+    expect(start.t).toBe("session_start");
+    expect(start.parent).toEqual({ id: source.id, uptoEvent: source.events().length });
+    expect(raw).not.toContain("question one");
+    expect(statSync(fork.path).size).toBeLessThan(sourceSize / 2);
+  });
+
+  test("events() follows the parent chain then own appended events", () => {
+    const source = seedSource();
+    const fork = SessionLog.fork(dir, source.id, 3);
+    fork.append(userMsg("new on branch"));
+    const messages = rebuildMessages(fork.events());
+    expect(messages.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+    expect(messages[2]?.content).toBe("new on branch");
+    expect(readFileSync(fork.path, "utf8")).toContain("new on branch");
+    expect(readFileSync(fork.path, "utf8")).not.toContain("question one");
+  });
+
+  test("nested fork events() walk the chain without duplicating storage", () => {
+    const a = seedSource();
+    a.append(userMsg("payload-" + "Z".repeat(4_000)));
+    const b = SessionLog.fork(dir, a.id);
+    b.append(userMsg("branch b"));
+    const c = SessionLog.fork(dir, b.id);
+    expect(c.events().slice(1)).toEqual(b.events().slice(1));
+    expect(readFileSync(c.path, "utf8")).not.toContain("payload-");
+    expect(readFileSync(c.path, "utf8")).not.toContain("branch b");
+    expect(statSync(c.path).size).toBeLessThan(statSync(a.path).size / 2);
+  });
+
+  test("list preview of a fresh fork comes from inherited history", () => {
+    const source = seedSource();
+    const fork = SessionLog.fork(dir, source.id);
+    const row = SessionLog.list(dir).find((s) => s.id === fork.id);
+    expect(row?.preview).toBe("question one");
+  });
+});
+
+test("idFromPath uses basename (windows-safe)", () => {
+  expect(idFromPath("/tmp/sessions/20260101-abcd.jsonl")).toBe("20260101-abcd");
+  expect(idFromPath("C:\\Users\\me\\sessions\\20260101-abcd.jsonl")).toBe("20260101-abcd");
+  expect(idFromPath("20260101-abcd.jsonl")).toBe("20260101-abcd");
+});
+
+test("events() throws when a fork's parent file is gone", () => {
+  const source = SessionLog.create(dir);
+  source.append({
+    t: "session_start",
+    id: source.id,
+    ts: "t",
+    provider: "p",
+    model: "m",
+  });
+  source.append(userMsg("keep me"));
+  const fork = SessionLog.fork(dir, source.id);
+  unlinkSync(source.path);
+  expect(() => fork.events()).toThrow(/parent/);
 });
