@@ -167,6 +167,13 @@ settings changes — to `~/.tenjin/audit.jsonl`. [`src/audit/spend.ts`](../src/a
 aggregates cost across sessions and feeds `/api/spend`, `tenjin spend`, and
 budget enforcement.
 
+Beyond the per-session `budgetUSD`, a **global budget**
+([`src/audit/global-budget.ts`](../src/audit/global-budget.ts)) caps total spend
+across solo sessions **and** every bot for a UTC day and/or month
+(`globalBudget.dailyUSD` / `globalBudget.monthlyUSD`). It is consulted before
+each provider call, so a runaway bot or cron loop can't burn past the cap; a hit
+is recorded as a `budget_halt` audit event.
+
 ## Configuration
 
 Config is loaded from up to three YAML sources and merged in this order (later
@@ -197,6 +204,7 @@ with a dotted path; **unknown fields** only warn and are ignored.
 | `memory.enabled` / `memory.vector` | bool / map | Memory + vector recall |
 | `security` | map | Blocked patterns, disabled flag, workspace, redaction — see [docs/security.md](security.md) |
 | `inbox` | map | `ttlDays` / `maxMessages` for bot inboxes |
+| `globalBudget` | map | Global spend caps (USD) across solo + all bots: `dailyUSD` / `monthlyUSD`; `0` = unlimited — see [Audit & spend](#audit--spend) |
 | `gateway` | map | Jobs, Telegram, heartbeat, listen — see below |
 
 The generated template lives in `CONFIG_TEMPLATE` in

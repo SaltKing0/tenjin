@@ -44,6 +44,16 @@ export interface HarnessConfig {
   };
   inbox?: InboxConfig;
   retry?: RetryConfig;
+  /** Global spend limits (USD) across all scopes — see audit/global-budget.ts. */
+  globalBudget?: GlobalBudgetConfig;
+}
+
+/** `globalBudget` in config.yaml — global spend caps across solo + all bots. */
+export interface GlobalBudgetConfig {
+  /** Max total spend (USD) for the UTC calendar day across all scopes; 0 = unlimited. */
+  dailyUSD?: number;
+  /** Max total spend (USD) for the UTC calendar month across all scopes; 0 = unlimited. */
+  monthlyUSD?: number;
 }
 
 /** `inbox` in config.yaml. 0 disables the corresponding limit. */

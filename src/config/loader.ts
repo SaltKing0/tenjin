@@ -6,6 +6,7 @@ import { resolveModelRef } from "./models";
 import {
   ConfigError,
   type ApprovalMode,
+  type GlobalBudgetConfig,
   type HarnessConfig,
   type InboxConfig,
   type PricingConfig,
@@ -15,7 +16,7 @@ import {
 } from "./types";
 
 export { ConfigError };
-export type { ApprovalMode, HarnessConfig, PricingConfig, PricingOverride, ProviderName };
+export type { ApprovalMode, GlobalBudgetConfig, HarnessConfig, PricingConfig, PricingOverride, ProviderName };
 
 const DEFAULTS: HarnessConfig = {
   provider: "anthropic",
@@ -114,6 +115,14 @@ const SCHEMA: Record<string, FieldDef> = {
       initialDelayMs: { types: ["number"] },
       maxDelayMs: { types: ["number"] },
       retryableStatuses: { types: ["list"] },
+    },
+  },
+  // `globalBudget` from #36 (global spend caps across all scopes).
+  globalBudget: {
+    types: ["mapping"],
+    children: {
+      dailyUSD: { types: ["number"] },
+      monthlyUSD: { types: ["number"] },
     },
   },
 };
@@ -234,6 +243,9 @@ memory:
 #   maxAttempts: 3             # total attempts including the first
 #   initialDelayMs: 500        # backoff before the first retry, doubles each attempt (ms)
 #   maxDelayMs: 8000           # upper bound on the per-attempt backoff (ms)
+# globalBudget:                # global spend caps (USD) across solo + ALL bots
+#   dailyUSD: 2.0              # max total spend per UTC day across all scopes; 0 = unlimited
+#   monthlyUSD: 20.0           # max total spend per UTC month across all scopes; 0 = unlimited
 `;
 
 const SOUL_TEMPLATE = `# SOUL
@@ -456,6 +468,7 @@ function validate(cfg: HarnessConfig, globalPath: string, skipModelCheck: boolea
   validatePricing(cfg.pricing);
   validateInbox(cfg.inbox);
   validateRetry(cfg.retry);
+  validateGlobalBudget(cfg.globalBudget);
 }
 
 function validateRatePair(pair: unknown, label: string): void {
@@ -516,6 +529,19 @@ function validateRetry(retry: RetryConfig | undefined): void {
     ) {
       throw new ConfigError(`retry.retryableStatuses must be a list of HTTP status codes (100-599)`);
     }
+  }
+}
+
+function validateGlobalBudget(budget: GlobalBudgetConfig | undefined): void {
+  if (budget === undefined) return;
+  if (typeof budget !== "object" || budget === null) {
+    throw new ConfigError(`globalBudget must be a mapping`);
+  }
+  if (budget.dailyUSD !== undefined && (typeof budget.dailyUSD !== "number" || budget.dailyUSD < 0)) {
+    throw new ConfigError(`globalBudget.dailyUSD must be a number >= 0 (0 = unlimited)`);
+  }
+  if (budget.monthlyUSD !== undefined && (typeof budget.monthlyUSD !== "number" || budget.monthlyUSD < 0)) {
+    throw new ConfigError(`globalBudget.monthlyUSD must be a number >= 0 (0 = unlimited)`);
   }
 }
 
