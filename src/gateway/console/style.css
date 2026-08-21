@@ -8,7 +8,26 @@
   --ok: #3fb950;
   --warn: #d29922;
   --err: #f85149;
+  --hover: var(--hover);
+  --primary: var(--primary);
+  --on-primary: #ffffff;
   font-size: 14px;
+}
+
+/* #286: light theme — applied via data-theme="light" on <html>; dark is default. */
+[data-theme="light"] {
+  --bg: #ffffff;
+  --panel: #f6f8fa;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --dim: #59636e;
+  --accent: #0969da;
+  --ok: #1a7f37;
+  --warn: #9a6700;
+  --err: #d1242f;
+  --hover: #e0e4e8;
+  --primary: #0969da;
+  --on-primary: #ffffff;
 }
 
 * { box-sizing: border-box; }
@@ -46,7 +65,7 @@ body {
   cursor: pointer;
 }
 
-.sidebar nav a:hover { color: var(--text); background: #21262d; }
+.sidebar nav a:hover { color: var(--text); background: var(--hover); }
 .sidebar nav a.active { color: var(--text); border-left: 2px solid var(--accent); }
 
 /* #276: bot section under the panel nav in the sidebar */
@@ -89,6 +108,15 @@ body {
   border-bottom: 1px solid var(--border);
 }
 .topbar-sse {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text);
+}
+.topbar-theme {
   background: none;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -196,7 +224,7 @@ pre.approval-input {
 .err { color: var(--err); }
 
 button {
-  background: #21262d;
+  background: var(--hover);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -205,7 +233,7 @@ button {
   font-family: inherit;
 }
 button:hover { border-color: var(--accent); }
-button.primary { background: #1f6feb; border-color: #1f6feb; }
+button.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
 button.danger { background: transparent; color: var(--err); border-color: var(--err); }
 button:disabled { opacity: 0.5; cursor: default; }
 
@@ -213,9 +241,9 @@ button:disabled { opacity: 0.5; cursor: default; }
    hash routing instead of a click handler. */
 a.primary {
   display: inline-block;
-  background: #1f6feb;
-  color: #fff;
-  border: 1px solid #1f6feb;
+  background: var(--primary);
+  color: var(--on-primary);
+  border: 1px solid var(--primary);
   border-radius: 6px;
   padding: 6px 12px;
   text-decoration: none;
@@ -236,7 +264,7 @@ input, select {
 
 .chat-log { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .msg { max-width: 80%; padding: 8px 12px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; }
-.msg.you { align-self: flex-end; background: #1f6feb33; border: 1px solid #1f6feb66; }
+.msg.you { align-self: flex-end; background: var(--primary)33; border: 1px solid var(--primary)66; }
 .msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); }
 .msg.bot > :first-child { margin-top: 0; }
 .msg.bot > :last-child { margin-bottom: 0; }
@@ -345,7 +373,7 @@ input, select {
     border-left: none;
   }
   .sidebar nav a.active { border-left: none; border-top: 2px solid var(--accent); }
-  .sidebar nav a:hover { background: #21262d; }
+  .sidebar nav a:hover { background: var(--hover); }
 
   /* #276: the desktop bot section is dropped on the bottom-nav layout (bots stay
      reachable via the Bots panel and the top-bar switcher). */
