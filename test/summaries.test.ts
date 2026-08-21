@@ -8,6 +8,7 @@ import {
   listSummaries,
   readSummary,
   sessionsWithoutSummary,
+  sessionsWithStaleSummary,
   summarizeLatestSession,
   summaryPath,
   writeSummary,
@@ -120,6 +121,32 @@ test("sessionsWithoutSummary skips summarized ones", () => {
   );
   const pending = sessionsWithoutSummary(home, home);
   expect(pending.map((l) => l.id)).toEqual([b.id]);
+});
+
+test("sessionsWithStaleSummary includes summarized sessions with new events", () => {
+  const stale = seedSession("has summary, needs refresh");
+  const fresh = seedSession("has summary, no new events");
+  const none = seedSession("no summary at all");
+  // Both summarized sessions currently have uptoEvent === their event count.
+  writeSummary(
+    home,
+    { sessionId: stale.id, projectPath: "/p", uptoEvent: 3, created: "c" },
+    "stale",
+  );
+  writeSummary(
+    home,
+    { sessionId: fresh.id, projectPath: "/p", uptoEvent: 3, created: "c" },
+    "fresh",
+  );
+
+  // New events arrive on `stale` only, pushing it past its pointer.
+  stale.append({ t: "message", role: "user", content: "new event", ts: "t" });
+
+  const ids = sessionsWithStaleSummary(home, home).map((l) => l.id);
+  // `stale` (delta) and `none` (no summary) are pending; `fresh` is not.
+  expect(ids).toContain(stale.id);
+  expect(ids).toContain(none.id);
+  expect(ids).not.toContain(fresh.id);
 });
 
 describe("generateSummary", () => {
@@ -235,6 +262,64 @@ describe("generatePendingSummaries", () => {
     });
     expect(report.generated).toHaveLength(2);
     expect(provider.requests).toHaveLength(2);
+  });
+
+  test("a summarized session with new events is picked up and its delta folded in (#207)", async () => {
+    const log = seedSession("original activity");
+    const provider = mockProvider("updated summary");
+    const opts = {
+      sessionsDirPath: home,
+      memoryDirPath: home,
+      provider,
+      model: "m",
+      maxTokens: 512,
+      projectPath: project,
+    };
+
+    // First pass summarizes the session (3 events → uptoEvent 3).
+    let report = await generatePendingSummaries(opts);
+    expect(report.generated).toContain(log.id);
+    expect(readSummary(summaryPath(home, log.id))?.meta.uptoEvent).toBe(3);
+
+    // New activity arrives after the summary was written.
+    log.append({ t: "message", role: "user", content: "follow-up work", ts: "t" });
+    log.append({
+      t: "message",
+      role: "assistant",
+      content: [{ type: "text", text: "more" }],
+      ts: "t",
+    });
+
+    // A session that already has a summary should still be picked when it has
+    // events beyond uptoEvent.
+    report = await generatePendingSummaries(opts);
+    expect(report.generated).toContain(log.id);
+    // The delta was folded in and the pointer advanced.
+    expect(readSummary(summaryPath(home, log.id))?.meta.uptoEvent).toBe(5);
+    // The incremental pass rendered the new events, not the whole trajectory.
+    const prompts = provider.requests.map((r) => String(r.messages?.[0]?.content ?? ""));
+    const lastPrompt = prompts[prompts.length - 1] ?? "";
+    expect(lastPrompt).toContain("follow-up work");
+    expect(lastPrompt).not.toContain("original activity");
+  });
+
+  test("a summarized session with no new events stays skipped (#207)", async () => {
+    const log = seedSession("stable");
+    const provider = mockProvider();
+    const opts = {
+      sessionsDirPath: home,
+      memoryDirPath: home,
+      provider,
+      model: "m",
+      maxTokens: 512,
+      projectPath: project,
+    };
+    await generatePendingSummaries(opts);
+    expect(provider.requests).toHaveLength(1);
+    // No new events: a second pass makes no further provider call.
+    const second = await generatePendingSummaries(opts);
+    expect(second.generated).toHaveLength(0);
+    expect(provider.requests).toHaveLength(1);
   });
 });
 
