@@ -5,7 +5,7 @@ import type { Provider } from "../provider/types";
 import type { ChatMessage } from "../provider/types";
 import type { ToolDef } from "../tools/registry";
 import type { HarnessConfig } from "../config/loader";
-import { Budget, formatUSD, pricingFor, type Pricing } from "../agent/budget";
+import { Budget, formatUSD } from "../agent/budget";
 import { runAgentTurn, type TurnEvent } from "../agent/loop";
 import type { EventLogger, SessionEvent } from "../session/events";
 import { rebuildMessages, sumUsage } from "../session/events";
@@ -40,7 +40,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   const rl = createInterface({ input: stdin, output: stdout });
   const state = {
     messages: [...(opts.initialMessages ?? [])],
-    budget: new Budget(opts.config.budgetUSD, pricingOf(opts)),
+    budget: new Budget(opts.config.budgetUSD, opts.config.pricing),
     logger: opts.logger,
     sessionId: opts.sessionId,
   };
@@ -117,7 +117,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         }
         stdout.write(
           dim(
-            `  [in ${result.usage.inputTokens} out ${result.usage.outputTokens} · ${formatUSD(result.costUSD)} turn · ${formatUSD(state.budget.spentUSD)} total]\n`,
+            `  [${result.model} · in ${result.usage.inputTokens} out ${result.usage.outputTokens} · ${formatUSD(result.costUSD)} turn · ${formatUSD(state.budget.spentUSD)} total]\n`,
           ),
         );
       } catch (e) {
@@ -138,10 +138,6 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     process.removeListener("SIGINT", onSigint);
     rl.close();
   }
-}
-
-function pricingOf(opts: ReplOptions): Pricing {
-  return pricingFor(opts.config.model, opts.config.pricing);
 }
 
 interface ReplState {
@@ -180,13 +176,17 @@ async function handleCommand(
     case "/exit":
     case "/quit":
       return "exit";
-    case "/cost":
+    case "/cost": {
       stdout.write(
         dim(
           `spent ${formatUSD(state.budget.spentUSD)} of ${opts.config.budgetUSD > 0 ? formatUSD(opts.config.budgetUSD) : "no cap"}\n`,
         ),
       );
+      for (const entry of state.budget.breakdown()) {
+        stdout.write(dim(`  ${entry.model}: ${formatUSD(entry.usd)}\n`));
+      }
       return;
+    }
     case "/model":
       if (rest[0]) {
         opts.config.model = rest[0];

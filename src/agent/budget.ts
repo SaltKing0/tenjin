@@ -29,23 +29,31 @@ export function pricingFor(model: string, override?: PricingOverride): Pricing {
 
 export class Budget {
   spentUSD = 0;
+  private byModel = new Map<string, number>();
 
   constructor(
     readonly capUSD: number,
-    private pricing: Pricing,
+    private pricingOverride?: PricingOverride,
   ) {}
 
-  add(usage: Usage): number {
-    const cost =
-      (usage.inputTokens * this.pricing.inputPerMTok +
-        usage.outputTokens * this.pricing.outputPerMTok) /
-      1_000_000;
+  add(usage: Usage, model: string): number {
+    const p = pricingFor(model, this.pricingOverride);
+    const inTok = usage.inputTokens ?? 0;
+    const outTok = usage.outputTokens ?? 0;
+    const cost = (inTok * p.inputPerMTok + outTok * p.outputPerMTok) / 1_000_000;
     this.spentUSD += cost;
+    this.byModel.set(model, (this.byModel.get(model) ?? 0) + cost);
     return cost;
   }
 
   get exhausted(): boolean {
     return this.capUSD > 0 && this.spentUSD >= this.capUSD;
+  }
+
+  breakdown(): Array<{ model: string; usd: number }> {
+    return [...this.byModel.entries()]
+      .map(([model, usd]) => ({ model, usd }))
+      .sort((a, b) => b.usd - a.usd);
   }
 }
 

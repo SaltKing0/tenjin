@@ -22,6 +22,7 @@ export interface TurnResult {
   stopReason: StopReason | "budget_exhausted" | "max_iterations";
   usage: Usage;
   costUSD: number;
+  model: string;
 }
 
 export interface ApproveFn {
@@ -49,7 +50,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
 
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
     if (opts.budget.exhausted) {
-      return { stopReason: "budget_exhausted", usage: totals, costUSD };
+      return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model };
     }
 
     const response = await opts.provider.chat(
@@ -69,12 +70,12 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
 
     totals.inputTokens += response.usage.inputTokens;
     totals.outputTokens += response.usage.outputTokens;
-    const turnCost = opts.budget.add(response.usage);
+    const turnCost = opts.budget.add(response.usage, opts.model);
     costUSD += turnCost;
     opts.onEvent?.({ t: "usage", usage: response.usage, costUSD: turnCost });
 
     if (response.stopReason !== "tool_use") {
-      return { stopReason: response.stopReason, usage: totals, costUSD };
+      return { stopReason: response.stopReason, usage: totals, costUSD, model: opts.model };
     }
 
     const results: ToolResultBlock[] = [];
@@ -105,7 +106,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
     opts.messages.push({ role: "user", content: results });
   }
 
-  return { stopReason: "max_iterations", usage: totals, costUSD };
+  return { stopReason: "max_iterations", usage: totals, costUSD, model: opts.model };
 }
 
 function groupOf(tools: ToolDef[], name: string): ToolGroup {

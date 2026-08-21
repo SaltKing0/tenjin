@@ -204,10 +204,7 @@ function applyOverrides(config: HarnessConfig, cli: CliArgs): void {
 }
 
 async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
-  const budget = new Budget(
-    ctx.config.budgetUSD,
-    pricingFor(ctx.config.model, ctx.config.pricing),
-  );
+  const budget = new Budget(ctx.config.budgetUSD, ctx.config.pricing);
   const messages = [{ role: "user" as const, content: prompt }];
   let deniedOnce = false;
 
