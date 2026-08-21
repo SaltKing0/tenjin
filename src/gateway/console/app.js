@@ -565,6 +565,15 @@ async function panelSettings(main) {
       modelSelect.append(el("option", { value: provider + ":" + model }, provider + ":" + model));
     }
   }
+
+  // Select (and if needed add) a model in the default dropdown. Used to
+  // surface a model id the user typed manually even when it is not in any
+  // detected list.
+  function setDefaultModel(value) {
+    const already = [...modelSelect.options].some((o) => o.value === value);
+    if (!already) modelSelect.append(el("option", { value }, value));
+    modelSelect.value = value;
+  }
   const cheapSelect = el("select", { style: "width:100%" },
     el("option", { value: "" }, "(none)"));
   main.append(statusLine);
@@ -617,6 +626,23 @@ async function panelSettings(main) {
       }
     }
 
+    // Manual entry: lets the user type a model id even when /models returned
+    // nothing or an incomplete list. A bare id (e.g. deepseek-chat) is prefixed
+    // with this card's provider; a qualified ref (openai:…) is used as-is. The
+    // result becomes the default model so it is sent to the backend on save.
+    const manualInput = el("input", {
+      type: "text",
+      placeholder:
+        "or type a model id — e.g. " + (name === "openai" ? "deepseek-chat" : "claude-sonnet-4-6"),
+      style: "width:100%; margin-bottom:8px",
+      oninput: () => {
+        const v = manualInput.value.trim();
+        if (!v) return;
+        const prefixed = v.indexOf(":") !== -1 ? v : name + ":" + v;
+        setDefaultModel(prefixed);
+      },
+    });
+
     return el(
       "div",
       { class: "card" },
@@ -630,6 +656,8 @@ async function panelSettings(main) {
       el("div", { style: "display:flex; gap:8px; margin-bottom:4px" },
         el("button", { onclick: detect }, "test & detect models")),
       detectOut,
+      el("div", { class: "dim", style: "margin:2px 0 4px" }, "or type a model id (skip detect)"),
+      manualInput,
     );
   }
 
