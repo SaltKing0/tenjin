@@ -559,6 +559,7 @@ async function arenaRun(args: string[]): Promise<number> {
   let modelsList: string[] = [];
   let budget: number | undefined;
   let winnerIndex: number | undefined;
+  let judgeRef: string | undefined;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (!a) break;
@@ -574,6 +575,14 @@ async function arenaRun(args: string[]): Promise<number> {
         .map((s) => s.trim())
         .filter(Boolean);
       i++;
+    } else if (a === "--judge") {
+      const ref = args[++i];
+      if (!ref) {
+        throw new ConfigError(
+          "arena --judge requires a provider:model ref (e.g. anthropic:claude-opus-4)",
+        );
+      }
+      judgeRef = ref.trim();
     } else if (a === "--budget") {
       budget = Number(args[++i]);
     } else if (a === "--winner") {
@@ -609,6 +618,16 @@ async function arenaRun(args: string[]): Promise<number> {
     const mref = resolveModelRef(ref, config.provider);
     return { ref: mref, provider: registry.get(mref.provider) };
   });
+  const judge = judgeRef
+    ? (() => {
+        const mref = resolveModelRef(judgeRef, config.provider);
+        return {
+          provider: registry.get(mref.provider),
+          model: mref.model,
+          capUSD: budget ?? config.budgetUSD ?? 0,
+        };
+      })()
+    : undefined;
   const result = await runArena({
     entries,
     message: prompt,
@@ -619,6 +638,7 @@ async function arenaRun(args: string[]): Promise<number> {
     pricing: config.pricing,
     policy: "read-only",
     winnerIndex,
+    judge,
   });
   stdout.write(renderArena(result, prompt) + "\n");
   return 0;
