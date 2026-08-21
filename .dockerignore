@@ -1,0 +1,17 @@
+# Build-context exclusions for the tenjin gateway image (ops/docker/Dockerfile).
+# Keeps the context and the runtime image lean.
+node_modules/
+.git/
+.tenjin/
+dist/
+test/
+docs/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+start.md
+Start.md
+_d.txt
+_f.txt

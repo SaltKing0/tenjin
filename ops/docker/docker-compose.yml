@@ -1,0 +1,50 @@
+# Tenjin gateway — containerised server deployment.
+#
+# Usage (from this directory):
+#   cp .env.example .env        # then fill in .env (tokens, API keys)
+#   docker compose up -d --build
+#
+# The gateway config (jobs, channels, web-console token) is mounted read-only
+# from ./config.yaml, so you can edit it without rebuilding the image. Sessions,
+# memory, audit log and provider keys persist in the named `tenjin-home` volume.
+#
+# Secrets (API keys, channel tokens) come ONLY from the environment — never bake
+# them into the image or commit them.
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: ops/docker/Dockerfile
+    image: tenjin-gateway
+    container_name: tenjin-gateway
+    restart: unless-stopped
+    ports:
+      # Map the container's 3000 (gateway.listen.port in config.yaml) to the
+      # host. Change TENJIN_PORT in .env to expose a different host port.
+      - "${TENJIN_PORT:-3000}:3000"
+    environment:
+      TENJIN_HOME: /data
+      # Must equal `gateway.listen.token` in config.yaml — used by the
+      # HEALTHCHECK against /api/health.
+      GATEWAY_TOKEN: "${GATEWAY_TOKEN:-dev-local-token}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_API_BASE: "${TELEGRAM_API_BASE:-}"
+    volumes:
+      - tenjin-home:/data            # persistent tenjin home (sessions, memory, audit, keys)
+      - ./config.yaml:/data/config.yaml:ro   # operator-edited gateway config
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - "const r=await fetch('http://127.0.0.1:3000/api/health',{headers:{authorization:'Bearer '+process.env.GATEWAY_TOKEN}});if(!r.ok){console.error(await r.text());process.exit(1)}"
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  tenjin-home: {}
