@@ -27,6 +27,7 @@ export function getSettings(deps: SettingsDeps) {
       configured: !!anthropicKey,
       masked: maskKey(anthropicKey),
       source: config.providers?.anthropic?.apiKey ? "config" : anthropicKey ? "env" : "none",
+      baseUrl: config.providers?.anthropic?.baseUrl ?? null,
     },
     openai: {
       configured: !!openaiKey,
@@ -44,7 +45,7 @@ export function getSettings(deps: SettingsDeps) {
 export function applySettings(
   deps: SettingsDeps,
   body: {
-    anthropic?: { apiKey?: string } | null;
+    anthropic?: { apiKey?: string; baseUrl?: string } | null;
     openai?: { apiKey?: string; baseUrl?: string } | null;
     models?: { default?: string; cheap?: string };
   },
@@ -53,9 +54,15 @@ export function applySettings(
 
   if (body.anthropic !== undefined) {
     config.providers = config.providers ?? {};
-    config.providers.anthropic = body.anthropic?.apiKey
-      ? { apiKey: body.anthropic.apiKey }
-      : undefined;
+    const next = {
+      ...(body.anthropic?.baseUrl ? { baseUrl: body.anthropic.baseUrl } : {}),
+      ...(body.anthropic?.apiKey ? { apiKey: body.anthropic.apiKey } : {}),
+      // a console save must not drop an existing caching flag
+      ...(config.providers.anthropic?.caching !== undefined
+        ? { caching: config.providers.anthropic.caching }
+        : {}),
+    };
+    config.providers.anthropic = Object.keys(next).length ? next : undefined;
     if (!config.providers.anthropic) delete config.providers.anthropic;
   }
 
@@ -103,6 +110,7 @@ export function applySettings(
   deps.registry.configure({
     keys,
     openaiBaseUrl: config.providers?.openai?.baseUrl,
+    anthropicBaseUrl: config.providers?.anthropic?.baseUrl,
   });
   deps.audit?.(
     `providers updated (anthropic:${maskKey(keys.anthropic) ?? "unset"}, openai:${maskKey(keys.openai) ?? "unset"}, default:${config.models?.default ?? config.model})`,

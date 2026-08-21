@@ -26,7 +26,7 @@ export interface HarnessConfig {
   pricing?: PricingConfig;
   providers?: {
     openai?: { baseUrl?: string; apiKey?: string };
-    anthropic?: { apiKey?: string; caching?: boolean };
+    anthropic?: { apiKey?: string; baseUrl?: string; caching?: boolean };
   };
   models?: { default?: string; cheap?: string };
   gateway?: unknown;

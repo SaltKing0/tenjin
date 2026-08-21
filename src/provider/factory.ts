@@ -15,5 +15,6 @@ export function createProvider(config: HarnessConfig): Provider {
     },
     config.retry,
     config.providers?.anthropic?.caching,
+    config.providers?.anthropic?.baseUrl,
   ).get(config.provider);
 }
