@@ -84,6 +84,7 @@ import type { ToolDef } from "./tools/registry";
 import { parseArgs, HELP, type CliArgs } from "./cli/args";
 import { listJobs, addJob, removeJob, findJob, runJob, renderJob } from "./cli/jobs";
 import { PRODUCT } from "./version";
+import { backupHome, restoreHome } from "./backup";
 
 interface AppContext {
   config: HarnessConfig;
@@ -139,6 +140,14 @@ async function main(): Promise<number> {
 
   if (process.argv[2] === "arena") {
     return arenaCommand(process.argv.slice(3));
+  }
+
+  if (process.argv[2] === "backup") {
+    return backupCommand(process.argv.slice(3));
+  }
+
+  if (process.argv[2] === "restore") {
+    return restoreCommand(process.argv.slice(3));
   }
 
   let cli: CliArgs;
@@ -450,6 +459,78 @@ function botCommand(args: string[]): number {
   } catch (e) {
     if (e instanceof ConfigError) {
       stdout.write(`config error: ${e.message}\n`);
+      return 2;
+    }
+    stdout.write(`error: ${(e as Error).message}\n`);
+    return 1;
+  }
+}
+
+function backupStamp(d = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-` +
+    `${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`
+  );
+}
+
+function backupCommand(args: string[]): number {
+  const home = tenjinHome();
+  let out: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--out" || a === "-o") {
+      out = args[i + 1];
+      if (!out) {
+        stdout.write("usage: tenjin backup [--out <file>]\n");
+        return 2;
+      }
+      i++;
+    } else if (a === "-h" || a === "--help") {
+      stdout.write("usage: tenjin backup [--out <file>]\n");
+      return 0;
+    } else {
+      stdout.write(`unknown backup option: ${a}\n`);
+      return 2;
+    }
+  }
+  const file = out ?? join(process.cwd(), `tenjin-backup-${backupStamp()}.tar.gz`);
+  try {
+    const res = backupHome(home, file);
+    stdout.write(`backed up ${res.count} file(s) to ${file}\n`);
+    if (res.count > 0) stdout.write(`  ${res.files.join(", ")}\n`);
+    stdout.write(
+      "  note: providers.yaml (API keys) and secrets/ are never backed up\n",
+    );
+    return 0;
+  } catch (e) {
+    if (e instanceof ConfigError) {
+      stdout.write(`config error: ${e.message}\n`);
+      return 2;
+    }
+    stdout.write(`error: ${(e as Error).message}\n`);
+    return 1;
+  }
+}
+
+function restoreCommand(args: string[]): number {
+  const file = args.find((a) => a && !a.startsWith("-"));
+  if (!file) {
+    stdout.write("usage: tenjin restore <backup.tar.gz>\n");
+    return 2;
+  }
+  const home = tenjinHome();
+  try {
+    const res = restoreHome(home, file);
+    stdout.write(`restored ${res.count} file(s) into ${home}\n`);
+    if (res.count > 0) stdout.write(`  ${res.files.join(", ")}\n`);
+    stdout.write(
+      "  note: providers.yaml (API keys) and secrets/ are never restored\n",
+    );
+    return 0;
+  } catch (e) {
+    if (e instanceof ConfigError) {
+      stdout.write(`error: ${e.message}\n`);
       return 2;
     }
     stdout.write(`error: ${(e as Error).message}\n`);
