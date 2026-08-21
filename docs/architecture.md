@@ -105,7 +105,7 @@ serves the static console (`src/gateway/console/`) and
 | `GET /api/sessions` | List sessions |
 | `GET /api/spend` | Aggregated spend (rows + `byBot` per-bot breakdown) |
 | `GET /api/audit` | Security/audit events |
-| `GET /api/approvals` | Pending approvals |
+| `GET /api/approvals` | Pending approvals (scan expires stale ones) |
 | `POST /api/approvals/:id` | Approve / deny a request |
 | `GET /api/chat/stream` | Streaming chat (SSE) |
 

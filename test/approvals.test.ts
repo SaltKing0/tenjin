@@ -1,14 +1,30 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import {
+  approvalsDir,
   createRequest,
+  expirePendingRequests,
   getRequest,
   resolveRequest,
   summarizeInput,
   waitApproval,
 } from "../src/gateway/approvals";
+
+/** Write a pending request straight to disk with an explicit ts (bypasses createRequest). */
+function writePending(home: string, id: string, ts: string): void {
+  mkdirSync(approvalsDir(home), { recursive: true });
+  writeFileSync(
+    join(approvalsDir(home), `${id}.json`),
+    JSON.stringify(
+      { id, bot: "b", tool: "bash", inputSummary: "x", input: "x", ts, status: "pending" },
+      null,
+      2,
+    ),
+  );
+}
 
 let home: string;
 
@@ -86,4 +102,86 @@ test("createRequest stores the full tool input even when the summary is truncate
   const fetched = getRequest(home, req.id);
   expect(fetched?.input).toEqual({ command });
   expect((fetched?.input as { command: string }).command).toBe(command);
+});
+
+test("expirePendingRequests marks overdue pending requests as expired", () => {
+  const old = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  writePending(home, "stale1", old);
+  writePending(home, "stale2", old);
+  writePending(home, "fresh", new Date().toISOString());
+  const expired = expirePendingRequests(home, 3_600_000);
+  expect(expired).toBe(2);
+  expect(getRequest(home, "stale1")?.status).toBe("expired");
+  expect(getRequest(home, "stale2")?.status).toBe("expired");
+  expect(getRequest(home, "fresh")?.status).toBe("pending");
+});
+
+test("expirePendingRequests leaves already-resolved requests untouched", () => {
+  const old = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  writePending(home, "was-approved", old);
+  expect(resolveRequest(home, "was-approved", "approved")).toBe(true);
+  expect(expirePendingRequests(home, 3_600_000)).toBe(0);
+  expect(getRequest(home, "was-approved")?.status).toBe("approved");
+});
+
+test("resolveRequest on an expired request returns false", () => {
+  writePending(home, "exp", new Date(Date.now() - 2 * 3_600_000).toISOString());
+  expirePendingRequests(home, 3_600_000);
+  expect(getRequest(home, "exp")?.status).toBe("expired");
+  expect(resolveRequest(home, "exp", "approved")).toBe(false);
+  expect(getRequest(home, "exp")?.status).toBe("expired");
+});
+
+test("parallel double-resolve yields exactly one success", async () => {
+  const req = createRequest(home, { bot: "b", tool: "bash", inputSummary: "x" });
+  const results = await Promise.all(
+    (["approved", "denied"] as const).map((status) =>
+      Promise.resolve().then(() => resolveRequest(home, req.id, status)),
+    ),
+  );
+  expect(results.filter(Boolean)).toHaveLength(1);
+});
+
+test("two threads resolving the same request atomically yields one winner", async () => {
+  const rounds = 30;
+  let failures = 0;
+  for (let round = 0; round < rounds; round++) {
+    const req = createRequest(home, { bot: "b", tool: "bash", inputSummary: "x" });
+    const modUrl = new URL("../src/gateway/approvals.ts", import.meta.url).href;
+    const sab = new SharedArrayBuffer(4);
+    const gate = new Int32Array(sab);
+
+    const workerSrc = `
+      import { parentPort, workerData } from "node:worker_threads";
+      const { modUrl, home, id, status, sab } = workerData;
+      const gate = new Int32Array(sab);
+      Atomics.wait(gate, 0, 0);
+      const { resolveRequest } = await import(modUrl);
+      parentPort.postMessage(resolveRequest(home, id, status));
+    `;
+    const run = (status: "approved" | "denied") =>
+      new Promise<boolean>((resolve, reject) => {
+        const w = new Worker(workerSrc, {
+          eval: true,
+          workerData: { modUrl, home, id: req.id, status, sab },
+        });
+        w.once("message", (v) => {
+          w.terminate();
+          resolve(v as boolean);
+        });
+        w.once("error", (e) => {
+          w.terminate();
+          reject(e);
+        });
+      });
+
+    const pending = [run("approved"), run("denied")];
+    Atomics.store(gate, 0, 1);
+    Atomics.notify(gate, 0);
+    const results = await Promise.all(pending);
+    if (results.filter(Boolean).length !== 1) failures++;
+    const status = getRequest(home, req.id)?.status;
+    expect(status === "approved" || status === "denied").toBe(true);
+  }
+  expect(failures).toBe(0);
 });

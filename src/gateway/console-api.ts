@@ -8,7 +8,14 @@ import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { aggregateSpend, perBotBreakdown } from "../audit/spend";
 import { AuditLog, formatAuditMarkdown, type AuditKind, type AuditQuery } from "../audit/log";
-import { approvalsDir, getRequest, resolveRequest, type ApprovalRequest } from "./approvals";
+import {
+  approvalsDir,
+  DEFAULT_APPROVAL_TTL_MS,
+  expirePendingRequests,
+  getRequest,
+  resolveRequest,
+  type ApprovalRequest,
+} from "./approvals";
 import { getSettings, applySettings, detectModels, testProvider, DetectTimeoutError } from "./settings";
 import { sessionsDir } from "../config/loader";
 
@@ -249,6 +256,8 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
     }
 
     if (path === "/api/approvals" && req.method === "GET") {
+      // The list is the approval "scan": drop long-stale pending requests first.
+      expirePendingRequests(deps.home, DEFAULT_APPROVAL_TTL_MS);
       const dir = approvalsDir(deps.home);
       const pending: unknown[] = [];
       if (existsSync(dir)) {
