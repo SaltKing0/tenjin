@@ -46,6 +46,7 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   "/console/first-run.js": { file: "first-run.js", type: "application/javascript; charset=utf-8" },
   "/console/memory-scope.js": { file: "memory-scope.js", type: "application/javascript; charset=utf-8" },
   "/console/sidebar-bots.js": { file: "sidebar-bots.js", type: "application/javascript; charset=utf-8" },
+
   "/console/scope-defaults.js": { file: "scope-defaults.js", type: "application/javascript; charset=utf-8" },
 
   "/console/sidebar-groups.js": { file: "sidebar-groups.js", type: "application/javascript; charset=utf-8" },

@@ -8,6 +8,7 @@ import { setupChecklist } from "./setup-checklist.js";
 import { headerLabels, stackLabels, isHeaderRow } from "./tables.js";
 import { firstRunView, shouldShowFirstRun } from "./first-run.js";
 import { botSectionItems } from "./sidebar-bots.js";
+import { lastRunStatus, runStatusView, historyTones } from "./job-status.js";
 
 import { panelGroups } from "./sidebar-groups.js";
 
@@ -1154,9 +1155,47 @@ async function panelJobs(main) {
         }
         await refresh();
       };
-      const last = job.lastRun
-        ? `${job.lastRun.stopReason} · ${new Date(job.lastRun.at).toLocaleString()}`
-        : "never";
+      // #285: prominent run-status badge (ok/error/timeout/never) with a
+      // replay link for failed/timed-out runs and a compact history strip.
+      const lastStatus = lastRunStatus(job);
+      const lastView = runStatusView(lastStatus);
+      const lastRunRow = el(
+        "div",
+        { style: "margin-top:8px" },
+        el("span", { class: `badge run ${lastView.tone}` }, lastView.label),
+      );
+      if (job.lastRun) {
+        lastRunRow.append(" ", el("span", { class: "dim" }, new Date(job.lastRun.at).toLocaleString()));
+      }
+      const lastRunSession = job.history?.[0]?.sessionId;
+      if ((lastStatus === "error" || lastStatus === "timeout") && lastRunSession) {
+        lastRunRow.append(
+          " ",
+          el(
+            "a",
+            {
+              class: "run-link",
+              href: "#",
+              onclick: (e) => {
+                e.preventDefault();
+                openReplay(main, lastRunSession);
+              },
+            },
+            "view run session",
+          ),
+        );
+      }
+      const dotTones = historyTones(job.history);
+      if (dotTones.length > 0) {
+        lastRunRow.append(
+          " ",
+          el(
+            "span",
+            { class: "run-dots", title: "recent runs (newest first)" },
+            ...dotTones.map((t) => el("span", { class: `dot ${t}` })),
+          ),
+        );
+      }
       list.append(
         el(
           "div",
@@ -1169,7 +1208,7 @@ async function panelJobs(main) {
           job.running ? el("span", { class: "badge" }, "running") : null,
           el("div", { class: "dim", style: "margin-top:8px" }, `schedule: ${scheduleLabel(job)}`),
           el("div", { class: "dim" }, `next due: ${new Date(job.nextDueMs).toLocaleString()}`),
-          el("div", { class: "dim" }, `last run: ${last}`),
+          lastRunRow,
           job.prompt ? el("div", { class: "dim" }, `prompt: ${job.prompt}`) : null,
           job.postTo ? el("div", { class: "dim" }, `postTo: ${job.postTo}`) : null,
           el("div", { style: "margin-top:8px" }, runBtn),
