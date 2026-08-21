@@ -280,6 +280,7 @@ export class Gateway {
           this.deps.guard?.onBlock,
         ),
         redactor: Redactor.fromConfig(this.deps.config.security),
+        context: this.deps.config.context,
       });
       job.lastRun = {
         atMs: Date.now(),

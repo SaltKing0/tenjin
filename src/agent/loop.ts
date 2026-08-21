@@ -10,6 +10,7 @@ import { schemas } from "../tools/registry";
 import { dispatch, cap, type ToolDef, type ToolGroup } from "../tools/registry";
 import type { SecurityGuard } from "../security/guard";
 import type { Budget } from "./budget";
+import { compressMessages } from "../session/context";
 
 export const MAX_ITERATIONS = 25;
 
@@ -17,7 +18,13 @@ export type TurnEvent =
   | { t: "assistant_message"; content: ContentBlock[] }
   | { t: "tool_call"; id: string; name: string; input: unknown }
   | { t: "tool_result"; id: string; name: string; ok: boolean; output: string }
-  | { t: "usage"; usage: Usage; costUSD: number };
+  | { t: "usage"; usage: Usage; costUSD: number }
+  | {
+      t: "compression";
+      beforeTokens: number;
+      afterTokens: number;
+      elidedTokens: number;
+    };
 
 export interface TurnResult {
   stopReason: StopReason | "budget_exhausted" | "max_iterations";
@@ -48,6 +55,8 @@ export interface AgentTurnOptions {
   onEvent?: (e: TurnEvent) => void;
   onTextDelta?: (delta: string) => void;
   signal?: AbortSignal;
+  /** Resolved context-window guard (#101); runs before each provider call. */
+  contextGuard?: import("../session/context").ContextGuardConfig | null;
 }
 
 export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> {
@@ -60,6 +69,8 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
       opts.audit?.("budget_halt", `halted at ${opts.budget.spentUSD.toFixed(4)} USD`, opts.correlationId);
       return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText };
     }
+
+    maybeCompress(opts);
 
     const response = await opts.provider.chat(
       {
@@ -126,4 +137,26 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
 
 function groupOf(tools: ToolDef[], name: string): ToolGroup {
   return tools.find((t) => t.name === name)?.group ?? "read";
+}
+
+/**
+ * Context-window guard (#101): if a resolved guard is configured and enabled,
+ * estimate the trajectory's tokens and, once it exceeds the threshold
+ * (window × ratio), elide old tool-result outputs to placeholders so the
+ * provider call survives instead of dying on a 413 / context_length error.
+ * Emits a `compression` event so the boundary is recorded in the session.
+ */
+function maybeCompress(opts: AgentTurnOptions): void {
+  const guard = opts.contextGuard;
+  if (!guard?.enabled) return;
+  const targetTokens = Math.floor(guard.windowTokens * guard.thresholdRatio);
+  const result = compressMessages(opts.messages, { targetTokens });
+  if (result.compressed) {
+    opts.onEvent?.({
+      t: "compression",
+      beforeTokens: result.beforeTokens,
+      afterTokens: result.afterTokens,
+      elidedTokens: result.elidedTokens,
+    });
+  }
 }

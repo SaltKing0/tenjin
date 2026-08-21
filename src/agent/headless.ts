@@ -4,6 +4,7 @@ import { createBudget } from "./budget";
 import type { PricingConfig } from "../config/loader";
 import { runAgentTurn } from "./loop";
 import { SessionLog } from "../session/log";
+import { resolveContextGuard } from "../session/context";
 import type { TurnEvent } from "./loop";
 import { readTool } from "../tools/read";
 import { globTool } from "../tools/glob";
@@ -63,6 +64,8 @@ export interface HeadlessOptions {
   onTextDelta?: (delta: string) => void;
   /** Live side-channel invoked when the agent invokes a tool (name only). */
   onToolActivity?: (name: string) => void;
+  /** Context-window guard config (`context` in config.yaml, #101). */
+  context?: import("../config/loader").ContextConfig | null;
 }
 
 export interface HeadlessResult {
@@ -145,6 +148,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     audit: opts.audit,
     correlationId: opts.correlationId,
     onTextDelta: opts.onTextDelta,
+    contextGuard: resolveContextGuard(opts.model, opts.context ?? undefined),
     onEvent: (e: TurnEvent) => {
       if (e.t === "tool_call") opts.onToolActivity?.(e.name);
       if (!logger) return;
@@ -175,6 +179,14 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           outputTokens: e.usage.outputTokens,
           costUSD: e.costUSD,
           spentUSD: budget.spentUSD,
+          ts,
+        });
+      } else if (e.t === "compression") {
+        logger?.append({
+          t: "compression",
+          beforeTokens: e.beforeTokens,
+          afterTokens: e.afterTokens,
+          elidedTokens: e.elidedTokens,
           ts,
         });
       }
