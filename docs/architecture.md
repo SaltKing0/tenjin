@@ -197,11 +197,34 @@ with a dotted path; **unknown fields** only warn and are ignored.
 | `memory.enabled` / `memory.vector` | bool / map | Memory + vector recall |
 | `security` | map | Blocked patterns, disabled flag, workspace, redaction — see [docs/security.md](security.md) |
 | `inbox` | map | `ttlDays` / `maxMessages` for bot inboxes |
+| `context` | map | Context-window guard: `enabled`, `thresholdRatio`, `defaultWindow`, `windows` — see below |
 | `gateway` | map | Jobs, Telegram, heartbeat, listen — see below |
 
 The generated template lives in `CONFIG_TEMPLATE` in
 [`src/config/loader.ts`](../src/config/loader.ts); a fresh `~/.tenjin/config.yaml`
 is the fastest way to see every option with inline comments.
+
+### Context-window guard (`context`)
+
+To stop long sessions from silently growing a trajectory past a model's context
+window (and dying on a 413 / `context_length` error instead of answering), the
+agent estimates the trajectory size (chars ÷ 4) before every provider call and,
+once it exceeds `thresholdRatio` of the model's context window, elides the
+OLDEST tool-result outputs into `[elided N tokens]` placeholders. Recent tool
+outputs and the conversation text are kept, so the run survives and compression
+boundaries are recorded as `compression` events in the session log.
+
+```yaml
+context:
+  enabled: true           # on by default; false disables the guard
+  thresholdRatio: 0.8     # compress once estimate > 80% of the window
+  # defaultWindow: 128000 # context window (tokens) for unknown models
+  # windows:              # per-model context-window override (tokens)
+  #   my-model: 32000
+```
+
+Known models (Anthropic Claude, OpenAI GPT-4o, DeepSeek) have built-in window
+sizes; anything unrecognized uses `defaultWindow` (or 128k).
 
 ### Gateway config
 

@@ -447,3 +447,47 @@ describe("memorySummariesOnSessionEnd (#37)", () => {
     expect(memorySummariesOnSessionEnd(config)).toBe(true);
   });
 });
+
+describe("context config (#101)", () => {
+  test("loads context settings from config.yaml", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "config.yaml"),
+      [
+        "model: m",
+        "context:",
+        "  enabled: true",
+        "  thresholdRatio: 0.5",
+        "  defaultWindow: 4000",
+        "  windows:",
+        "    my-model: 2000",
+        "",
+      ].join("\n"),
+    );
+    const { config } = loadConfig(project, home);
+    expect(config.context).toEqual({
+      enabled: true,
+      thresholdRatio: 0.5,
+      defaultWindow: 4000,
+      windows: { "my-model": 2000 },
+    });
+  });
+
+  test("rejects thresholdRatio outside (0,1]", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: m\ncontext:\n  thresholdRatio: 1.5\n");
+    expect(() => loadConfig(project, home)).toThrow(/context\.thresholdRatio/);
+  });
+
+  test("rejects non-positive defaultWindow", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: m\ncontext:\n  defaultWindow: 0\n");
+    expect(() => loadConfig(project, home)).toThrow(/context\.defaultWindow/);
+  });
+
+  test("rejects invalid per-model window tokens", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: m\ncontext:\n  windows:\n    m: -5\n");
+    expect(() => loadConfig(project, home)).toThrow(/context\.windows\.m/);
+  });
+});

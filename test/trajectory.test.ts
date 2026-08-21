@@ -134,3 +134,17 @@ test("user message with block content is skipped (logged via dedicated events)",
   const header = "session s1 · anthropic:claude-sonnet-4-5";
   expect(lines).toEqual([header, "─".repeat(header.length)]);
 });
+
+test("compression boundary event renders a context line", () => {
+  const lines = renderTrajectory([
+    start,
+    {
+      t: "compression",
+      beforeTokens: 12_000,
+      afterTokens: 3_000,
+      elidedTokens: 9_000,
+      ts: "t",
+    },
+  ]);
+  expect(lines).toContain("~ context: 12.0k -> 3.0k (elided 9.0k)");
+});
