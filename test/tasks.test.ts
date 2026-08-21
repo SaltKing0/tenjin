@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readdirSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createBot, botDir } from "../src/bots/profile";
@@ -788,5 +788,30 @@ describe("task orphan reconciliation (#180)", () => {
     expect(final.status).toBe("error");
     expect(final.error).toMatch(/dependency/);
     expect(Date.now() - startedAt).toBeLessThan(2000);
+  });
+
+  test("a dependent in a fresh CLI process fails fast via a lazy, throttled lookup sweep (#240)", async () => {
+    writeTask(home, "researcher", staleTask("ORPH_LAZY", "running"));
+    // make it genuinely stale under the real clock that the lazy path uses
+    const p = join(botDir(home, "researcher"), "tasks", "ORPH_LAZY.json");
+    const past = new Date(Date.now() - 2000);
+    utimesSync(p, past, past);
+
+    // No explicit boot sweep: this is a fresh CLI/one-shot process that only
+    // looks up its dependency. The first findTaskById must sweep the orphan
+    // lazily so the dependent fails fast instead of waiting out its timeout.
+    const startedAt = Date.now();
+    const chain = startAsyncTask(deps(delayedProvider(0, "SHOULD NOT RUN")), {
+      targetBot: "researcher",
+      message: "dependent",
+      dependsOn: "ORPH_LAZY",
+      timeoutMs: 60_000,
+    });
+    const final = await chain.settled;
+    expect(final.status).toBe("error");
+    expect(final.error).toMatch(/dependency/);
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+    // the orphan itself was swept to error by the lazy dependency lookup
+    expect(readTaskForStatus(home, "researcher", "ORPH_LAZY")?.error).toContain("orphaned");
   });
 });
