@@ -23,6 +23,7 @@ import { loadSoul, loadAgentsMd, buildSystemPrompt } from "./agent/prompt";
 import { formatUSD } from "./agent/budget";
 import { runAgentTurn } from "./agent/loop";
 import { runHeadless, capPolicy, applyDenyTools } from "./agent/headless";
+import { runArena, renderArena, type ArenaEntry } from "./arena";
 import { startRepl } from "./ui/repl";
 import { SessionLog } from "./session/log";
 import { rebuildMessages, sumUsage } from "./session/events";
@@ -125,6 +126,10 @@ async function main(): Promise<number> {
   if (process.argv[2] === "forget") {
     process.exitCode = await forgetCommand(process.argv.slice(3));
     return process.exitCode;
+  }
+
+  if (process.argv[2] === "arena") {
+    return arenaCommand(process.argv.slice(3));
   }
 
   let cli: CliArgs;
@@ -408,6 +413,89 @@ function botCommand(args: string[]): number {
     stdout.write(`error: ${(e as Error).message}\n`);
     return 1;
   }
+}
+
+async function arenaCommand(args: string[]): Promise<number> {
+  try {
+    return await arenaRun(args);
+  } catch (e) {
+    if (e instanceof ConfigError) {
+      stdout.write(`config error: ${e.message}\n`);
+      return 2;
+    }
+    stdout.write(`error: ${(e as Error)?.message ?? e}\n`);
+    return 1;
+  }
+}
+
+async function arenaRun(args: string[]): Promise<number> {
+  let prompt = "";
+  let modelsList: string[] = [];
+  let budget: number | undefined;
+  let winnerIndex: number | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a) break;
+    if (a === "--models" || a === "-m") {
+      const rest = args[i + 1];
+      if (!rest) {
+        throw new ConfigError(
+          "arena --models requires a comma-separated list of provider:model refs (e.g. anthropic:claude-opus-4,openai:gpt-4o)",
+        );
+      }
+      modelsList = rest
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      i++;
+    } else if (a === "--budget") {
+      budget = Number(args[++i]);
+    } else if (a === "--winner") {
+      winnerIndex = Number(args[++i]);
+    } else if (a.startsWith("-")) {
+      throw new ConfigError(`unknown arena option: ${a}`);
+    } else {
+      prompt = prompt ? `${prompt} ${a}` : a;
+    }
+  }
+  if (!prompt.trim()) {
+    throw new ConfigError('arena requires a prompt: tenjin arena "<prompt>" --models ...');
+  }
+  if (modelsList.length === 0) {
+    throw new ConfigError('arena requires --models <ref1,ref2,...>');
+  }
+  if (winnerIndex !== undefined && !Number.isInteger(winnerIndex)) {
+    throw new ConfigError("arena --winner must be an integer (1-based entry index)");
+  }
+
+  const home = tenjinHome();
+  const cwd = process.cwd();
+  const { config } = loadConfig(cwd, home, { skipModelCheck: true });
+  const registry = new ProviderRegistry(
+    config.providers?.openai?.baseUrl,
+    {
+      anthropic: config.providers?.anthropic?.apiKey,
+      openai: config.providers?.openai?.apiKey,
+    },
+    config.retry,
+  );
+  const entries: ArenaEntry[] = modelsList.map((ref) => {
+    const mref = resolveModelRef(ref, config.provider);
+    return { ref: mref, provider: registry.get(mref.provider) };
+  });
+  const result = await runArena({
+    entries,
+    message: prompt,
+    soulText: loadSoul(home, cwd).text,
+    cwd,
+    maxTokens: config.maxTokens,
+    capUSD: budget ?? config.budgetUSD ?? 0,
+    pricing: config.pricing,
+    policy: "read-only",
+    winnerIndex,
+  });
+  stdout.write(renderArena(result, prompt) + "\n");
+  return 0;
 }
 
 function spendCommand(args: string[]): number {

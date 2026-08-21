@@ -14,6 +14,11 @@ Usage:
   tenjin --bot <name>        run as a specific bot
   tenjin bot new|list|init-examples   manage bots
   tenjin tell <bot> <text>   leave a user message in a bot's inbox
+  tenjin arena "<prompt>" --models <ref,ref,...>   race one prompt through
+                            several models in parallel. refs use provider:model
+                            (e.g. anthropic:claude-opus-4,openai:gpt-4o).
+                            Options: --budget <usd> cap the summed spend,
+                            --winner <n> mark the winning entry (1-based).
   tenjin gateway [--dry-run] always-on gateway (channels, jobs, heartbeats)
                              serves the web console at gateway.listen — no TUI:
                              Tenjin lives in your messaging and your browser.

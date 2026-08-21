@@ -1,6 +1,6 @@
 import type { Provider, Usage } from "../provider/types";
 import { buildSystemPrompt } from "./prompt";
-import { createBudget } from "./budget";
+import { createBudget, type Budget } from "./budget";
 import type { PricingConfig } from "../config/loader";
 import { runAgentTurn } from "./loop";
 import { SessionLog } from "../session/log";
@@ -46,6 +46,8 @@ export interface HeadlessOptions {
   maxTokens: number;
   capUSD: number;
   pricing?: PricingConfig;
+  /** Shared budget to draw from (e.g. across parallel arena runs). When absent, a fresh per-run budget is created from capUSD. */
+  budget?: Budget;
   policy?: ToolPolicy;
   denyTools?: string[];
   agentsMd?: string | null;
@@ -124,7 +126,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     });
     logger.append({ t: "message", role: "user", content: opts.message, ts: new Date().toISOString() });
   }
-  const budget = createBudget(opts.capUSD, opts.pricing);
+  const budget = opts.budget ?? createBudget(opts.capUSD, opts.pricing);
 
   const result = await runAgentTurn({
     provider: opts.provider,
