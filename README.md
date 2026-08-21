@@ -90,8 +90,16 @@ bun run src/index.ts gateway --dry-run   # validate config + describe, then exit
 It can be kept running under `launchd` (macOS) or `systemd` (Linux) using the
 units in [`ops/`](ops/):
 
-- `ops/com.tenjin.gateway.plist` — macOS LaunchAgent.
+- `ops/com.tenjin.gateway.plist` — macOS LaunchAgent (launches
+  [`ops/tenjin-launchd.sh`](ops/tenjin-launchd.sh), which loads secrets from
+  `~/.tenjin/gateway.env`).
 - `ops/tenjin.service` — Linux systemd user unit.
+- `ops/gateway.env.example` — template for the secrets file both units read.
+
+Secrets are **not** stored inside the units. Copy
+[`ops/gateway.env.example`](ops/gateway.env.example) to `~/.tenjin/gateway.env`,
+fill in your API keys / channel tokens, and `chmod 600` it. Both the launchd
+wrapper and the systemd `EnvironmentFile` load that file.
 
 See [docs/architecture.md](docs/architecture.md#gateway) for what the gateway
 runs and how to configure its channels, jobs, heartbeats, and the web console.

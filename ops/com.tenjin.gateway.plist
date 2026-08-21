@@ -1,7 +1,13 @@
 <!-- macOS launchd job for `tenjin gateway`.
-     Install:  cp ops/com.tenjin.gateway.plist ~/Library/LaunchAgents/
-               launchctl load ~/Library/LaunchAgents/com.tenjin.gateway.plist
-     Logs:     ~/.tenjin/gateway.log
+     Install:
+       cp ops/com.tenjin.gateway.plist ~/Library/LaunchAgents/
+       cp ops/tenjin-launchd.sh /path/to/tenjin-launchd.sh
+       chmod +x /path/to/tenjin-launchd.sh
+       launchctl load ~/Library/LaunchAgents/com.tenjin.gateway.plist
+     Secrets: loaded by tenjin-launchd.sh from ~/.tenjin/gateway.env (0600),
+              never inline here — see ops/gateway.env.example.
+     Logs:    absolute, under the gateway home so launchd resolves them
+              regardless of the job's working directory.
 -->
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -10,20 +16,12 @@
   <key>Label</key><string>com.tenjin.gateway</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/bun</string>
-    <string>run</string>
-    <string>/path/to/stealth/src/index.ts</string>
-    <string>gateway</string>
+    <string>/path/to/tenjin-launchd.sh</string>
   </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>HOME</key><string>/your/home</string>
-    <key>ANTHROPIC_API_KEY</key><string>sk-ant-...</string>
-    <key>TELEGRAM_BOT_TOKEN</key><string>123456:ABC...</string>
-  </dict>
+  <key>WorkingDirectory</key><string>/path/to/stealth</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>.tenjin/gateway.log</string>
-  <key>StandardErrorPath</key><string>.tenjin/gateway.log</string>
+  <key>StandardOutPath</key><string>/your/home/.tenjin/gateway.log</string>
+  <key>StandardErrorPath</key><string>/your/home/.tenjin/gateway.log</string>
 </dict>
 </plist>

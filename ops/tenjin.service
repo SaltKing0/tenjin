@@ -2,6 +2,7 @@
 # Install:  cp ops/tenjin.service ~/.config/systemd/user/
 #           systemctl --user daemon-reload
 #           systemctl --user enable --now tenjin
+# Secrets:  EnvironmentFile below (0600), never inline — see ops/gateway.env.example
 # Logs:     journalctl --user -u tenjin -f
 
 [Unit]
@@ -10,10 +11,10 @@ After=network-online.target
 
 [Service]
 ExecStart=/usr/bin/env bun run /path/to/stealth/src/index.ts gateway
+WorkingDirectory=/path/to/stealth
 Restart=on-failure
 RestartSec=5
-Environment=ANTHROPIC_API_KEY=sk-ant-...
-Environment=TELEGRAM_BOT_TOKEN=123456:ABC...
+EnvironmentFile=/your/home/.tenjin/gateway.env
 
 [Install]
 WantedBy=default.target
