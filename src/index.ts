@@ -316,7 +316,12 @@ async function gatewayCommand(args: string[]): Promise<number> {
         throw new ConfigError(`telegram defaultBot "${defaultBot}" does not exist`);
       }
       const channel = new TelegramChannel(
-        { token, defaultBot, allowedUsers: tg.allowedUsers },
+        {
+          token,
+          defaultBot,
+          allowedUsers: tg.allowedUsers,
+          apiBase: process.env.TELEGRAM_API_BASE,
+        },
         async (msg) => {
           const { bot: botName, rest } = routeText(msg.text, defaultBot, available);
           const profile = resolveBot(home, botName);
@@ -331,6 +336,8 @@ async function gatewayCommand(args: string[]): Promise<number> {
             capUSD: botBudgetUSD(profile, config.budgetUSD),
             policy: "read-only",
             agentsMd: loadAgentsMd(cwd),
+            sessionLogDir: profile.sessionsDir,
+            sessionBot: profile.name,
           });
           log(`telegram: handled for ${botName} (${formatUSD(result.costUSD)})`);
           return result.text || null;

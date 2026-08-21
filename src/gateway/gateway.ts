@@ -147,6 +147,8 @@ export class Gateway {
       capUSD: botBudgetUSD(profile, this.deps.config.budgetUSD),
       policy: "read-only",
       extraTools,
+      sessionLogDir: profile.sessionsDir,
+      sessionBot: profile.name,
     });
     this.log(
       `job ${job.name} done (${result.stopReason}, ${formatUSD(result.costUSD)})`,

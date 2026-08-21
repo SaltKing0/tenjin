@@ -13,6 +13,7 @@ Usage:
   tenjin --fork <id> [n]     branch a copy at event n (default: end)
   tenjin --bot <name>        run as a specific bot
   tenjin bot new|list|init-examples   manage bots
+  tenjin gateway [--dry-run] always-on gateway (channels, jobs, heartbeats)
 
 Options:
   -h, --help                 show this help
