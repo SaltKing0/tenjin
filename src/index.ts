@@ -4,7 +4,7 @@ import { createInterface } from "node:readline/promises";
 import { dirname, basename, resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import {
   ensureGlobalDir,
   loadConfig,
@@ -52,6 +52,7 @@ import {
 } from "./bots/profile";
 import { createSendMessageTool, createCheckInboxTool } from "./bots/tools";
 import { createAskBotTool } from "./bots/delegate";
+import { loadTeam, buildTeamSection, teamPath, TEAM_TEMPLATE } from "./bots/team";
 import { exportBot, importBot } from "./bots/package";
 import { Gateway } from "./gateway/gateway";
 import { registerChannel, channelFactory, type Channel } from "./gateway/channel";
@@ -151,6 +152,10 @@ async function main(): Promise<number> {
 
   if (process.argv[2] === "restore") {
     return restoreCommand(process.argv.slice(3));
+  }
+
+  if (process.argv[2] === "team") {
+    return teamCommand(process.argv.slice(3));
   }
 
   let cli: CliArgs;
@@ -274,6 +279,7 @@ async function main(): Promise<number> {
     const soul = profile
       ? { text: profile.soulText, source: "bot" as const }
       : loadSoul(home, cwd);
+    const team = loadTeam(home);
     const system = buildSystemPrompt({
       soulText: soul.text,
       agentsMd: loadAgentsMd(cwd),
@@ -286,6 +292,7 @@ async function main(): Promise<number> {
               learnings: readLearnings(memDir, cwd),
             })
           : null,
+      teamSection: team ? buildTeamSection(team) : null,
     });
     let tools: ToolDef[] = [
       readTool,
@@ -386,6 +393,25 @@ function tellCommand(args: string[]): number {
     stdout.write(`error: ${(e as Error).message}\n`);
     return 1;
   }
+}
+
+/** `tenjin team init` — write a starter team.yaml into the home (#141). */
+function teamCommand(args: string[]): number {
+  const sub = args[0];
+  if (sub && sub !== "init") {
+    stdout.write("usage: tenjin team init\n");
+    return 2;
+  }
+  const home = tenjinHome();
+  const p = teamPath(home);
+  if (existsSync(p)) {
+    stdout.write(`team.yaml already exists at ${p} — edit roles and rerun to apply\n`);
+    return 0;
+  }
+  ensureGlobalDir(home);
+  writeFileSync(p, TEAM_TEMPLATE);
+  stdout.write(`wrote team manifest to ${p} — edit roles, then bot prompts pick it up on next run\n`);
+  return 0;
 }
 
 function botCommand(args: string[]): number {

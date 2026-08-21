@@ -39,11 +39,17 @@ export function buildSystemPrompt(inputs: {
   memorySection?: string | null;
   facts?: string | null;
   skillsSummary?: string | null;
+  /** Compact team context for bots (#141) — null when no team manifest exists. */
+  teamSection?: string | null;
 }): string {
   const parts: string[] = [inputs.soulText];
 
   if (inputs.facts) {
     parts.push(`# Facts\n${inputs.facts}`);
+  }
+
+  if (inputs.teamSection) {
+    parts.push(`# Team\n${inputs.teamSection}`);
   }
 
   parts.push(

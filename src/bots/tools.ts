@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { ToolDef } from "../tools/registry";
 import { listBots, type BotProfile } from "./profile";
+import { loadTeam, resolveTeamTarget } from "./team";
 import {
   formatInbox,
   markRead,
@@ -19,21 +20,24 @@ export function createSendMessageTool(deps: {
     name: "send_message",
     group: "write",
     description:
-      "Send an async message to another bot's inbox. The recipient sees it on their next run. Treat this as inter-bot mail, not a live conversation.",
+      "Send an async message to another bot's inbox. The recipient sees it on their next run. Treat this as inter-bot mail, not a live conversation. `to` may be a bot name or a team role (team.yaml).",
     inputSchema: {
       type: "object",
       properties: {
-        to: { type: "string", description: "Target bot name" },
+        to: { type: "string", description: "Target bot name or team role" },
         subject: { type: "string", description: "One-line summary" },
         body: { type: "string", description: "Message content" },
       },
       required: ["to", "subject", "body"],
     },
     async handler(args, _ctx) {
-      const to = String(args.to ?? "").trim();
+      let to = String(args.to ?? "").trim();
       if (to === deps.fromBot) throw new Error("cannot send a message to yourself");
       if (!listBots(deps.home).includes(to)) {
-        throw new Error(`unknown bot "${to}"`);
+        const team = loadTeam(deps.home);
+        const resolved = team ? resolveTeamTarget(team, to) : null;
+        if (resolved) to = resolved;
+        else throw new Error(`unknown bot or role "${to}"`);
       }
       const msg = sendMessage(
         join(deps.home, "bots", to, "inbox"),
