@@ -16,18 +16,27 @@ export function inboxFile(dir: string, id: string): string {
   return join(dir, `${id}.json`);
 }
 
+let lastMs = 0;
+
+function nowUnique(): number {
+  const now = Date.now();
+  lastMs = now > lastMs ? now : lastMs + 1;
+  return lastMs;
+}
+
 export function sendMessage(
   inboxDir: string,
   msg: { from: string; to: string; subject: string; body: string },
 ): InboxMessage {
   mkdirSync(inboxDir, { recursive: true });
+  const ts = nowUnique();
   const message: InboxMessage = {
-    id: `${Date.now()}-${randomUUID().slice(0, 8)}`,
+    id: `${ts}-${randomUUID().slice(0, 8)}`,
     from: msg.from,
     to: msg.to,
     subject: msg.subject.replace(/\s+/g, " ").trim().slice(0, 200),
     body: msg.body.trim(),
-    ts: new Date().toISOString(),
+    ts: new Date(ts).toISOString(),
     read: false,
   };
   writeFileSync(inboxFile(inboxDir, message.id), JSON.stringify(message, null, 2));
