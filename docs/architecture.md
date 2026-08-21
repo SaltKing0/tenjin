@@ -377,7 +377,8 @@ gateway:
   `url_verification` challenge is answered automatically) and sends replies via
   `chat.postMessage`. `adminChannel` is the destination for channel-level
   `send(text)` (e.g. `postTo: slack`). Optional `rateLimitMax`,
-  `rateLimitWindowMs`, `maxMessageLength` mirror Telegram's #69 limits. By
+  `rateLimitWindowMs`, `maxMessageLength` mirror Telegram's #69 limits. Outbound
+  replies are chunked over the 40k-char channel limit (`maxOutboundLength`). By
   default the webhook listens on an ephemeral port on `127.0.0.1`; set the
   `SLACK_WEBHOOK_PORT` env var to pin a port.
 - **`discord`** — requires a non-empty `allowedChannels` allowlist and a
@@ -388,7 +389,8 @@ gateway:
   `allowedGuilds` restricts handling to those guilds; `rateLimitMax` /
   `rateLimitWindowMs` / `maxMessageLength` mirror the other channels. Dropped
   gateway connections are retried with exponential backoff; REST 429s respect
-  `retry_after`.
+  `retry_after`. Outbound replies over 2000 chars are chunked into multiple
+  messages (`maxOutboundLength`).
 - **`jobs`** — scheduled prompts to a bot on a cron or `every` schedule
   (`postTo` routes the result to a channel). Optional `tz` (IANA name) interprets
   cron fields in that zone, including across DST; omitted `tz` keeps server local time.
