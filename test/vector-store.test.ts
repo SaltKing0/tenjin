@@ -190,6 +190,16 @@ describe("VectorStore", () => {
     expect(store.size).toBe(3);
   });
 
+  test("search spans persisted + buffered chunks; chunkIds reflects both (#310)", () => {
+    const store = new VectorStore(file);
+    store.add(chunk({ id: "a" }));
+    store.flush(); // "a" is persisted
+    store.add(chunk({ id: "b" })); // "b" is buffered only
+    const { hits } = store.search({ query: [1, 0, 0], topK: 10 });
+    expect(hits.map((h) => h.chunk.id).sort()).toEqual(["a", "b"]);
+    expect([...store.chunkIds()].sort()).toEqual(["a", "b"]);
+  });
+
   test("flush with an empty buffer is a no-op", () => {
     const store = new VectorStore(file);
     store.flush();

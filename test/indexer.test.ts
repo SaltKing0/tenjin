@@ -166,4 +166,21 @@ describe("indexPendingSessions", () => {
     expect(again.indexed).toHaveLength(0);
     expect(again.chunks).toBe(0);
   });
+
+  test("re-indexes a growing session's new messages (#310)", async () => {
+    const log = seedSession({ role: "user", content: "first message" });
+    const first = await indexPendingSessions(opts());
+    expect(first.chunks).toBe(1);
+
+    // the session grows (append-only log)
+    log.append({ t: "message", role: "user", content: "second message", ts: "t" });
+
+    const second = await indexPendingSessions(opts());
+    // only the NEW message is indexed, not the whole session again
+    expect(second.indexed).toHaveLength(1);
+    expect(second.chunks).toBe(1);
+    const chunks = loadChunks(join(home, "vectors.jsonl"));
+    expect(chunks).toHaveLength(2);
+    expect(chunks.some((c) => c.text === "second message")).toBe(true);
+  });
 });

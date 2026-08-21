@@ -5,7 +5,6 @@ import type {
 import type { EmbeddingProvider } from "../provider/embeddings";
 import {
   appendChunks,
-  indexedSessionIds,
   loadChunks,
   vectorsFilePath,
   type VectorChunk,
@@ -60,21 +59,38 @@ export async function indexPendingSessions(opts: {
   const store = opts.store;
   // `vectorsFile` is only used on the legacy (store-less) path.
   const vectorsFile = store ? null : vectorsFilePath(opts.memoryDirPath);
-  const done = store ? store.sessionsIndexed() : indexedSessionIds(loadChunks(vectorsFile!));
+  // #310: dedup by chunk id (`sessionId:eventIdx`) instead of whole sessions.
+  // Session logs are append-only and can grow, so a session that is already
+  // partially indexed must get its NEW messages indexed too, not be skipped
+  // forever because its session id is in the done set.
+  const existing = new Set<string>();
+  if (store) {
+    for (const id of store.chunkIds()) existing.add(id);
+  } else {
+    for (const c of loadChunks(vectorsFile!)) existing.add(c.id);
+  }
 
+  const limit = opts.limit ?? 10;
+  let used = 0;
+  // Most recently modified sessions first — the ones most likely to have
+  // unindexed growth — while fully-indexed sessions are skipped cheaply.
   const logs = SessionLog.list(opts.sessionsDirPath)
-    .filter((s) => !done.has(s.id))
-    .slice(0, opts.limit ?? 10)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
     .map((s) => SessionLog.open(s.path));
 
   for (const log of logs) {
+    if (used >= limit) break;
     try {
-      const texts = extractIndexableTexts(log.events());
-      if (texts.length === 0) continue;
-      const vectors = await opts.embeddings.embed(texts.map((t) => t.text));
+      // Only events whose chunk id isn't already indexed (growing sessions
+      // yield their new events here; unchanged sessions yield nothing).
+      const newTexts = extractIndexableTexts(log.events()).filter(
+        (t) => !existing.has(`${log.id}:${t.eventIdx}`),
+      );
+      if (newTexts.length === 0) continue;
+      const vectors = await opts.embeddings.embed(newTexts.map((t) => t.text));
       const created = new Date().toISOString();
       const embedModel = opts.embeddings.model;
-      const chunks: VectorChunk[] = texts.map((t, i) => {
+      const chunks: VectorChunk[] = newTexts.map((t, i) => {
         const embedding = vectors[i] ?? [];
         return {
           id: `${log.id}:${t.eventIdx}`,
@@ -93,8 +109,12 @@ export async function indexPendingSessions(opts: {
       } else {
         appendChunks(vectorsFile!, chunks);
       }
+      // Mark as indexed only after the write succeeded, so a session whose
+      // embed failed this pass is retried next pass instead of being lost.
+      for (const t of newTexts) existing.add(`${log.id}:${t.eventIdx}`);
       report.indexed.push(log.id);
       report.chunks += chunks.length;
+      used++;
     } catch (e) {
       report.errors.push(`${log.id}: ${(e as Error).message}`);
     }

@@ -90,4 +90,50 @@ describe("OpenAIEmbeddings.embed", () => {
       globalThis.fetch = origFetch;
     }
   });
+
+  test("retries a transient 429 then succeeds (#310)", async () => {
+    const e = new OpenAIEmbeddings("m", "k", "http://mock", {
+      maxAttempts: 3,
+      initialDelayMs: 1,
+      maxDelayMs: 1,
+      retryableStatuses: [429],
+    });
+    let calls = 0;
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) return new Response("rate limited", { status: 429 });
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 1] }] }), {
+        status: 200,
+      });
+    }) as unknown as typeof fetch;
+    try {
+      const v = await e.embed(["x"]);
+      expect(v).toEqual([[1, 1]]);
+      expect(calls).toBe(2); // 429 retried, then success
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  test("non-retryable 401 is not retried (#310)", async () => {
+    const e = new OpenAIEmbeddings("m", "k", "http://mock", {
+      maxAttempts: 3,
+      initialDelayMs: 1,
+      maxDelayMs: 1,
+      retryableStatuses: [429],
+    });
+    let calls = 0;
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response("no", { status: 401 });
+    }) as unknown as typeof fetch;
+    try {
+      await expect(e.embed(["x"])).rejects.toThrow(/401/);
+      expect(calls).toBe(1); // no retry on auth failure
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
 });
