@@ -6,7 +6,22 @@ export interface TelegramOptions {
   defaultBot: string;
   allowedUsers: number[];
   pollTimeoutSec?: number;
-  onReject?: (userId: number) => void;
+  /** Max inbound messages per chat id per sliding window. 0 disables the limit. Default 20. */
+  rateLimitMax?: number;
+  /** Sliding-window length for `rateLimitMax`, in ms. Default 60_000. */
+  rateLimitWindowMs?: number;
+  /** Max accepted inbound text length; longer messages are rejected politely. 0 disables. Default 4096. */
+  maxMessageLength?: number;
+  /** Called for every rejected inbound message, with the reason. */
+  onRejected?: (info: TelegramRejection) => void;
+}
+
+export type TelegramRejectReason = "unauthorized" | "rate_limited" | "too_long";
+
+export interface TelegramRejection {
+  userId: number;
+  chatId: number;
+  reason: TelegramRejectReason;
 }
 
 export interface TgUser {
@@ -34,6 +49,9 @@ export interface InboundMessage {
 }
 
 const DEFAULT_API_BASE = "https://api.telegram.org";
+const DEFAULT_RATE_LIMIT_MAX = 20;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
+const DEFAULT_MAX_MESSAGE_LENGTH = 4096;
 
 export function routeText(
   text: string,
@@ -53,6 +71,7 @@ export function routeText(
 
 export class TelegramChannel {
   private offset = 0;
+  private rateHits = new Map<number, number[]>();
 
   constructor(
     private opts: TelegramOptions,
@@ -90,6 +109,21 @@ export class TelegramChannel {
     return data.result ?? [];
   }
 
+  private isRateLimited(chatId: number): boolean {
+    const max = this.opts.rateLimitMax ?? DEFAULT_RATE_LIMIT_MAX;
+    if (max <= 0) return false;
+    const windowMs = this.opts.rateLimitWindowMs ?? DEFAULT_RATE_LIMIT_WINDOW_MS;
+    const now = Date.now();
+    const hits = (this.rateHits.get(chatId) ?? []).filter((t) => now - t < windowMs);
+    if (hits.length >= max) {
+      this.rateHits.set(chatId, hits);
+      return true;
+    }
+    hits.push(now);
+    this.rateHits.set(chatId, hits);
+    return false;
+  }
+
   async pollOnce(): Promise<number> {
     const updates = await this.getUpdates(this.opts.pollTimeoutSec ?? 25);
     let handled = 0;
@@ -97,23 +131,44 @@ export class TelegramChannel {
       this.offset = Math.max(this.offset, update.update_id + 1);
       const msg = update.message;
       if (!msg?.text || !msg.from) continue;
-      if (!this.opts.allowedUsers.includes(msg.from.id)) {
-        this.log(`telegram: ignored unauthorized user ${msg.from.id}`);
-        this.opts.onReject?.(msg.from.id);
+      const chatId = msg.chat.id;
+      const userId = msg.from.id;
+
+      if (!this.opts.allowedUsers.includes(userId)) {
+        this.log(`telegram: ignored unauthorized user ${userId}`);
+        this.opts.onRejected?.({ userId, chatId, reason: "unauthorized" });
         continue;
       }
+
+      const maxLen = this.opts.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH;
+      if (maxLen > 0 && msg.text.length > maxLen) {
+        this.log(`telegram: rejected ${msg.text.length}-char message from user ${userId} (max ${maxLen})`);
+        this.opts.onRejected?.({ userId, chatId, reason: "too_long" });
+        await this.send(chatId, `message too long (max ${maxLen} characters) — please shorten it.`).catch(
+          () => {},
+        );
+        continue;
+      }
+
+      if (this.isRateLimited(chatId)) {
+        this.log(`telegram: rate-limited chat ${chatId} (user ${userId})`);
+        this.opts.onRejected?.({ userId, chatId, reason: "rate_limited" });
+        await this.send(chatId, "too many messages — please slow down a moment.").catch(() => {});
+        continue;
+      }
+
       handled++;
       try {
         const reply = await this.onMessage({
-          chatId: msg.chat.id,
-          userId: msg.from.id,
+          chatId,
+          userId,
           username: msg.from.username,
           text: msg.text,
         });
-        if (reply) await this.send(msg.chat.id, reply);
+        if (reply) await this.send(chatId, reply);
       } catch (e) {
         this.log(`telegram: handler error: ${(e as Error).message}`);
-        await this.send(msg.chat.id, `error: something went wrong handling that.`).catch(() => {});
+        await this.send(chatId, `error: something went wrong handling that.`).catch(() => {});
       }
     }
     return handled;
