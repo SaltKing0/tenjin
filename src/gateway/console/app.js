@@ -409,6 +409,7 @@ async function panelApprovals(main) {
 
 const PANELS = [
   ["chat", "Chat", panelChat],
+  ["settings", "Settings", panelSettings],
   ["approvals", "Approvals", panelApprovals],
   ["sessions", "Sessions", panelSessions],
   ["spend", "Spend", panelSpend],
@@ -485,4 +486,145 @@ if (token) {
   render().catch(renderLogin);
 } else {
   renderLogin();
+}
+
+/* ---------- settings ---------- */
+
+async function panelSettings(main) {
+  main.replaceChildren(el("h1", {}, "Settings"));
+  const settings = await apiJson("/api/settings");
+
+  const state = {
+    detected: {},
+    defaultModel: settings.models.default || "",
+    cheapModel: settings.models.cheap || "",
+  };
+
+  const statusLine = el("div", { class: "dim" });
+  const modelSelect = el("select", { style: "width:100%; margin-bottom:8px" },
+    el("option", { value: "" }, "— run detect on a provider to list models —"));
+  const cheapSelect = el("select", { style: "width:100%" },
+    el("option", { value: "" }, "(none)"));
+  main.append(statusLine);
+
+  function providerCard(name, label, keyPlaceholder) {
+    const configured = settings[name].configured;
+    const keyInput = el("input", {
+      type: "password",
+      placeholder: configured
+        ? "configured (" + settings[name].masked + ") — leave blank to keep"
+        : keyPlaceholder,
+      style: "width:100%; margin-bottom:8px",
+    });
+    const urlInput = el("input", {
+      type: "text",
+      value: name === "openai" ? (settings.openai.baseUrl || "") : "",
+      placeholder: name === "openai"
+        ? "custom base URL (optional) — e.g. https://api.deepseek.com/v1"
+        : "custom base URL (optional)",
+      style: "width:100%; margin-bottom:8px",
+    });
+    const detectOut = el("div", { class: "dim", style: "margin:8px 0" });
+
+    async function detect() {
+      detectOut.textContent = "detecting models…";
+      detectOut.className = "dim";
+      try {
+        const res = await api("/api/settings/detect", {
+          method: "POST",
+          body: JSON.stringify({
+            provider: name,
+            baseUrl: urlInput.value.trim() || undefined,
+            apiKey: keyInput.value.trim() || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          detectOut.textContent = "detection failed: " + data.error;
+          detectOut.className = "err";
+          return;
+        }
+        state.detected[name] = data.models;
+        detectOut.textContent = data.models.length + " models detected";
+        detectOut.className = "ok";
+        modelSelect.append(...data.models.map((m) => el("option", { value: name + ":" + m }, name + ":" + m)));
+      } catch (e) {
+        detectOut.textContent = "detection failed: " + e.message;
+        detectOut.className = "err";
+      }
+    }
+
+    return el(
+      "div",
+      { class: "card" },
+      el("strong", {}, label),
+      " ",
+      configured
+        ? el("span", { class: "badge ok" }, "configured (" + settings[name].source + ")")
+        : el("span", { class: "badge err" }, "not configured"),
+      el("div", { style: "margin-top:8px" }, keyInput),
+      el("div", {}, urlInput),
+      el("div", { style: "display:flex; gap:8px; margin-bottom:4px" },
+        el("button", { onclick: detect }, "test & detect models")),
+      detectOut,
+    );
+  }
+
+  const anthropicCard = providerCard("anthropic", "Anthropic", "sk-ant-…");
+  const openaiCard = providerCard("openai", "OpenAI-compatible (DeepSeek, Ollama, OpenRouter…)", "sk-…");
+  cheapSelect.value = state.cheapModel;
+
+  const saveBtn = el("button", { class: "primary" }, "save & apply live");
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    statusLine.textContent = "saving…";
+    statusLine.className = "dim";
+    try {
+      const body = {
+        models: {
+          default: modelSelect.value || state.defaultModel,
+          cheap: cheapSelect.value,
+        },
+      };
+      const aKey = anthropicCard.querySelector("input[type=password]").value.trim();
+      const oInputs = openaiCard.querySelectorAll("input");
+      const oKey = oInputs[0].value.trim();
+      const oUrl = oInputs[1].value.trim();
+      if (aKey) body.anthropic = { apiKey: aKey };
+      if (oKey || oUrl) {
+        body.openai = {};
+        if (oKey) body.openai.apiKey = oKey;
+        if (oUrl) body.openai.baseUrl = oUrl;
+      }
+      const res = await api("/api/settings", { method: "POST", body: JSON.stringify(body) });
+      const data = await res.json();
+      if (data.error) {
+        statusLine.textContent = "save failed: " + data.error;
+        statusLine.className = "err";
+      } else {
+        statusLine.textContent = "saved — applied live, no restart needed";
+        statusLine.className = "ok";
+      }
+    } catch (e) {
+      statusLine.textContent = "save failed: " + e.message;
+      statusLine.className = "err";
+    } finally {
+      saveBtn.disabled = false;
+    }
+  };
+
+  main.append(
+    anthropicCard,
+    openaiCard,
+    el("h2", {}, "models"),
+    el("div", { class: "card" },
+      el("div", { class: "dim", style: "margin-bottom:4px" }, "default model"),
+      modelSelect,
+      el("div", { class: "dim", style: "margin:8px 0 4px" }, "cheap tier (summaries, background jobs)"),
+      cheapSelect,
+    ),
+    el("div", { class: "toolbar" }, saveBtn, statusLine),
+    el("p", { class: "dim" },
+      "keys are stored in ~/.tenjin/providers.yaml (0600). changes apply live — no restart."),
+  );
 }
