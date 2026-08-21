@@ -134,4 +134,20 @@ describe("buildSystemPrompt", () => {
     expect(order.every((i) => i > -1)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
+
+  test("skills summary renders after memory when provided", () => {
+    const prompt = buildSystemPrompt({
+      soulText: "SOUL",
+      cwd: "/c",
+      agentsMd: null,
+      memorySection: "# Memory — recent sessions in this project\nMEM",
+      skillsSummary: "bun-testing           global  How tests work",
+    });
+    expect(prompt).toContain("# Skills");
+    expect(prompt).toContain("bun-testing");
+    const memIdx = prompt.indexOf("# Memory —");
+    const skillsIdx = prompt.indexOf("# Skills");
+    expect(memIdx).toBeGreaterThan(-1);
+    expect(skillsIdx).toBeGreaterThan(memIdx);
+  });
 });

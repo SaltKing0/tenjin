@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runHeadless, toolsForPolicy } from "../src/agent/headless";
@@ -38,12 +38,50 @@ const endTurn = (text: string, usage = { inputTokens: 100, outputTokens: 10 }): 
   usage,
 });
 
+function writeSkill(home: string, name: string, description: string, body: string): void {
+  const skillDir = join(home, "skills", name);
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(
+    join(skillDir, "SKILL.md"),
+    `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n${body}\n`,
+  );
+}
+
 test("toolsForPolicy returns expected sets", () => {
   expect(toolsForPolicy("none")).toEqual([]);
   expect(toolsForPolicy("read-only").map((t) => t.name)).toEqual([
     "read_file",
     "glob",
     "grep",
+  ]);
+  expect(toolsForPolicy("full").map((t) => t.name)).toEqual([
+    "read_file",
+    "glob",
+    "grep",
+    "write_file",
+    "edit_file",
+    "bash",
+  ]);
+});
+
+test("toolsForPolicy adds use_skill/save_skill by policy when skill dirs are given", () => {
+  const skill = { home: dir, projectDir: dir };
+  expect(toolsForPolicy("none", skill)).toEqual([]);
+  expect(toolsForPolicy("read-only", skill).map((t) => t.name)).toEqual([
+    "read_file",
+    "glob",
+    "grep",
+    "use_skill",
+  ]);
+  expect(toolsForPolicy("full", skill).map((t) => t.name)).toEqual([
+    "read_file",
+    "glob",
+    "grep",
+    "write_file",
+    "edit_file",
+    "bash",
+    "use_skill",
+    "save_skill",
   ]);
 });
 
@@ -128,6 +166,9 @@ describe("runHeadless", () => {
     const system = String(provider.requests[0]?.system);
     expect(system).toContain("You are test.");
     expect(system).toContain("use tabs");
+    expect(system).not.toContain("# Facts");
+    expect(system).not.toContain("# Skills");
+    expect(system).not.toContain("# Memory —");
   });
 
   test("session log redacts secrets in tool output", async () => {
@@ -182,5 +223,88 @@ describe("runHeadless", () => {
       "utf8",
     );
     expect(raw).toContain("just a normal note");
+  });
+
+  test("facts.md from memoryDir lands in the system prompt", async () => {
+    const memoryDir = join(dir, "memory");
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, "facts.md"), "- [2026-08-21] prefers bun over node\n");
+    const provider = base().provider as ReturnType<typeof scriptProvider>;
+    await runHeadless(base({ provider, memoryDir }));
+    const system = String(provider.requests[0]?.system);
+    expect(system).toContain("# Facts");
+    expect(system).toContain("prefers bun over node");
+  });
+
+  test("session summaries matching cwd are injected via buildMemorySection", async () => {
+    const memoryDir = join(dir, "memory");
+    mkdirSync(join(memoryDir, "summaries"), { recursive: true });
+    writeFileSync(
+      join(memoryDir, "summaries", "sess1.md"),
+      [
+        "---",
+        "sessionId: sess1",
+        `projectPath: ${JSON.stringify(dir)}`,
+        "uptoEvent: 4",
+        "created: 2026-08-21T09:00:00Z",
+        "---",
+        "shipped the auth rewrite",
+        "",
+      ].join("\n"),
+    );
+    const provider = base().provider as ReturnType<typeof scriptProvider>;
+    await runHeadless(base({ provider, memoryDir }));
+    const system = String(provider.requests[0]?.system);
+    expect(system).toContain("# Memory — recent sessions in this project");
+    expect(system).toContain("shipped the auth rewrite");
+  });
+
+  test("summarizeSkills listing is in the prompt and use_skill can load a skill", async () => {
+    const home = join(dir, "home");
+    writeSkill(home, "bun-testing", "How bun tests work", "Always run bun test.");
+    const provider = scriptProvider([
+      {
+        stopReason: "tool_use",
+        content: [
+          { type: "tool_use", id: "t1", name: "use_skill", input: { name: "bun-testing" } },
+        ],
+        usage: { inputTokens: 100, outputTokens: 10 },
+      },
+      endTurn("loaded"),
+    ]);
+    const r = await runHeadless(base({ provider, home, policy: "read-only" }));
+    expect(r.text).toBe("loaded");
+
+    const first = provider.requests[0];
+    expect(first?.tools.map((t) => t.name)).toContain("use_skill");
+    expect(first?.tools.map((t) => t.name)).not.toContain("save_skill");
+    const system = String(first?.system);
+    expect(system).toContain("# Skills");
+    expect(system).toContain("bun-testing");
+    expect(system).toContain("How bun tests work");
+
+    const second = provider.requests[1];
+    if (!second) throw new Error("missing second request");
+    const msgContent = second.messages[2]?.content;
+    if (!msgContent || typeof msgContent === "string") {
+      throw new Error("expected tool results in second request");
+    }
+    const skillResult = msgContent.find((b) => b.type === "tool_result" && b.toolUseId === "t1");
+    if (skillResult?.type !== "tool_result") throw new Error("missing use_skill result");
+    expect(skillResult.isError).toBeFalsy();
+    expect(skillResult.content).toContain("Always run bun test.");
+  });
+
+  test("full policy exposes save_skill; none exposes neither skill tool", async () => {
+    const home = join(dir, "home");
+    mkdirSync(home, { recursive: true });
+    const fullProvider = base().provider as ReturnType<typeof scriptProvider>;
+    await runHeadless(base({ provider: fullProvider, home, policy: "full" }));
+    expect(fullProvider.requests[0]?.tools.map((t) => t.name)).toContain("save_skill");
+    expect(fullProvider.requests[0]?.tools.map((t) => t.name)).toContain("use_skill");
+
+    const noneProvider = scriptProvider([endTurn("ok")]);
+    await runHeadless(base({ provider: noneProvider, home, policy: "none" }));
+    expect(noneProvider.requests[0]?.tools).toEqual([]);
   });
 });

@@ -13,6 +13,12 @@ import { editTool } from "../tools/edit";
 import { bashTool } from "../tools/bash";
 import type { ToolDef } from "../tools/registry";
 import { Redactor } from "../security/redact";
+import { readFacts } from "../tools/memory";
+import { buildMemorySection } from "../memory/inject";
+import { listSummaries } from "../memory/summaries";
+import { listSkills } from "../skills/loader";
+import { createUseSkillTool, summarizeSkills } from "../skills/activate";
+import { createSaveSkillTool } from "../tools/skill-writer";
 
 export type ToolPolicy = "read-only" | "none" | "full";
 
@@ -28,6 +34,8 @@ export interface HeadlessOptions {
   policy?: ToolPolicy;
   agentsMd?: string | null;
   extraTools?: ToolDef[];
+  home?: string;
+  memoryDir?: string;
   sessionLogDir?: string;
   sessionBot?: string;
   guard?: import("../security/guard").SecurityGuard | null;
@@ -44,12 +52,24 @@ export interface HeadlessResult {
   usage: Usage;
 }
 
-export function toolsForPolicy(policy: ToolPolicy): ToolDef[] {
+export interface SkillDirs {
+  home: string;
+  projectDir: string;
+}
+
+export function toolsForPolicy(policy: ToolPolicy, skill?: SkillDirs): ToolDef[] {
+  const skillTools: ToolDef[] = [];
+  if (skill && policy !== "none") {
+    skillTools.push(createUseSkillTool({ home: skill.home, projectDir: skill.projectDir }));
+    if (policy === "full") {
+      skillTools.push(createSaveSkillTool({ projectDir: skill.projectDir }));
+    }
+  }
   switch (policy) {
     case "read-only":
-      return [readTool, globTool, grepTool];
+      return [readTool, globTool, grepTool, ...skillTools];
     case "full":
-      return [readTool, globTool, grepTool, writeTool, editTool, bashTool];
+      return [readTool, globTool, grepTool, writeTool, editTool, bashTool, ...skillTools];
     case "none":
       return [];
   }
@@ -58,11 +78,18 @@ export function toolsForPolicy(policy: ToolPolicy): ToolDef[] {
 export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult> {
   const policy = opts.policy ?? "read-only";
   const redactor = opts.redactor ?? new Redactor();
+  const skills = opts.home ? listSkills(opts.home, opts.cwd) : [];
   const system = buildSystemPrompt({
     soulText: opts.soulText,
     agentsMd: opts.agentsMd ?? null,
     cwd: opts.cwd,
+    facts: opts.memoryDir ? readFacts(opts.memoryDir) : null,
+    memorySection: opts.memoryDir
+      ? buildMemorySection(listSummaries(opts.memoryDir), { currentProject: opts.cwd })
+      : null,
+    skillsSummary: skills.length > 0 ? summarizeSkills(skills) : null,
   });
+  const skillDirs = opts.home ? { home: opts.home, projectDir: opts.cwd } : undefined;
   let logger: SessionLog | undefined;
   if (opts.sessionLogDir) {
     logger = SessionLog.create(opts.sessionLogDir);
@@ -82,7 +109,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     provider: opts.provider,
     model: opts.model,
     system,
-    tools: [...toolsForPolicy(policy), ...(opts.extraTools ?? [])],
+    tools: [...toolsForPolicy(policy, skillDirs), ...(opts.extraTools ?? [])],
     messages: [{ role: "user", content: opts.message }],
     budget,
     maxTokens: opts.maxTokens,

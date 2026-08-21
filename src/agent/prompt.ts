@@ -38,6 +38,7 @@ export function buildSystemPrompt(inputs: {
   cwd: string;
   memorySection?: string | null;
   facts?: string | null;
+  skillsSummary?: string | null;
 }): string {
   const parts: string[] = [inputs.soulText];
 
@@ -67,6 +68,10 @@ export function buildSystemPrompt(inputs: {
 
   if (inputs.memorySection) {
     parts.push(inputs.memorySection);
+  }
+
+  if (inputs.skillsSummary) {
+    parts.push(`# Skills\nLoad with the use_skill tool.\n${inputs.skillsSummary}`);
   }
 
   return parts.join("\n\n");
