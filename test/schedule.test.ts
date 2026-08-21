@@ -126,7 +126,7 @@ describe("nextRun — cron", () => {
 
   test("leap-day schedule finds Feb 29", () => {
     const next = nextRun(parseSchedule({ cron: "0 0 29 2 *" }), at("2026-08-21T00:00:00"));
-    expect(new Date(next).toString()).toContain("Feb 29 2028");
+    expect(new Date(next).toString()).toContain("Feb 29 2028 00:00");
   });
 });
 
