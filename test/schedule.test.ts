@@ -4,6 +4,7 @@ import {
   parseCron,
   parseEvery,
   parseSchedule,
+  extractScheduleSpec,
   type CronExpr,
   type Schedule,
 } from "../src/gateway/schedule";
@@ -86,6 +87,52 @@ describe("parseSchedule", () => {
     expect(() => parseSchedule({ cron: "0 9 * * *", tz: "UTC+1" })).toThrow(
       /time zone/,
     );
+  });
+});
+
+describe("extractScheduleSpec", () => {
+  test("flat every/cron/tz keys", () => {
+    expect(extractScheduleSpec({ every: "10m" }, "job \"a\"")).toEqual({ every: "10m" });
+    expect(
+      extractScheduleSpec({ cron: "0 9 * * *", tz: "Europe/Berlin" }, "job \"a\""),
+    ).toEqual({ cron: "0 9 * * *", tz: "Europe/Berlin" });
+  });
+
+  test("nested schedule mapping", () => {
+    expect(extractScheduleSpec({ schedule: { every: "15m" } }, "job \"a\"")).toEqual({
+      every: "15m",
+    });
+    expect(
+      extractScheduleSpec({ schedule: { cron: "0 9 * * *", tz: "UTC" } }, "job \"a\""),
+    ).toEqual({ cron: "0 9 * * *", tz: "UTC" });
+  });
+
+  test("flat schedule string maps to cron", () => {
+    expect(extractScheduleSpec({ schedule: "0 9 * * *" }, "job \"a\"")).toEqual({
+      cron: "0 9 * * *",
+    });
+  });
+
+  test("flat keys take precedence over a schedule field", () => {
+    expect(
+      extractScheduleSpec({ every: "5m", schedule: { cron: "0 9 * * *" } }, "job \"a\""),
+    ).toEqual({ every: "5m" });
+  });
+
+  test("malformed schedule shape is rejected showing the received value", () => {
+    expect(() => extractScheduleSpec({ schedule: 42 }, "job \"a\"")).toThrow(
+      /must be a mapping or a cron string/,
+    );
+    expect(() => extractScheduleSpec({ schedule: 42 }, "job \"a\"")).toThrow(/42/);
+    // an empty mapping is structurally fine here; parseSchedule rejects it later
+    expect(() => extractScheduleSpec({ schedule: {} }, "job \"a\"")).not.toThrow();
+  });
+
+  test("tz type is validated for flat and nested keys", () => {
+    expect(() => extractScheduleSpec({ tz: 1 }, "job \"a\"")).toThrow(/IANA time zone/);
+    expect(() =>
+      extractScheduleSpec({ schedule: { tz: 1 } }, "job \"a\""),
+    ).toThrow(/IANA time zone/);
   });
 });
 

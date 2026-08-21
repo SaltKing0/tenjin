@@ -164,6 +164,41 @@ describe("parseGatewaySettings", () => {
     ).toThrow(/invalid interval/);
   });
 
+  test("job accepts schedule as a nested mapping (#297)", () => {
+    const s = parseGatewaySettings({
+      jobs: [
+        {
+          name: "a",
+          bot: "worker",
+          prompt: "do it",
+          schedule: { cron: "0 9 * * *", tz: "Europe/Berlin" },
+        },
+      ],
+    });
+    expect(s.jobs[0]?.scheduleSpec.cron).toBe("0 9 * * *");
+    expect(s.jobs[0]?.scheduleSpec.tz).toBe("Europe/Berlin");
+  });
+
+  test("job accepts schedule as a flat string → cron (#297)", () => {
+    const s = parseGatewaySettings({
+      jobs: [{ name: "a", bot: "worker", prompt: "do it", schedule: "30 6 * * *" }],
+    });
+    expect(s.jobs[0]?.scheduleSpec.cron).toBe("30 6 * * *");
+  });
+
+  test("invalid schedule reports the received shape (#297)", () => {
+    expect(() =>
+      parseGatewaySettings({
+        jobs: [{ name: "a", bot: "worker", prompt: "p", schedule: {} }],
+      }),
+    ).toThrow(/got schedule/);
+    expect(() =>
+      parseGatewaySettings({
+        jobs: [{ name: "a", bot: "worker", prompt: "p", schedule: 42 }],
+      }),
+    ).toThrow(/must be a mapping or a cron string/);
+  });
+
   test("duplicate job names rejected", () => {
     expect(() =>
       parseGatewaySettings({
