@@ -3,6 +3,7 @@
 
 import { renderMarkdown } from "./markdown.js";
 import { emptyStateFor } from "./empty-state.js";
+import { resolveMemoryScope } from "./memory-scope.js";
 import { setupChecklist } from "./setup-checklist.js";
 import { headerLabels, stackLabels, isHeaderRow } from "./tables.js";
 import { firstRunView, shouldShowFirstRun } from "./first-run.js";
@@ -1120,6 +1121,22 @@ async function panelJobs(main) {
 }
 
 async function panelMemory(main) {
+  // #274: the console defaults currentBot to "solo" (chat fallback), which is
+  // not a real bot — resolve the effective memory scope before querying.
+  const scope = resolveMemoryScope(currentBot, bots);
+  if (scope === null) {
+    main.replaceChildren(
+      el("h1", {}, "Memory"),
+      el("div", { class: "toolbar" }, el("span", { class: "dim" }, "read-only view of a bot's facts, summaries and vector store")),
+    );
+    main.append(emptyStateCard("memory_nobots"));
+    return;
+  }
+  if (currentBot !== scope) {
+    currentBot = scope;
+    localStorage.setItem("tenjin_bot", scope);
+  }
+
   main.replaceChildren(
     el("h1", {}, "Memory"),
     el(
@@ -1138,9 +1155,16 @@ async function panelMemory(main) {
 
   let data;
   try {
-    data = await apiJson(`/api/memory/${encodeURIComponent(currentBot)}`);
+    data = await apiJson(`/api/memory/${encodeURIComponent(scope)}`);
   } catch (e) {
-    box.append(el("div", { class: "err" }, `no memory for ${currentBot}: ${e.message}`));
+    box.append(
+      el(
+        "div",
+        { class: "card err" },
+        el("div", { class: "empty-title" }, "Memory unavailable"),
+        el("div", { class: "dim" }, `Could not load memory for “${scope}”. Please try again or pick another bot.`),
+      ),
+    );
     return;
   }
 

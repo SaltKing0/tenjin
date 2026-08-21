@@ -37,6 +37,15 @@ export const EMPTY_STATES = {
     cta: "Start a chat",
     hash: "#chat",
   },
+  // memory — no bot exists to scope memory to (#274): the console defaults the
+  // Memory panel to the chat-fallback scope "solo", which has no memory store,
+  // so guide the user to create a bot first.
+  memory_nobots: {
+    title: "No bot to remember yet",
+    caption: "Memory is scoped per bot. Create a bot (role + SOUL) first, then come back here.",
+    cta: "Create a bot",
+    hash: "#status",
+  },
   // approvals — positively empty
   approvals: {
     title: "Nothing to approve ✓",
