@@ -30,6 +30,9 @@ import {
 import { getSettings, applySettings, detectModels, testProvider, verifySettingsApply, DetectTimeoutError } from "./settings";
 import { sessionsDir } from "../config/loader";
 import { listConfiguredJobs, type JobRunResult, type JobView } from "./gateway";
+import { readFacts } from "../tools/memory";
+import { listSummaries, type SummaryEntry } from "../memory/summaries";
+import { loadChunks, vectorsFilePath } from "../memory/vector-store";
 
 export interface JobsApi {
   list(): JobView[];
@@ -273,6 +276,15 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
       }
     }
 
+    const memoryMatch = /^\/api\/memory\/([a-zA-Z0-9_-]+)$/.exec(path);
+    if (memoryMatch && req.method === "GET") {
+      const name = memoryMatch[1]!;
+      const profile = resolveBotSafe(deps.home, name);
+      if (!profile) return json({ error: `unknown bot "${name}"` }, 400);
+      const view = memoryView(deps.home, name);
+      return json(view);
+    }
+
     if (path === "/api/sessions" && req.method === "GET") {
       const bot = url.searchParams.get("bot");
       const dir = scopeSessionsDir(deps.home, bot);
@@ -451,6 +463,37 @@ function botDetailView(home: string, name: string, config: HarnessConfig) {
     sessions: existsSync(profile.sessionsDir)
       ? readdirSync(profile.sessionsDir).filter((f) => f.endsWith(".jsonl")).length
       : 0,
+  };
+}
+
+/** Read-only memory view for a bot: facts, latest summaries, vector stats. */
+function memoryView(home: string, name: string) {
+  const mem = join(home, "bots", name, "memory");
+  const summaries: Array<{ sessionId: string; projectPath: string; created: string; text: string }> =
+    listSummaries(mem)
+      .slice()
+      .sort((a, b) => (a.meta.created < b.meta.created ? 1 : -1))
+      .slice(0, 20)
+      .map((s: SummaryEntry) => ({
+        sessionId: s.meta.sessionId,
+        projectPath: s.meta.projectPath,
+        created: s.meta.created,
+        text: s.text,
+      }));
+
+  const chunks = loadChunks(vectorsFilePath(mem));
+  const seed = chunks[0];
+  const vector = {
+    count: chunks.length,
+    embedModel: seed?.embedModel ?? null,
+    dim: seed?.embedDim ?? (seed?.embedding.length ?? null),
+  };
+
+  return {
+    bot: name,
+    facts: readFacts(mem),
+    summaries,
+    vector,
   };
 }
 
