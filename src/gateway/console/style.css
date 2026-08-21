@@ -8,8 +8,8 @@
   --ok: #3fb950;
   --warn: #d29922;
   --err: #f85149;
-  --hover: var(--hover);
-  --primary: var(--primary);
+  --hover: #21262d;
+  --primary: #1f6feb;
   --on-primary: #ffffff;
   /* #283: two font roles — UI (sans) for labels/buttons/prose, mono for code/data. */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif;
