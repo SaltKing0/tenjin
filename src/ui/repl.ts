@@ -17,7 +17,7 @@ import { renderTrajectory } from "../session/trajectory";
 import { resolveContextGuard } from "../session/context";
 import { buildSkillsSection, summarizeSkills } from "../skills/activate";
 import { createAskBotTool } from "../bots/delegate";
-import { createAskBotAsyncTool, createBotTaskStatusTool } from "../bots/tasks";
+import { createAskBotAsyncTool, createBotTaskStatusTool, reconcileOrphanedTasks } from "../bots/tasks";
 import { listBots, resolveBot } from "../bots/profile";
 import { AuditLog, formatAudit, auditPath } from "../audit/log";
 import { inboxPolicyFromConfig, leaveUserMessage, unreadMessages } from "../bots/inbox";
@@ -53,6 +53,9 @@ export interface ReplOptions {
 }
 
 export async function startRepl(opts: ReplOptions): Promise<void> {
+  // #180: fail tasks orphaned by a previous process's exit so their dependents
+  // fail fast instead of burning a full timeout.
+  reconcileOrphanedTasks(opts.home);
   const rl = createInterface({ input: stdin, output: stdout });
   const audit = new AuditLog(auditPath(opts.home));
   const state = {
