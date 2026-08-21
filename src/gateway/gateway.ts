@@ -21,6 +21,30 @@ import { createRememberTool } from "../tools/memory";
 import { formatInbox, inboxPolicyFromConfig, markRead, unreadMessages, USER_SENDER } from "../bots/inbox";
 import type { ToolDef } from "../tools/registry";
 import { emit } from "./events";
+import { sleepAbortable } from "./approvals";
+
+/** Cap on how many gateway jobs may run their LLM/tool work at once (#314). */
+export const MAX_CONCURRENT_JOBS = 3;
+
+/** Minimal counting semaphore so fireDue never launches unbounded parallel runs. */
+class Semaphore {
+  private active = 0;
+  private waiters: (() => void)[] = [];
+  constructor(private readonly limit: number) {}
+  async acquire(): Promise<void> {
+    if (this.active < this.limit) {
+      this.active++;
+      return;
+    }
+    await new Promise<void>((resolve) => this.waiters.push(resolve));
+    this.active++;
+  }
+  release(): void {
+    this.active--;
+    const next = this.waiters.shift();
+    if (next) next();
+  }
+}
 
 export interface JobLastRun {
   atMs: number;
@@ -113,6 +137,8 @@ export interface GatewayDeps {
   log?: (line: string) => void;
   channels?: Record<string, (text: string) => Promise<void>>;
   guard?: import("../security/guard").SecurityGuard | null;
+  /** Max jobs that may run their LLM/tool work concurrently. Default {@link MAX_CONCURRENT_JOBS}. */
+  maxConcurrentJobs?: number;
 }
 
 export function scheduleRaw(s: Schedule): string {
@@ -426,11 +452,15 @@ export class Gateway {
   jobs: ScheduledJob[];
   private state: GatewayStateFile;
   private historyLen: number;
+  private jobSlots: Semaphore;
 
   constructor(private deps: GatewayDeps) {
     this.settings = parseGatewaySettings(deps.config.gateway);
     this.jobs = this.buildAllJobs(Date.now());
     this.historyLen = this.settings.jobHistoryLen ?? DEFAULT_JOB_HISTORY_LEN;
+    // #314: cap concurrent job runs so a burst of due jobs (e.g. after a long
+    // downtime) can never launch unbounded parallel LLM/tool work.
+    this.jobSlots = new Semaphore(deps.maxConcurrentJobs ?? MAX_CONCURRENT_JOBS);
     // #19/#151: hydrate each job's persisted run history so a restart keeps the
     // last N runs (and knows which scheduled runs have already happened).
     this.state = loadGatewayState(deps.home, this.historyLen, (m) => this.log(m));
@@ -659,6 +689,9 @@ export class Gateway {
   }
 
   private async execute(job: ScheduledJob): Promise<HeadlessResult> {
+    // #314: hold a job slot for the whole run so fireDue/runNow/catchUpOverdue
+    // never launch unbounded parallel LLM/tool work — queued runs wait here.
+    await this.jobSlots.acquire();
     this.log(`job ${job.name} start (bot=${job.botName})`);
     const runStartedMs = Date.now();
     emit("job.status", { name: job.name, bot: job.botName, running: true });
@@ -882,6 +915,9 @@ export class Gateway {
       this.persistJob(job);
       throw e;
     } finally {
+      // #314: free the job slot regardless of how the run ended so the next
+      // queued run can proceed.
+      this.jobSlots.release();
       const lr = job.lastRun;
       emit("job.status", {
         name: job.name,
@@ -944,13 +980,10 @@ export class Gateway {
       const now = Date.now();
       await this.fireDue(now);
       const wait = msUntilNextJob(this.jobs, now);
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, wait);
-        signal.addEventListener("abort", () => {
-          clearTimeout(timer);
-          resolve();
-        }, { once: true });
-      });
+      // #314: sleepAbortable always removes its abort listener (on the timer
+      // path too), so the long-lived shutdown signal never accumulates a
+      // closure per loop tick.
+      await sleepAbortable(wait, signal);
     }
     const inFlight = this.jobs.filter((j) => j.running).length;
     this.log(`gateway stopped (${inFlight} job(s) may still be finishing)`);
