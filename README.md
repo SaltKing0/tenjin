@@ -114,6 +114,8 @@ runs and how to configure its channels, jobs, heartbeats, and the web console.
 | `tenjin spend [--days n] [--bot x]` | Spend across all sessions |
 | `tenjin doctor` | Environment diagnostics |
 | `tenjin export` / `tenjin forget` | Session export / data deletion |
+| `tenjin backup [--out <file>]` | Archive the whole home (sans secrets) to a `.tar.gz` |
+| `tenjin restore <backup.tar.gz>` | Restore a home backup (validates first; never restores keys) |
 
 Run `tenjin --help` for the full reference.
 

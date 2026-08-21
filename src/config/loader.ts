@@ -29,6 +29,54 @@ const DEFAULTS: HarnessConfig = {
 };
 
 /**
+ * Current config-file schema version. Bump this whenever the meaning of an
+ * existing config.yaml field changes in a way that needs a migration, and add
+ * a corresponding step to {@link MIGRATIONS} so older homes are upgraded on
+ * boot instead of silently misreading their config.
+ */
+export const CONFIG_SCHEMA_VERSION = 1;
+
+/**
+ * Ordered schema migration steps. `MIGRATIONS[i]` upgrades a config from
+ * schema version `i` to `i + 1` by mutating the parsed global config in place.
+ * The chain runs from the version observed on the file up to
+ * {@link CONFIG_SCHEMA_VERSION}. Steps must be idempotent — they may also run
+ * against a hand-edited config that already has the target shape.
+ */
+export const MIGRATIONS: Array<(cfg: Record<string, unknown>) => void> = [];
+
+/**
+ * Apply the migration chain from `fromVersion` to `toVersion` (exclusive of
+ * `toVersion`) to a parsed config object. Returns how many steps ran.
+ */
+export function migrateConfig(
+  cfg: Record<string, unknown>,
+  fromVersion: number,
+  toVersion: number,
+  steps: Array<(cfg: Record<string, unknown>) => void> = MIGRATIONS,
+): { applied: number } {
+  let applied = 0;
+  for (let v = fromVersion; v < toVersion; v++) {
+    const step = steps[v];
+    if (step) {
+      step(cfg);
+      applied++;
+    }
+  }
+  return { applied };
+}
+
+/**
+ * Read the `version:` field from a parsed global config. Returns the integer
+ * version when present and valid, or `null` when the file is unversioned.
+ */
+export function readConfigVersion(cfg: Partial<HarnessConfig>): number | null {
+  const v = cfg.version;
+  if (v === undefined || v === null) return null;
+  return Number.isInteger(v) && v >= 0 ? v : null;
+}
+
+/**
  * Known config fields and the types they accept. Used to tell a bad type
  * (clear error with dotted path) apart from an unknown field (warning) at
  * load time, before the value can fail deep in a runtime stack.
@@ -44,6 +92,7 @@ interface FieldDef {
 }
 
 const SCHEMA: Record<string, FieldDef> = {
+  version: { types: ["number"] },
   provider: { types: ["string"] },
   model: { types: ["string"] },
   maxTokens: { types: ["number"] },
@@ -223,6 +272,7 @@ function inspectSource(
 }
 
 const CONFIG_TEMPLATE = `# Tenjin harness configuration
+version: 1                   # config schema version — keep as-is
 provider: anthropic        # anthropic | openai (any OpenAI-compatible endpoint)
 model: ""                  # REQUIRED, e.g. claude-sonnet-4-5, gpt-4o, deepseek-chat
 maxTokens: 8192
@@ -450,11 +500,33 @@ export function loadConfig(
     }
   }
 
+  // Config schema version (#134): a config explicitly stamped newer than this
+  // build supports is rejected (it would be misread), an older one is migrated
+  // through the MIGRATIONS chain and warned, and unversioned legacy configs
+  // are treated as current so existing homes boot without churn.
+  const cfgVersion = readConfigVersion(globalCfg);
+  if (cfgVersion !== null && cfgVersion > CONFIG_SCHEMA_VERSION) {
+    throw new ConfigError(
+      `${globalPath}: config schema version ${cfgVersion} is newer than this build supports (${CONFIG_SCHEMA_VERSION}) — update Tenjin before using this home`,
+    );
+  }
+  if (cfgVersion !== null && cfgVersion < CONFIG_SCHEMA_VERSION) {
+    const { applied } = migrateConfig(
+      globalCfg as Record<string, unknown>,
+      cfgVersion,
+      CONFIG_SCHEMA_VERSION,
+    );
+    console.warn(
+      `[config] ${globalPath}: schema v${cfgVersion} → v${CONFIG_SCHEMA_VERSION} (${applied} migration step(s) applied)`,
+    );
+  }
+
   const merged: HarnessConfig = {
     ...DEFAULTS,
     ...globalCfg,
     ...managedCfg,
     ...projectCfg,
+    version: CONFIG_SCHEMA_VERSION,
     approval: mergeApproval(mergeApproval(DEFAULTS.approval, globalCfg), projectCfg),
   };
 

@@ -12,6 +12,8 @@ import {
   vectorEnabled,
   providersFile,
   writeProvidersYaml,
+  CONFIG_SCHEMA_VERSION,
+  migrateConfig,
 } from "../src/config/loader";
 
 let home: string;
@@ -36,6 +38,64 @@ test("ensureGlobalDir creates config and SOUL templates once", () => {
   const soul = Bun.file(join(home, "SOUL.md"));
   expect(cfg.size).toBeGreaterThan(0);
   expect(soul.size).toBeGreaterThan(0);
+});
+
+test("fresh config template is stamped with the current schema version", () => {
+  ensureGlobalDir(home);
+  const raw = readFileSync(join(home, "config.yaml"), "utf8");
+  expect(raw).toContain(`version: ${CONFIG_SCHEMA_VERSION}`);
+});
+
+test("config schema: unversioned legacy config loads as current", () => {
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, "config.yaml"), 'provider: anthropic\nmodel: "m"\n');
+  const { config } = loadConfig(project, home);
+  expect(config.version).toBe(CONFIG_SCHEMA_VERSION);
+});
+
+test("config schema: older explicit version is migrated silently to current", () => {
+  mkdirSync(home, { recursive: true });
+  writeFileSync(
+    join(home, "config.yaml"),
+    `version: 0\nprovider: anthropic\nmodel: "m"\nmaxTokens: 4096\n`,
+  );
+  const { config } = loadConfig(project, home);
+  expect(config.version).toBe(CONFIG_SCHEMA_VERSION);
+  expect(config.maxTokens).toBe(4096);
+});
+
+test("config schema: newer version than supported is clearly rejected", () => {
+  mkdirSync(home, { recursive: true });
+  writeFileSync(
+    join(home, "config.yaml"),
+    `version: ${CONFIG_SCHEMA_VERSION + 1}\nprovider: anthropic\nmodel: "m"\n`,
+  );
+  expect(() => loadConfig(project, home)).toThrow(/newer than this build supports/);
+});
+
+test("migrateConfig runs the migration chain in version order", () => {
+  const seen: number[] = [];
+  const steps: Array<(cfg: Record<string, unknown>) => void> = [
+    (c) => {
+      seen.push(1);
+      c.a = "one";
+    },
+    (c) => {
+      seen.push(2);
+      c.b = "two";
+    },
+    (c) => {
+      seen.push(3);
+      c.c = "three";
+    },
+  ];
+  const cfg: Record<string, unknown> = {};
+  const { applied } = migrateConfig(cfg, 0, 3, steps);
+  expect(applied).toBe(3);
+  expect(seen).toEqual([1, 2, 3]);
+  expect(cfg.a).toBe("one");
+  expect(cfg.b).toBe("two");
+  expect(cfg.c).toBe("three");
 });
 
 test("defaults apply when global config is the untouched template", () => {

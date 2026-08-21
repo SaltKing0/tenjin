@@ -18,6 +18,10 @@ export interface PricingConfig {
 }
 
 export interface HarnessConfig {
+  /** Config-file schema version (see loader.CONFIG_SCHEMA_VERSION). Optional;
+   * an absent field is treated as "current" for backwards compatibility;
+   * missing/older versions are migrated at load. */
+  version?: number;
   provider: ProviderName;
   model: string;
   maxTokens: number;
