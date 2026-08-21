@@ -82,6 +82,12 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
 
     totals.inputTokens += response.usage.inputTokens;
     totals.outputTokens += response.usage.outputTokens;
+    if (response.usage.cacheReadInputTokens != null)
+      totals.cacheReadInputTokens =
+        (totals.cacheReadInputTokens ?? 0) + response.usage.cacheReadInputTokens;
+    if (response.usage.cacheCreationInputTokens != null)
+      totals.cacheCreationInputTokens =
+        (totals.cacheCreationInputTokens ?? 0) + response.usage.cacheCreationInputTokens;
     const turnCost = opts.budget.add(response.usage, opts.model);
     costUSD += turnCost;
     opts.onEvent?.({ t: "usage", usage: response.usage, costUSD: turnCost });
