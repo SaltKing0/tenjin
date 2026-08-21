@@ -8,6 +8,7 @@ import type {
 } from "../provider/types";
 import { schemas } from "../tools/registry";
 import { dispatch, cap, type ToolDef, type ToolGroup } from "../tools/registry";
+import type { SecurityGuard } from "../security/guard";
 import type { Budget } from "./budget";
 
 export const MAX_ITERATIONS = 25;
@@ -40,6 +41,7 @@ export interface AgentTurnOptions {
   maxTokens: number;
   approve: ApproveFn;
   cwd: string;
+  guard?: SecurityGuard | null;
   onEvent?: (e: TurnEvent) => void;
   onTextDelta?: (delta: string) => void;
   signal?: AbortSignal;
@@ -95,7 +97,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
       if (!approved) {
         output = "User declined this tool call.";
       } else {
-        const dispatched = await dispatch(opts.tools, block.name, block.input, { cwd: opts.cwd });
+        const dispatched = await dispatch(opts.tools, block.name, block.input, { cwd: opts.cwd, guard: opts.guard });
         ok = dispatched.ok;
         output = cap(dispatched.output);
       }

@@ -42,6 +42,7 @@ import {
 import { createSendMessageTool, createCheckInboxTool } from "./bots/tools";
 import { createAskBotTool } from "./bots/delegate";
 import { Gateway } from "./gateway/gateway";
+import { SecurityGuard } from "./security/guard";
 import { TelegramChannel, routeText } from "./gateway/telegram";
 import { unreadMessages } from "./bots/inbox";
 import { readTool } from "./tools/read";
@@ -62,6 +63,7 @@ interface AppContext {
   system: string;
   tools: ToolDef[];
   cwd: string;
+  guard: ReturnType<typeof SecurityGuard.fromConfig>;
 }
 
 async function main(): Promise<number> {
@@ -197,7 +199,8 @@ async function main(): Promise<number> {
       tools.push(createSendMessageTool({ home, fromBot: profile.name }));
       tools.push(createCheckInboxTool({ profile }));
     }
-    const ctx: AppContext = { config, registry, defaultRef, cheapRef, system, tools, cwd };
+    const guard = SecurityGuard.fromConfig(config.security);
+    const ctx: AppContext = { config, registry, defaultRef, cheapRef, system, tools, cwd, guard };
 
     if (cli.print !== undefined) {
       return await oneShot(ctx, cli.print);
@@ -302,7 +305,8 @@ async function gatewayCommand(args: string[]): Promise<number> {
     process.on("SIGINT", () => controller.abort());
     process.on("SIGTERM", () => controller.abort());
     const log = (l: string) => stdout.write(`${l}\n`);
-    const gateway = new Gateway({ home, cwd, config, registry, log });
+    const guard = SecurityGuard.fromConfig(config.security);
+    const gateway = new Gateway({ home, cwd, config, registry, log, guard });
 
     const channels: Record<string, (text: string) => Promise<void>> = {};
     let telegramRun: Promise<void> | null = null;
@@ -416,6 +420,7 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     capUSD: ctx.config.budgetUSD,
     policy: "read-only",
     agentsMd: loadAgentsMd(ctx.cwd),
+    guard: ctx.guard,
   });
   stdout.write(`${result.text}\n`);
   stdout.write(

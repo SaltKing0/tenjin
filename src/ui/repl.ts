@@ -36,6 +36,7 @@ export interface ReplOptions {
   cheapRef: ModelRef | null;
   home: string;
   bot?: string;
+  guard?: import("../security/guard").SecurityGuard | null;
   system: string;
   tools: ToolDef[];
   cwd: string;
@@ -66,6 +67,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         getProvider: (name) => opts.registry.get(name),
         globalConfig: opts.config,
         sessionBudget: state.budget,
+        guard: opts.guard ?? null,
       }),
     );
   }
@@ -133,6 +135,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           cwd: opts.cwd,
           approve: (name, group, input) =>
             approve(name, group, input, opts.config, rl, sessionAllowed),
+          guard: opts.guard,
           onTextDelta: (d) => stdout.write(d),
           onEvent: (e) => forwardEvent(e, state.logger, state.budget),
           signal: controller.signal,

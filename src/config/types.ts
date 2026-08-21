@@ -18,6 +18,7 @@ export interface HarnessConfig {
   providers?: { openai?: { baseUrl?: string } };
   models?: { default?: string; cheap?: string };
   gateway?: unknown;
+  security?: { blockedPatterns?: string[]; disabled?: boolean };
   memory?: {
     enabled?: boolean;
     vector?: { enabled?: boolean; model?: string };

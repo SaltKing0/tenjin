@@ -12,6 +12,7 @@ export interface AskBotDeps {
   getProvider: (name: ProviderName) => Provider;
   globalConfig: HarnessConfig;
   sessionBudget?: Budget;
+  guard?: import("../security/guard").SecurityGuard | null;
 }
 
 const DEFAULT_DELEGATION_CAP_USD = 1.0;
@@ -56,6 +57,7 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
         maxTokens: deps.globalConfig.maxTokens,
         capUSD: cap,
         policy: "read-only",
+        guard: deps.guard,
       });
 
       const text = result.text;

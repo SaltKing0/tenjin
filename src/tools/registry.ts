@@ -1,7 +1,9 @@
 import type { ToolSchema } from "../provider/types";
+import type { SecurityGuard } from "../security/guard";
 
 export interface ToolContext {
   cwd: string;
+  guard?: SecurityGuard | null;
 }
 
 export type ToolGroup = "read" | "write";
@@ -45,6 +47,16 @@ export async function dispatch(
   );
   if (missing.length) {
     return { ok: false, output: `Missing required argument(s): ${missing.join(", ")}` };
+  }
+  if (ctx.guard) {
+    const guardResult = ctx.guard.checkTool(name, args);
+    if (guardResult.blocked) {
+      ctx.guard.onBlock?.(`${name} blocked by pattern "${guardResult.pattern}" target="${guardResult.target}"`);
+      return {
+        ok: false,
+        output: `Blocked by security policy: matches pattern "${guardResult.pattern}". Ask the user how to proceed.`,
+      };
+    }
   }
   try {
     return { ok: true, output: await def.handler(args, ctx) };

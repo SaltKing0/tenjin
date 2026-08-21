@@ -28,6 +28,7 @@ export interface GatewayDeps {
   registry: ProviderRegistry;
   log?: (line: string) => void;
   channels?: Record<string, (text: string) => Promise<void>>;
+  guard?: import("../security/guard").SecurityGuard | null;
 }
 
 export function scheduleRaw(s: Schedule): string {
@@ -149,6 +150,7 @@ export class Gateway {
       extraTools,
       sessionLogDir: profile.sessionsDir,
       sessionBot: profile.name,
+      guard: this.deps.guard,
     });
     this.log(
       `job ${job.name} done (${result.stopReason}, ${formatUSD(result.costUSD)})`,

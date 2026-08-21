@@ -24,6 +24,7 @@ export interface HeadlessOptions {
   extraTools?: ToolDef[];
   sessionLogDir?: string;
   sessionBot?: string;
+  guard?: import("../security/guard").SecurityGuard | null;
 }
 
 export interface HeadlessResult {
@@ -74,6 +75,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     maxTokens: opts.maxTokens,
     cwd: opts.cwd,
     approve: async (_name, group) => group === "read",
+    guard: opts.guard,
     onEvent: logger
       ? (e: TurnEvent) => {
           const ts = new Date().toISOString();
