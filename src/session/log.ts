@@ -5,6 +5,7 @@ import {
   readFileSync,
   readdirSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -18,21 +19,37 @@ export interface SessionSummary {
   parentId?: string;
 }
 
+export interface CorruptLine {
+  path: string;
+  line: number;
+}
+
+const DEFAULT_PREVIEW = "(no user messages)";
+
+interface SessionMeta {
+  id: string;
+  preview: string;
+  parentId?: string;
+  mtimeMs: number;
+}
+
 export class SessionLog {
   private constructor(
     readonly path: string,
     readonly id: string,
+    private readonly metaPath: string,
   ) {}
 
   static create(dir: string): SessionLog {
     mkdirSync(dir, { recursive: true });
     const id = newId();
-    return new SessionLog(join(dir, `${id}.jsonl`), id);
+    const path = join(dir, `${id}.jsonl`);
+    return new SessionLog(path, id, metaPathFor(path));
   }
 
   static open(path: string): SessionLog {
     if (!existsSync(path)) throw new Error(`session not found: ${path}`);
-    return new SessionLog(path, idFromPath(path));
+    return new SessionLog(path, idFromPath(path), metaPathFor(path));
   }
 
   static resolve(dir: string, idPrefix: string): SessionLog {
@@ -86,13 +103,24 @@ export class SessionLog {
       } catch {
         continue;
       }
-      const meta = scanMeta(path);
+      const metaPath = metaPathFor(path);
+      const meta = readMeta(metaPath);
+      let preview: string;
+      let parentId: string | undefined;
+      if (meta) {
+        preview = meta.preview;
+        parentId = meta.parentId;
+      } else {
+        const scanned = scanMeta(path);
+        preview = scanned.preview;
+        parentId = scanned.parentId;
+      }
       summaries.push({
         id: idFromPath(path),
         path,
         mtimeMs,
-        preview: meta.preview,
-        parentId: meta.parentId,
+        preview,
+        parentId,
       });
     }
     return summaries.sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -100,21 +128,57 @@ export class SessionLog {
 
   append(event: SessionEvent): void {
     appendFileSync(this.path, `${JSON.stringify(event)}\n`);
+    this.updateMeta(event);
   }
 
   events(): SessionEvent[] {
-    if (!existsSync(this.path)) return [];
+    return this.readEvents().events;
+  }
+
+  readEvents(): { events: SessionEvent[]; corrupt: CorruptLine[] } {
+    if (!existsSync(this.path)) return { events: [], corrupt: [] };
     const events: SessionEvent[] = [];
-    const raw = readFileSync(this.path, "utf8");
-    for (const line of raw.split("\n")) {
-      if (!line.trim()) continue;
+    const corrupt: CorruptLine[] = [];
+    const lines = readFileSync(this.path, "utf8").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line || !line.trim()) continue;
       try {
         events.push(JSON.parse(line) as SessionEvent);
       } catch {
-        // skip corrupted line
+        corrupt.push({ path: this.path, line: i + 1 });
       }
     }
-    return events;
+    return { events, corrupt };
+  }
+
+  private updateMeta(event: SessionEvent): void {
+    const meta = readMeta(this.metaPath) ?? {
+      id: this.id,
+      preview: DEFAULT_PREVIEW,
+      mtimeMs: 0,
+    };
+    if (event.t === "session_start" && event.parent && meta.parentId === undefined) {
+      meta.parentId = event.parent.id;
+    }
+    if (
+      event.t === "message" &&
+      event.role === "user" &&
+      meta.preview === DEFAULT_PREVIEW
+    ) {
+      const text = typeof event.content === "string" ? event.content : "[blocks]";
+      meta.preview = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+    }
+    try {
+      meta.mtimeMs = statSync(this.path).mtimeMs;
+    } catch {
+      // path unreadable; keep previous value
+    }
+    try {
+      writeFileSync(this.metaPath, `${JSON.stringify(meta)}\n`);
+    } catch {
+      // best-effort index
+    }
   }
 }
 
@@ -128,8 +192,27 @@ function idFromPath(path: string): string {
   return base.replace(/\.jsonl$/, "");
 }
 
+function metaPathFor(path: string): string {
+  return path.replace(/\.jsonl$/, ".meta.json");
+}
+
+function readMeta(metaPath: string): SessionMeta | null {
+  try {
+    if (!existsSync(metaPath)) return null;
+    const parsed = JSON.parse(readFileSync(metaPath, "utf8")) as Partial<SessionMeta>;
+    return {
+      id: parsed.id ?? "",
+      preview: typeof parsed.preview === "string" ? parsed.preview : DEFAULT_PREVIEW,
+      parentId: parsed.parentId,
+      mtimeMs: parsed.mtimeMs ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function scanMeta(path: string): { preview: string; parentId?: string } {
-  let preview = "(no user messages)";
+  let preview = DEFAULT_PREVIEW;
   let parentId: string | undefined;
   try {
     for (const line of readFileSync(path, "utf8").split("\n")) {
@@ -139,11 +222,11 @@ function scanMeta(path: string): { preview: string; parentId?: string } {
         if (e.t === "session_start" && e.parent && parentId === undefined) {
           parentId = e.parent.id;
         }
-        if (preview === "(no user messages)" && e.t === "message" && e.role === "user") {
+        if (preview === DEFAULT_PREVIEW && e.t === "message" && e.role === "user") {
           const text = typeof e.content === "string" ? e.content : "[blocks]";
           preview = text.length > 60 ? `${text.slice(0, 60)}…` : text;
         }
-        if (preview !== "(no user messages)" && parentId !== undefined) break;
+        if (preview !== DEFAULT_PREVIEW && parentId !== undefined) break;
       } catch {
         continue;
       }
