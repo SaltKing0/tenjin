@@ -95,73 +95,47 @@ interface AppContext {
   effort?: EffortLevel;
 }
 
-async function main(): Promise<number> {
-  if (process.argv[2] === "bot") {
-    return botCommand(process.argv.slice(3));
-  }
-  if (process.argv[2] === "tell") {
-    return tellCommand(process.argv.slice(3));
-  }
+type CommandHandler = (args: string[]) => number | Promise<number>;
 
-  if (process.argv[2] === "gateway") {
-    return gatewayCommand(process.argv.slice(3));
-  }
-
-  if (process.argv[2] === "audit") {
-    return auditCommand(process.argv.slice(3));
-  }
-
-  if (process.argv[2] === "spend") {
-    return spendCommand(process.argv.slice(3));
-  }
-
-  if (process.argv[2] === "job") {
-    return jobCommand(process.argv.slice(3));
-  }
-
-  if (process.argv[2] === "doctor") {
-    return doctorCommand();
-  }
-
-  if (process.argv[2] === "export") {
-    return exportCommand(process.argv.slice(3));
-  }
-
-  if (process.argv[2] === "forget") {
-    process.exitCode = await forgetCommand(process.argv.slice(3));
+/**
+ * Top-level subcommand dispatch. Kept as a plain record (not a framework):
+ * each entry maps `tenjin <name>` to its handler with the same semantics the
+ * old if-chain had — including the two handlers that set `process.exitCode`
+ * (forget, onboard) and doctor, which takes no args.
+ */
+const COMMANDS: Record<string, CommandHandler> = {
+  bot: (a) => botCommand(a),
+  tell: (a) => tellCommand(a),
+  gateway: (a) => gatewayCommand(a),
+  audit: (a) => auditCommand(a),
+  spend: (a) => spendCommand(a),
+  job: (a) => jobCommand(a),
+  doctor: () => doctorCommand(),
+  export: (a) => exportCommand(a),
+  forget: async (a) => {
+    process.exitCode = await forgetCommand(a);
     return process.exitCode;
-  }
-
-  if (process.argv[2] === "onboard") {
-    const onboardArgs = process.argv.slice(3);
-    if (onboardArgs.includes("--help") || onboardArgs.includes("-h")) {
+  },
+  onboard: async (a) => {
+    if (a.includes("--help") || a.includes("-h")) {
       stdout.write(onboardUsage());
       return 0;
     }
-    process.exitCode = await runOnboard(onboardArgs, { home: tenjinHome() });
+    process.exitCode = await runOnboard(a, { home: tenjinHome() });
     return process.exitCode;
-  }
+  },
+  arena: (a) => arenaCommand(a),
+  backup: (a) => backupCommand(a),
+  restore: (a) => restoreCommand(a),
+  team: (a) => teamCommand(a),
+  keyring: (a) => keyringCommand(a),
+  skills: (a) => skillsCommand(a),
+};
 
-  if (process.argv[2] === "arena") {
-    return arenaCommand(process.argv.slice(3));
-  }
-
-  if (process.argv[2] === "backup") {
-    return backupCommand(process.argv.slice(3));
-  }
-
-  if (process.argv[2] === "restore") {
-    return restoreCommand(process.argv.slice(3));
-  }
-
-  if (process.argv[2] === "team") {
-    return teamCommand(process.argv.slice(3));
-  }
-  if (process.argv[2] === "keyring") {
-    return keyringCommand(process.argv.slice(3));
-  }
-  if (process.argv[2] === "skills") {
-    return skillsCommand(process.argv.slice(3));
+async function main(): Promise<number> {
+  const handler = COMMANDS[process.argv[2] ?? ""];
+  if (handler) {
+    return handler(process.argv.slice(3));
   }
 
   let cli: CliArgs;
