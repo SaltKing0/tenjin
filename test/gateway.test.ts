@@ -90,6 +90,22 @@ describe("parseGatewaySettings", () => {
       parseGatewaySettings({ telegram: { enabled: true, allowedUsers: [42] } }),
     ).toThrow(/defaultBot/);
   });
+
+  test("telegram rate-limit and length config parsed (#69)", () => {
+    const s = parseGatewaySettings({
+      telegram: {
+        enabled: true,
+        allowedUsers: [42],
+        defaultBot: "researcher",
+        rateLimitMax: 5,
+        rateLimitWindowMs: 10_000,
+        maxMessageLength: 512,
+      },
+    });
+    expect(s.telegram?.rateLimitMax).toBe(5);
+    expect(s.telegram?.rateLimitWindowMs).toBe(10_000);
+    expect(s.telegram?.maxMessageLength).toBe(512);
+  });
 });
 
 describe("job scheduling helpers", () => {

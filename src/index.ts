@@ -509,7 +509,15 @@ async function gatewayCommand(args: string[]): Promise<number> {
           defaultBot,
           allowedUsers: tg.allowedUsers,
           apiBase: process.env.TELEGRAM_API_BASE,
-          onReject: (userId) => audit.append("channel_reject", String(userId), "telegram message from non-allowlisted user"),
+          rateLimitMax: tg.rateLimitMax,
+          rateLimitWindowMs: tg.rateLimitWindowMs,
+          maxMessageLength: tg.maxMessageLength,
+          onRejected: (info) =>
+            audit.append(
+              "channel_reject",
+              String(info.userId),
+              `telegram message rejected (${info.reason})`,
+            ),
         },
         (msg) =>
           handleForTelegram(msg.text, {
