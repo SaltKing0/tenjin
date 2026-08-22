@@ -26,6 +26,14 @@ import {
   sharedTokenPressure,
   type TokenPressure,
 } from "../session/token-pressure";
+import {
+  runConsolidation,
+  shouldConsolidate,
+  newConsolidationTracker,
+  DEFAULT_CONSOLIDATION_THRESHOLD,
+  DEFAULT_CONSOLIDATION_MIN_TURNS,
+  type ConsolidationTracker,
+} from "../memory/consolidate";
 import { emit } from "../gateway/events";
 
 export const MAX_ITERATIONS = 25;
@@ -116,21 +124,48 @@ export interface AgentTurnOptions {
   archiveDir?: string;
   /** Cheap-model summarizer for stage 4 (optional; falls back to archive-only). */
   summarize?: (segment: string) => Promise<string>;
+  /** B9-3 end-of-session consolidation pass (runs once at the natural turn
+   * boundary when calibrated pressure crosses `threshold`). */
+  consolidation?: {
+    enabled?: boolean;
+    threshold?: number;
+    minTurnsBetween?: number;
+    /** The configured cheap/helper model for the single consolidation call. */
+    helper?: { provider: Provider; model: string; maxTokens?: number };
+    memoryDir?: string;
+    projectPath?: string;
+    sessionLog?: import("../session/log").SessionLog | null;
+  };
 }
 
 export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> {
+  // B2-3/B2-4: cache-law tracker so compaction never fires on consecutive turns.
+  const compactionTracker = newTracker();
+  // B9-3: anti-runaway tracker for the end-of-session consolidation pass.
+  const consolidationTracker = newConsolidationTracker();
+
+  const { result, iterations } = await runTurns(opts, compactionTracker);
+  // B9-3: run the single consolidation pass at the natural post-turn boundary.
+  // It never fires mid-stream (inside the tool loop) — only once a turn ends.
+  await maybeConsolidate(opts, consolidationTracker, iterations);
+  return result;
+}
+
+async function runTurns(
+  opts: AgentTurnOptions,
+  compactionTracker: CompactionTracker,
+): Promise<{ result: TurnResult; iterations: number }> {
   const totals: Usage = { inputTokens: 0, outputTokens: 0 };
   let costUSD = 0;
   let lastText = "";
   const maxIterations = opts.maxIterations ?? MAX_ITERATIONS;
-  // B2-3/B2-4: cache-law tracker so compaction never fires on consecutive turns.
-  const compactionTracker = newTracker();
 
-  for (let iteration = 0; iteration < maxIterations; iteration++) {
+  let iteration = 0;
+  for (; iteration < maxIterations; iteration++) {
     if (opts.budget.exhausted) {
       opts.audit?.("budget_halt", `halted at ${opts.budget.spentUSD.toFixed(4)} USD`, opts.correlationId);
       emit("budget.exceeded", { reason: "session budget exhausted" });
-      return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText };
+      return { result: { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText }, iterations: iteration };
     }
 
     // #154: a shared delegation-tree budget. Reserve this iteration — if the
@@ -143,11 +178,14 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
         opts.correlationId,
       );
       return {
-        stopReason: "tree_budget_exceeded",
-        usage: totals,
-        costUSD,
-        model: opts.model,
-        text: lastText,
+        result: {
+          stopReason: "tree_budget_exceeded",
+          usage: totals,
+          costUSD,
+          model: opts.model,
+          text: lastText,
+        },
+        iterations: iteration,
       };
     }
 
@@ -157,7 +195,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
         gate.reason ?? "blocked by global budget gate";
       opts.audit?.("budget_halt", detail, opts.correlationId);
       emit("budget.exceeded", { reason: detail });
-      return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText };
+      return { result: { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText }, iterations: iteration };
     }
 
     await maybeCompress(opts, iteration, compactionTracker);
@@ -223,7 +261,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
     opts.onEvent?.({ t: "usage", usage: response.usage, costUSD: turnCost });
 
     if (response.stopReason !== "tool_use") {
-      return { stopReason: response.stopReason, usage: totals, costUSD, model: opts.model, text: lastText };
+      return { result: { stopReason: response.stopReason, usage: totals, costUSD, model: opts.model, text: lastText }, iterations: iteration };
     }
 
     const results: ToolResultBlock[] = [];
@@ -274,7 +312,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
     opts.messages.push({ role: "user", content: results });
   }
 
-  return { stopReason: "max_iterations", usage: totals, costUSD, model: opts.model, text: lastText };
+  return { result: { stopReason: "max_iterations", usage: totals, costUSD, model: opts.model, text: lastText }, iterations: iteration };
 }
 
 function groupOf(tools: ToolDef[], name: string): ToolGroup {
@@ -359,6 +397,59 @@ async function maybeCompress(
     stage: result.stage,
     archivePath: result.archivePath,
   });
+}
+
+/**
+ * B9-3 end-of-session consolidation: at the natural post-turn boundary, if
+ * calibrated pressure crosses the threshold and the anti-runaway gate allows,
+ * run ONE consolidation call on the configured cheap/helper model and write the
+ * results through the memory tiers. A helper failure is swallowed by
+ * runConsolidation (the session simply continues unconsolidated). Never runs
+ * mid-stream — this is only invoked once, after runTurns completes.
+ */
+async function maybeConsolidate(
+  opts: AgentTurnOptions,
+  tracker: ConsolidationTracker,
+  iteration: number,
+): Promise<void> {
+  const cfg = opts.consolidation;
+  if (!cfg || cfg.enabled === false) return;
+  const helper = cfg.helper;
+  if (!helper?.provider) return;
+  const memoryDir = cfg.memoryDir;
+  if (!memoryDir) return;
+  const guard = opts.contextGuard;
+  if (!guard?.enabled) return;
+
+  const pressure = (opts.tokenPressure ?? sharedTokenPressure).pressureTokens(
+    opts.sessionKey ?? DEFAULT_SESSION_KEY,
+    opts.messages,
+  );
+  const ratio = guard.windowTokens > 0 ? pressure / guard.windowTokens : 1;
+  const threshold = cfg.threshold ?? DEFAULT_CONSOLIDATION_THRESHOLD;
+  const minTurns = cfg.minTurnsBetween ?? DEFAULT_CONSOLIDATION_MIN_TURNS;
+  if (!shouldConsolidate(tracker, iteration, ratio, threshold, minTurns)) return;
+
+  const result = await runConsolidation({
+    provider: helper.provider,
+    model: helper.model,
+    maxTokens: helper.maxTokens ?? 1024,
+    sessionKey: opts.sessionKey ?? DEFAULT_SESSION_KEY,
+    memoryDir,
+    projectPath: cfg.projectPath ?? "",
+    sessionLog: cfg.sessionLog ?? null,
+    audit: (kind, detail) =>
+      (opts.audit as ((kind: string, detail: string, correlationId?: string) => void) | undefined)?.(
+        kind,
+        detail,
+        opts.correlationId,
+      ),
+  });
+
+  if (result.ran) {
+    tracker.lastRunIteration = iteration;
+    tracker.lastRunPressureRatio = ratio;
+  }
 }
 
 /**

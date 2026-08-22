@@ -124,6 +124,14 @@ export interface ContextConfig {
     minTurnsBetween?: number;
     archiveDir?: string;
   };
+  /** End-of-session consolidation pass (B9-3). */
+  consolidation?: {
+    enabled?: boolean;
+    /** Pressure ratio (0..1) at which the pass fires. Default 0.65. */
+    threshold?: number;
+    /** Min turns between passes without strictly-higher pressure. Default 5. */
+    minTurnsBetween?: number;
+  };
 }
 
 /** `mcp` in config.yaml — MCP stdio servers (WPs 3.1+3.2). Default OFF. */

@@ -230,6 +230,14 @@ const SCHEMA: Record<string, FieldDef> = {
           table: { types: ["mapping"], valueType: "number" },
         },
       },
+      consolidation: {
+        types: ["mapping"],
+        children: {
+          enabled: { types: ["boolean"] },
+          threshold: { types: ["number"] },
+          minTurnsBetween: { types: ["number"] },
+        },
+      },
     },
   },
   // `mcp` from WPs 3.1+3.2 (MCP stdio servers, default off). Server entries are
