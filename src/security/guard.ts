@@ -26,6 +26,9 @@ export interface WorkspaceOptions {
   // Extra absolute paths that are allowed even if outside the workspace root
   // (e.g. dedicated Memory/Skills directories).
   allowedPaths?: string[];
+  // Domain deny-list for web_fetch: hostnames (or *.sub) that may never be
+  // fetched. Matched against the URL host, exact or subdomain.
+  denyDomains?: string[];
 }
 
 export const GUARD_DISABLED_WARNING =
@@ -142,6 +145,7 @@ export class SecurityGuard {
   private entries: Array<{ pattern: string; full: RegExp; base: RegExp }>;
   private workspaceRoot?: string;
   private allowedPaths: string[];
+  private domainEntries: Array<{ pattern: string; regex: RegExp }>;
 
   constructor(
     readonly patterns: string[],
@@ -158,9 +162,17 @@ export class SecurityGuard {
     });
     this.workspaceRoot = options.workspaceRoot ? resolve(options.workspaceRoot) : undefined;
     this.allowedPaths = (options.allowedPaths ?? []).map((p) => resolve(p));
+    this.domainEntries = (options.denyDomains ?? []).map((pattern) => {
+      // Accept "example.com" or "*.example.com" — both block the domain and
+      // every subdomain. Anchor to a label boundary so "notexample.com" is
+      // not caught by a deny of "example.com".
+      const bare = pattern.replace(/^\.?\*?\./, "").replace(/^\./, "");
+      const src = globToSource(bare);
+      return { pattern, regex: new RegExp(`(?:^|\\.)${src}$`, "i") };
+    });
   }
 
-  static fromConfig(security: { blockedPatterns?: string[]; disabled?: boolean; workspaceRoot?: string; allowedPaths?: string[] } | undefined, onBlock?: (detail: string) => void): SecurityGuard | null {
+  static fromConfig(security: { blockedPatterns?: string[]; disabled?: boolean; workspaceRoot?: string; allowedPaths?: string[]; denyDomains?: string[] } | undefined, onBlock?: (detail: string) => void): SecurityGuard | null {
     if (security?.disabled) return null;
     const patterns = security?.blockedPatterns ?? [...DEFAULT_BLOCKED_PATTERNS];
     if (!Array.isArray(patterns)) {
@@ -172,9 +184,13 @@ export class SecurityGuard {
     if (security?.allowedPaths !== undefined && !Array.isArray(security.allowedPaths)) {
       throw new ConfigError("security.allowedPaths must be a list of paths");
     }
+    if (security?.denyDomains !== undefined && !Array.isArray(security.denyDomains)) {
+      throw new ConfigError("security.denyDomains must be a list of domains");
+    }
     return new SecurityGuard(patterns, onBlock, {
       workspaceRoot: security?.workspaceRoot,
       allowedPaths: security?.allowedPaths,
+      denyDomains: security?.denyDomains,
     });
   }
 
@@ -309,6 +325,25 @@ export class SecurityGuard {
     return { blocked: false };
   }
 
+  /**
+   * Domain deny-list check for web_fetch: return blocked when the URL's host
+   * (or a subdomain of it) matches a configured denyDomains entry.
+   */
+  checkUrl(url: string): GuardResult {
+    let host: string;
+    try {
+      host = new URL(url).hostname.toLowerCase();
+    } catch {
+      return { blocked: false };
+    }
+    for (const entry of this.domainEntries) {
+      if (entry.regex.test(host)) {
+        return { blocked: true, pattern: entry.pattern, target: host };
+      }
+    }
+    return { blocked: false };
+  }
+
   checkTool(name: string, input: Record<string, unknown>, cwd?: string): GuardResult {
     switch (name) {
       case "read_file":
@@ -325,6 +360,11 @@ export class SecurityGuard {
         if (typeof command !== "string") return { blocked: false };
         return this.checkCommand(command);
       }
+      case "web_fetch": {
+        const url = input.url;
+        if (typeof url !== "string") return { blocked: false };
+        return this.checkUrl(url);
+      }
       default:
         return { blocked: false };
     }
@@ -336,6 +376,8 @@ export type GuardConfig = {
   disabled?: boolean;
   workspaceRoot?: string;
   allowedPaths?: string[];
+  // Domain deny-list for web_fetch (hostnames or *.sub that may never be fetched).
+  denyDomains?: string[];
 };
 
 /** Union extra bot globs onto the global set (defaults if global is unset). */
@@ -356,7 +398,7 @@ export function mergeBlockedPatterns(global?: string[], extra?: string[]): strin
 /** Guard for one bot: global patterns plus the bot's extra blockedPatterns. */
 export function guardForBot(
   globalSecurity: GuardConfig | undefined,
-  botSecurity: { blockedPatterns?: string[] } | undefined,
+  botSecurity: { blockedPatterns?: string[]; denyDomains?: string[] } | undefined,
   onBlock?: (detail: string) => void,
 ): SecurityGuard | null {
   return SecurityGuard.fromConfig(
@@ -365,6 +407,10 @@ export function guardForBot(
       blockedPatterns: mergeBlockedPatterns(
         globalSecurity?.blockedPatterns,
         botSecurity?.blockedPatterns,
+      ),
+      denyDomains: mergeBlockedPatterns(
+        globalSecurity?.denyDomains,
+        botSecurity?.denyDomains,
       ),
     },
     onBlock,
