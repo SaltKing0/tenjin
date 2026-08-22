@@ -8,7 +8,7 @@ import type {
   Usage,
 } from "../provider/types";
 import { schemas } from "../tools/registry";
-import { dispatch, cap, type ToolDef, type ToolGroup } from "../tools/registry";
+import { dispatch, cap, type ToolDef, type ToolGroup, type DispatchResult } from "../tools/registry";
 import type { SecurityGuard } from "../security/guard";
 import { detectSuspiciousOutput, frameToolOutput, maskToolOutput } from "../security/injection";
 import type { Budget, TreeBudget } from "./budget";
@@ -36,6 +36,8 @@ import {
 } from "../memory/consolidate";
 import { emit } from "../gateway/events";
 import { snapshot as checkpointSnapshot } from "../checkpoints/store";
+import { runBoundary, type BoundaryMode } from "../recovery/boundary";
+import type { RecoverySession } from "../recovery/session";
 
 export const MAX_ITERATIONS = 25;
 
@@ -152,6 +154,18 @@ export interface AgentTurnOptions {
     beforeTurn?: boolean;
     /** Snapshot before file-edit tools (write/edit/apply_patch). Default true. */
     beforeEdit?: boolean;
+  } | null;
+  /** B3-3 recovery boundaries (#372): error-boundary policy for tool steps plus
+   *  an optional ON_TOOL_CALL session checkpoint. All additive — when `recovery`
+   *  is absent the loop behaves exactly as before. */
+  recovery?: {
+    /** Boundary policy for non-critical tool steps. Default: current behaviour
+     *  (a tool failure returns a structured error result, never aborts). */
+    boundary?: BoundaryMode;
+    /** Audit sink for recovery decisions (detail carries the reason class). */
+    audit?: (kind: "recovery", detail: string, correlationId?: string) => void;
+    /** Optional session recording checkpoints ON_TOOL_CALL + completed steps. */
+    session?: RecoverySession;
   } | null;
 }
 
@@ -302,15 +316,13 @@ async function runTurns(
         // deliberately excluded (its changes are opaque; git reflog is the
         // documented fallback).
         if (isEditTool(block.name)) maybeCheckpoint(opts, `edit:${block.name}`);
-        const dispatched = await dispatch(opts.tools, block.name, block.input, {
-          cwd: opts.cwd,
-          guard: opts.guard,
-          treeBudget: opts.treeBudget,
-          audit: opts.audit,
-          correlationId: opts.correlationId,
-        });
+        // B3-3 (#372): record an ON_TOOL_CALL checkpoint before the external
+        // interaction, then run the tool under the configured error boundary.
+        opts.recovery?.session?.checkpoint(`tool:${block.name}:${block.id}`);
+        const dispatched = await runDispatchBoundary(opts, block.name, block.input);
         ok = dispatched.ok;
         output = cap(dispatched.output);
+        if (ok) opts.recovery?.session?.complete(block.id);
         // #129: tool output is untrusted data. Flag suspicious content, audit
         // it, and (under security.paranoid) mask it before it reaches the model.
         const suspicious = detectSuspiciousOutput(dispatched.output);
@@ -373,6 +385,41 @@ function maybeCheckpoint(opts: AgentTurnOptions, label: string): void {
   } catch {
     // ignore — checkpoint is best-effort
   }
+}
+
+/**
+ * B3-3 (#372): run a tool under the configured error boundary. Without a
+ * `recovery.boundary` this is a plain dispatch (identical behaviour to before).
+ * With one, an unexpected throw becomes a noted gap / a paused step / a raised
+ * error per policy — never an abort of the whole turn.
+ */
+async function runDispatchBoundary(
+  opts: AgentTurnOptions,
+  name: string,
+  input: unknown,
+): Promise<DispatchResult> {
+  const base = () =>
+    dispatch(opts.tools, name, input, {
+      cwd: opts.cwd,
+      guard: opts.guard,
+      treeBudget: opts.treeBudget,
+      audit: opts.audit,
+      correlationId: opts.correlationId,
+    });
+  const mode = opts.recovery?.boundary;
+  if (!mode) return base();
+  const outcome = await runBoundary(base, {
+    mode,
+    audit: (d) => opts.recovery?.audit?.("recovery", d, opts.correlationId),
+  });
+  if (outcome.status === "success") return outcome.value;
+  if (outcome.status === "skipped") {
+    return { ok: false, output: `[recovery ${outcome.reason}] ${outcome.note}` };
+  }
+  if (outcome.status === "paused") {
+    return { ok: false, output: "[recovery paused: awaiting human approval]" };
+  }
+  throw outcome.error;
 }
 
 /**

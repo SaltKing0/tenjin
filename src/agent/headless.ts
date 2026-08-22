@@ -123,6 +123,13 @@ export interface HeadlessOptions {
     beforeTurn?: boolean;
     beforeEdit?: boolean;
   } | null;
+  /** B3-3 recovery (#372): error-boundary policy + ON_TOOL_CALL session
+   *  checkpoint for the agent loop (additive; absent = current behaviour). */
+  recovery?: {
+    boundary?: import("../recovery/boundary").BoundaryMode;
+    audit?: (kind: "recovery", detail: string, correlationId?: string) => void;
+    session?: import("../recovery/session").RecoverySession;
+  } | null;
 }
 
 export interface HeadlessResult {
@@ -275,6 +282,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         }
       : undefined,
     checkpoints: opts.checkpoints,
+    recovery: opts.recovery,
     onEvent: (e: TurnEvent) => {
       if (e.t === "tool_call") opts.onToolActivity?.(e.name);
       if (!logger) return;
