@@ -12,7 +12,15 @@ import { dispatch, cap, type ToolDef, type ToolGroup } from "../tools/registry";
 import type { SecurityGuard } from "../security/guard";
 import { detectSuspiciousOutput, frameToolOutput, maskToolOutput } from "../security/injection";
 import type { Budget, TreeBudget } from "./budget";
-import { compressMessages } from "../session/context";
+import { estimateTokens } from "../session/context";
+import {
+  runStagedCompaction,
+  resolveStage,
+  shouldMutate,
+  newTracker,
+  type CompactionTracker,
+  type Stage,
+} from "../session/compaction";
 import {
   DEFAULT_SESSION_KEY,
   sharedTokenPressure,
@@ -32,6 +40,12 @@ export type TurnEvent =
       beforeTokens: number;
       afterTokens: number;
       elidedTokens: number;
+      /** B2-3/B2-4: which staged-compaction stage fired (0 = none, 1 warn, 2 elide, 4 summarize). */
+      stage?: Stage;
+      /** Per-session archive file written this pass, if content was offloaded. */
+      archivePath?: string;
+      /** If set, compaction was intentionally skipped (e.g. cache-law). */
+      skipped?: string;
     };
 
 export interface TurnResult {
@@ -96,6 +110,12 @@ export interface AgentTurnOptions {
    * invalidated.
    */
   volatileTail?: string | null;
+  /** B2-3/B2-4 staged-compaction config (subset of `context.compaction`). */
+  compaction?: import("../session/context").ContextConfig["compaction"];
+  /** Per-session archive dir for non-lossy offload (default `<memoryDir>/archives`). */
+  archiveDir?: string;
+  /** Cheap-model summarizer for stage 4 (optional; falls back to archive-only). */
+  summarize?: (segment: string) => Promise<string>;
 }
 
 export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> {
@@ -103,6 +123,8 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
   let costUSD = 0;
   let lastText = "";
   const maxIterations = opts.maxIterations ?? MAX_ITERATIONS;
+  // B2-3/B2-4: cache-law tracker so compaction never fires on consecutive turns.
+  const compactionTracker = newTracker();
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     if (opts.budget.exhausted) {
@@ -138,7 +160,7 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
       return { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText };
     }
 
-    maybeCompress(opts);
+    await maybeCompress(opts, iteration, compactionTracker);
 
 
     let response: ChatResponse;
@@ -260,32 +282,83 @@ function groupOf(tools: ToolDef[], name: string): ToolGroup {
 }
 
 /**
- * Context-window guard (#101): if a resolved guard is configured and enabled,
- * estimate the trajectory's tokens and, once it exceeds the threshold
- * (window × ratio), elide old tool-result outputs to placeholders so the
- * provider call survives instead of dying on a 413 / context_length error.
- * Emits a `compression` event so the boundary is recorded in the session.
+ * B2-3/B2-4 staged compaction (supersedes the simple auto-compact threshold):
+ * resolve the calibrated pressure ratio against the config-driven stage table
+ * and run the corresponding stage — warn (1), pointer-elide with non-lossy
+ * offload (2), or summarize (4). The CACHE LAW (never on consecutive turns
+ * unless pressure escalates) is enforced via `tracker`. Emits a `compression`
+ * event (stage/archivePath) so the boundary lands in the session trail.
  */
-function maybeCompress(opts: AgentTurnOptions): void {
+async function maybeCompress(
+  opts: AgentTurnOptions,
+  iteration: number,
+  tracker: CompactionTracker,
+): Promise<void> {
   const guard = opts.contextGuard;
   if (!guard?.enabled) return;
-  const targetTokens = Math.floor(guard.windowTokens * guard.thresholdRatio);
+  const compaction = opts.compaction;
+  if (compaction?.enabled === false) return;
+
   // #354: calibrated context pressure — prefer the provider-reported input-token
   // count for this session over the local chars/4 estimate once a report exists.
   const pressure = (opts.tokenPressure ?? sharedTokenPressure).pressureTokens(
     opts.sessionKey ?? DEFAULT_SESSION_KEY,
     opts.messages,
   );
-  if (pressure <= targetTokens) return;
-  const result = compressMessages(opts.messages, { targetTokens, pressureTokens: pressure });
-  if (result.compressed) {
+  const ratio = guard.windowTokens > 0 ? pressure / guard.windowTokens : 1;
+  const stage = resolveStage(ratio, compaction?.table);
+  if (stage === 0) return;
+
+  const minTurns = compaction?.minTurnsBetween ?? 1;
+  if (!shouldMutate(tracker, iteration, stage, minTurns)) {
     opts.onEvent?.({
       t: "compression",
-      beforeTokens: result.beforeTokens,
-      afterTokens: result.afterTokens,
-      elidedTokens: result.elidedTokens,
+      beforeTokens: estimateTokens(opts.messages),
+      afterTokens: estimateTokens(opts.messages),
+      elidedTokens: 0,
+      stage,
+      skipped: "cache-law",
     });
+    return;
   }
+
+  // Stage 1 = warn only; no mutation, no archive needed.
+  if (stage === 1) {
+    opts.onEvent?.({
+      t: "compression",
+      beforeTokens: estimateTokens(opts.messages),
+      afterTokens: estimateTokens(opts.messages),
+      elidedTokens: 0,
+      stage,
+    });
+    return;
+  }
+
+  // Stages 2/4 mutate and offload non-lossy — they need an archive dir.
+  if (!opts.archiveDir) return;
+
+  const beforeTokens = estimateTokens(opts.messages);
+  const result = await runStagedCompaction(opts.messages, {
+    pressureTokens: pressure,
+    windowTokens: guard.windowTokens,
+    archiveDir: opts.archiveDir,
+    sessionKey: opts.sessionKey ?? DEFAULT_SESSION_KEY,
+    table: compaction?.table,
+    keepLast: compaction?.keepLast,
+    summarize: opts.summarize,
+  });
+  if (result.mutated) {
+    tracker.lastMutatedIteration = iteration;
+    tracker.lastStage = result.stage;
+  }
+  opts.onEvent?.({
+    t: "compression",
+    beforeTokens,
+    afterTokens: estimateTokens(opts.messages),
+    elidedTokens: result.elidedCount ?? 0,
+    stage: result.stage,
+    archivePath: result.archivePath,
+  });
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { ChatMessage, ContentBlock } from "../provider/types";
+import type { StageTable } from "./compaction";
 
 /**
  * Context-window guard (#101): estimate how many tokens the current trajectory
@@ -44,6 +45,19 @@ export interface ContextConfig {
   defaultWindow?: number;
   /** Per-model context-window override (tokens). */
   windows?: Record<string, number>;
+  /** Adaptive staged compaction (B2-3/B2-4) — default on, no-op unless pressure climbs. */
+  compaction?: {
+    /** Master switch for staged compaction; default true. */
+    enabled?: boolean;
+    /** Pressure-ratio table (see session/compaction.ts DEFAULT_STAGES). */
+    table?: StageTable;
+    /** How many most-recent tool results stay verbatim. Default 8. */
+    keepLast?: number;
+    /** Cache law: min iterations between mutations unless pressure escalates. Default 1. */
+    minTurnsBetween?: number;
+    /** Override for the per-session archive dir (default `<memoryDir>/archives`). */
+    archiveDir?: string;
+  };
 }
 
 /** Resolved guard settings used for a single trajectory before a call. */
