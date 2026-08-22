@@ -1,5 +1,7 @@
 export type ProviderName = "anthropic" | "openai";
 export type ApprovalMode = "ask" | "allow" | "deny";
+/** Model cost tier (B10-1/B10-4). Budget hosts the helper utilities. */
+export type ModelTier = "frontier" | "mid" | "budget";
 
 export class ConfigError extends Error {}
 
@@ -33,6 +35,8 @@ export interface HarnessConfig {
     anthropic?: { apiKey?: string; baseUrl?: string; caching?: boolean };
   };
   models?: { default?: string; cheap?: string };
+  /** B10-1/B10-4 routing core: task→alias→deployment chains (see router.ts). */
+  routing?: RouterConfig;
   /** web_search tool (#345): default-OFF. Requires webSearch.apiKey or BRAVE_API_KEY. */
   webSearch?: {
     enabled?: boolean;
@@ -76,6 +80,38 @@ export interface HarnessConfig {
   context?: ContextConfig;
   /** MCP stdio servers (default OFF — see tools/mcp.ts). */
   mcp?: McpConfig;
+}
+
+/** `routing` in config.yaml — B10-1/B10-4 routing core (task→alias→deployment). */
+export interface RouterConfig {
+  /** Named failover chains; the value an alias resolves to. */
+  aliases?: Record<string, AliasConfig>;
+  /** Deterministic task_id → alias-name table (debuggable, no magic). */
+  tasks?: Record<string, string>;
+  /** Stickiness TTL in ms: one provider+model pinned per session/task. */
+  stickyTtlMs?: number;
+  /** Retry attempts on a deployment before failing over to the next (>= 1). */
+  retriesPerDeployment?: number;
+}
+
+/** A named failover chain: deployments tried in array order. */
+export interface AliasConfig {
+  deployments: DeploymentConfig[];
+}
+
+/** One hop in a failover chain (`routing.aliases.<name>.deployments[]`). */
+export interface DeploymentConfig {
+  /** Provider id registered in the registry (openai/anthropic or a BYOM factory). */
+  provider: string;
+  model: string;
+  /** Options passthrough to the provider call (e.g. maxTokens). */
+  options?: Record<string, unknown>;
+  baseUrl?: string;
+  /** API key for this deployment (usually omitted → registry/env fallback). */
+  key?: string;
+  priority?: number;
+  tags?: string[];
+  tier?: ModelTier;
 }
 
 /** `globalBudget` in config.yaml — global spend caps across solo + all bots. */
