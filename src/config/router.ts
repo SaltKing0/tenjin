@@ -24,6 +24,13 @@ import { classifyError } from "../provider/retry";
 import type { ProviderRegistry } from "../provider/registry";
 import type { Provider } from "../provider/types";
 import { ConfigError, type ModelTier, type RouterConfig, type DeploymentConfig } from "./types";
+import {
+  evaluatePreFilter,
+  buildDecisionLogEntry,
+  type PreFilterThresholds,
+  type PreFilterDecision,
+  type RoutingDecisionLogEntry,
+} from "./router-prefilter";
 
 /** Per-call context influencing routing decisions. */
 export interface RouteCtx {
@@ -34,6 +41,11 @@ export interface RouteCtx {
   budget?: number;
   /** Arena mode: per-turn routing, fresh arms, no stickiness. */
   arena_mode?: boolean;
+  /** B10-2 pre-filter inputs (pure, read before any model call). */
+  contextTokens?: number;
+  toolCount?: number;
+  toolSchemaBytes?: number;
+  taskType?: string;
 }
 
 /** A resolved, runnable deployment — what `select` returns. */
@@ -77,6 +89,8 @@ export interface RouterOptions {
   ttlMs?: number;
   /** Registry that lazily creates providers (BYOM hook). */
   registry?: ProviderRegistry;
+  /** When set, the B10-2 heuristic pre-filter runs before any selection. */
+  prefilter?: PreFilterThresholds | boolean;
 }
 
 const DEFAULT_TTL_MS = 60_000;
@@ -125,6 +139,9 @@ export class Router {
   private readonly retriesPerDeployment: number;
   private readonly ttlMs: number;
   private readonly registry?: ProviderRegistry;
+  private readonly prefilterThresholds?: PreFilterThresholds;
+  private readonly _decisionLog: RoutingDecisionLogEntry[] = [];
+  private decisionCounter = 0;
 
   constructor(cfg: RouterConfig, opts: RouterOptions = {}) {
     this.aliases = new Map();
@@ -141,6 +158,8 @@ export class Router {
     this.retriesPerDeployment = opts.retriesPerDeployment ?? cfg.retriesPerDeployment ?? DEFAULT_RETRIES;
     this.ttlMs = opts.ttlMs ?? cfg.stickyTtlMs ?? DEFAULT_TTL_MS;
     this.registry = opts.registry;
+    this.prefilterThresholds =
+      opts.prefilter === true ? {} : opts.prefilter && typeof opts.prefilter === "object" ? opts.prefilter : undefined;
   }
 
   /** Deterministic task_id → alias-name resolution. Unknown task is a clean error. */
@@ -170,10 +189,12 @@ export class Router {
    * Select the deployment for an alias. Deterministic: the chain's configured
    * order wins; stickiness pins one provider+model per session/task within the
    * TTL (prompt-cache protection). Arena mode and image-bearing turns bypass
-   * stickiness and route per-turn.
+   * stickiness and route per-turn. When the B10-2 pre-filter is enabled it runs
+   * first (pure — no provider call) and its tier hint shapes the selection.
    */
   select(alias: string, ctx: RouteCtx = {}): Deployment {
     const chain = this.aliasChain(alias);
+    const decision = this.prefilterThresholds ? this.evaluateAndLog(alias, ctx).decision : null;
     const stickyKey = !ctx.arena_mode && !ctx.has_images ? (ctx.session_id ?? ctx.task_id) : undefined;
     if (stickyKey) {
       const pin = this.sticky.get(stickyKey);
@@ -181,9 +202,45 @@ export class Router {
         return pin.dep;
       }
     }
-    const dep = chooseForCtx(chain, ctx);
+    const dep = chooseForCtx(chain, ctx, decision?.tier);
     if (stickyKey) this.sticky.set(stickyKey, { dep, at: this.now() });
     return dep;
+  }
+
+  /**
+   * Run the B10-2 heuristic pre-filter for an alias/context and log its
+   * decision. PURE: it evaluates deterministic signals only — it never calls a
+   * provider. Returns the fired decision (or null when everything fell through)
+   * and appends a joinable decision-log entry (B10-5 ready).
+   */
+  runPrefilter(alias: string, ctx: RouteCtx = {}): { decision: PreFilterDecision | null; logEntry: RoutingDecisionLogEntry } {
+    return this.evaluateAndLog(alias, ctx);
+  }
+
+  /** Decision-log entries written by the pre-filter, in order. */
+  get decisionLog(): readonly RoutingDecisionLogEntry[] {
+    return this._decisionLog;
+  }
+
+  private evaluateAndLog(alias: string, ctx: RouteCtx): { decision: PreFilterDecision | null; logEntry: RoutingDecisionLogEntry } {
+    const input = {
+      has_images: ctx.has_images,
+      contextTokens: ctx.contextTokens,
+      toolCount: ctx.toolCount,
+      toolSchemaBytes: ctx.toolSchemaBytes,
+      taskType: ctx.taskType,
+    };
+    const result = evaluatePreFilter(input, this.prefilterThresholds);
+    const routing_decision_id = `${alias}:${ctx.task_id ?? ctx.session_id ?? "anon"}:${++this.decisionCounter}`;
+    const logEntry = buildDecisionLogEntry({
+      routing_decision_id,
+      alias,
+      decision: result.decision,
+      task_id: ctx.task_id,
+      session_id: ctx.session_id,
+    });
+    this._decisionLog.push(logEntry);
+    return { decision: result.decision, logEntry };
   }
 
   /**
@@ -234,13 +291,18 @@ export class Router {
 }
 
 /**
- * Pick the deployment for a fresh selection. Defaults to the chain's first
- * deployment; a low remaining budget prefers a Budget-tier deployment when one
- * is present (the helper-utility tier).
+ * Pick the deployment for a fresh selection. A pre-filter tier hint wins when
+ * a matching deployment exists; otherwise a low remaining budget prefers a
+ * Budget-tier deployment (the helper-utility tier); otherwise the chain's first
+ * deployment.
  */
-function chooseForCtx(chain: Deployment[], ctx: RouteCtx): Deployment {
+function chooseForCtx(chain: Deployment[], ctx: RouteCtx, preferredTier?: ModelTier): Deployment {
   const head = chain[0];
   if (!head) throw new RouterError("alias chain is empty");
+  if (preferredTier) {
+    const match = chain.find((d) => d.tier === preferredTier || d.tags?.includes(preferredTier));
+    if (match) return match;
+  }
   if (ctx.budget !== undefined && ctx.budget < BUDGET_FLOOR_USD) {
     const budgetDep = chain.find((d) => d.tier === "budget" || d.tags?.includes("budget"));
     if (budgetDep) return budgetDep;
