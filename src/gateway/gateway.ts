@@ -860,6 +860,7 @@ export class Gateway {
         effort: profile.config.effort,
         redactor: Redactor.fromConfig(this.deps.config.security),
         context: this.deps.config.context,
+        consolidation: this.consolidationOption(ref, profile),
       });
 
       // #19/#190: a per-job timeout aborts the run (so a co-operating provider
@@ -1012,6 +1013,31 @@ export class Gateway {
     } catch (e) {
       this.log(`job summary failed for ${profile.name}: ${(e as Error).message}`);
     }
+  }
+
+  /**
+   * B9-3: build the end-of-session consolidation option for a headless run,
+   * resolving the cheap/helper model (falling back to the run model). Returns
+   * undefined when `context.consolidation` is unset or explicitly disabled, so
+   * the pass stays opt-in via config.
+   */
+  private consolidationOption(
+    runRef: ModelRef,
+    profile: BotProfile,
+  ): HeadlessOptions["consolidation"] {
+    const cfg = this.deps.config.context?.consolidation;
+    if (!cfg || cfg.enabled === false) return undefined;
+    const helperRef = cheapModelRef(this.deps.config) ?? runRef;
+    return {
+      ...cfg,
+      helper: {
+        provider: this.deps.registry.get(helperRef.provider),
+        model: helperRef.model,
+        maxTokens: this.deps.config.maxTokens,
+      },
+      memoryDir: profile.memoryDir,
+      projectPath: this.deps.cwd,
+    };
   }
 
   async run(signal: AbortSignal): Promise<void> {

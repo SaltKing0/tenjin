@@ -98,6 +98,17 @@ export interface HeadlessOptions {
   archiveDir?: string;
   /** B2-3/B2-4: cheap-model summarizer for stage-4 compaction (optional). */
   summarize?: (segment: string) => Promise<string>;
+  /** B9-3 end-of-session consolidation pass (from `context.consolidation` +
+   * the configured cheap model). When set, a single pass runs at the natural
+   * post-turn boundary once calibrated pressure crosses `threshold`. */
+  consolidation?: {
+    enabled?: boolean;
+    threshold?: number;
+    minTurnsBetween?: number;
+    helper?: { provider: Provider; model: string; maxTokens?: number };
+    memoryDir?: string;
+    projectPath?: string;
+  };
 }
 
 export interface HeadlessResult {
@@ -230,6 +241,14 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     compaction: opts.context?.compaction,
     archiveDir: opts.archiveDir ?? (opts.memoryDir ? join(opts.memoryDir, "archives") : undefined),
     summarize: opts.summarize,
+    consolidation: opts.consolidation
+      ? {
+          ...opts.consolidation,
+          memoryDir: opts.consolidation.memoryDir ?? opts.memoryDir,
+          projectPath: opts.consolidation.projectPath ?? opts.cwd,
+          sessionLog: logger ?? null,
+        }
+      : undefined,
     onEvent: (e: TurnEvent) => {
       if (e.t === "tool_call") opts.onToolActivity?.(e.name);
       if (!logger) return;
