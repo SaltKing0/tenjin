@@ -29,6 +29,17 @@ export interface HarnessConfig {
   maxTokens: number;
   budgetUSD: number;
   approval: Record<string, ApprovalMode>;
+  /** B13-5 (#437): mode ladder — manual | acceptEdits | auto | dontAsk | bypass.
+   *  Higher-level default than `approval`; never widens the T2 law. */
+  mode?: {
+    ladder?: "manual" | "acceptEdits" | "auto" | "dontAsk" | "bypass";
+    /** Env var that must be set for `bypass` to be usable (isolation). */
+    bypassEnv?: string;
+    /** Tool names that force a human checkpoint even in auto. */
+    askRules?: string[];
+    /** Extra tool names pre-allowed in auto (routine work). */
+    autoAllow?: string[];
+  };
   pricing?: PricingConfig;
   providers?: {
     openai?: { baseUrl?: string; apiKey?: string };

@@ -29,6 +29,15 @@ import { readFacts } from "../tools/memory";
 import { memoryEnabled } from "../config/loader";
 import { VERSION } from "../version";
 import { classifyRisk, isT2 } from "../security/guard";
+// B13-5 (#437): mode ladder — the higher-level approval default.
+import {
+  decideModeAction,
+  DEFAULT_MODE,
+  isIsolationEnvReady,
+  RecentlyDeniedList,
+  validateMode,
+  type ModeLadder,
+} from "../security/mode-ladder";
 import { FrameBatcher } from "./stream-ux";
 import {
   ApprovalQueue,
@@ -44,6 +53,8 @@ import {
 /** #406: one approval visible at a time (FIFO lock) + persistent always-rules. */
 const approvalQueue = new ApprovalQueue();
 const alwaysRules = new Set<string>();
+// B13-5 (#437): bounded 'recently denied' review list for tuning the mode.
+const recentlyDenied = new RecentlyDeniedList(50);
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
@@ -119,6 +130,9 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   }
   state.budget.spentUSD = opts.initialSpentUSD ?? 0;
   const sessionAllowed = new Set<string>();
+  // B13-5 (#437): session-scoped mode override — `/mode <rung>` switches it for
+  // THIS session only (never written to config, never silently global).
+  const sessionMode = { current: DEFAULT_MODE as ModeLadder };
 
   let turnActive = false;
   let controller: AbortController | null = null;
@@ -156,7 +170,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       if (!line) continue;
 
       if (line.startsWith("/")) {
-        const handled = await handleCommand(line, rl, opts, state, sessionAllowed);
+        const handled = await handleCommand(line, rl, opts, state, sessionAllowed, sessionMode);
         if (handled === "exit") break;
         continue;
       }
@@ -202,7 +216,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
               ? () => checkGlobalBudget(opts.home, opts.config.globalBudget!)
               : undefined,
           approve: (name, group, input) =>
-            approve(name, group, input, opts.config, rl, sessionAllowed, audit, opts.bot),
+            approve(name, group, input, opts.config, rl, sessionAllowed, audit, opts.bot, sessionMode),
           guard: opts.guard,
           audit: (kind, detail, correlationId) =>
             audit.append(kind, "user", detail, opts.bot, correlationId),
@@ -265,6 +279,7 @@ async function handleCommand(
   opts: ReplOptions,
   state: ReplState,
   sessionAllowed: Set<string>,
+  sessionMode: { current: ModeLadder },
 ): Promise<"exit" | void> {
   const [cmd, ...rest] = line.split(/\s+/);
   switch (cmd) {
@@ -275,6 +290,7 @@ async function handleCommand(
           "/exit, /quit     leave",
           "/cost            spend so far vs cap",
           "/model [id]      show or switch model",
+          "/mode [rung]     show/switch session mode (manual|acceptEdits|auto|dontAsk|bypass)",
           "/tools           list available tools",
           "/sessions        list saved sessions",
           "/resume <id>     continue a previous session",
@@ -294,6 +310,22 @@ async function handleCommand(
     case "/exit":
     case "/quit":
       return "exit";
+    case "/mode": {
+      // B13-5 (#437): show or switch the session mode ladder (session-scoped,
+      // never written to config — the next session starts from config again).
+      const rung = rest[0];
+      if (rung === undefined) {
+        stdout.write(`${sessionMode.current} (session; config default ${opts.config.mode?.ladder ?? DEFAULT_MODE})\n`);
+        return;
+      }
+      try {
+        sessionMode.current = validateMode(rung);
+        stdout.write(`mode → ${sessionMode.current}\n`);
+      } catch (e) {
+        stdout.write(dim(`  ${(e as Error).message}\n`));
+      }
+      return;
+    }
     case "/bots": {
       const bots = listBots(opts.home);
       if (bots.length === 0) {
@@ -530,13 +562,22 @@ async function approve(
   sessionAllowed: Set<string>,
   audit?: AuditLog,
   bot?: string,
+  sessionMode?: { current: ModeLadder },
 ): Promise<ApproveDecision> {
   // B13-3 (#401): a T2 (irreversible/credential) call is NEVER auto-approved —
   // not via a policy "allow", not via a session-wide allow, and never
   // remembered for the session. It always prompts with the strongest shape.
   const tier = classifyRisk(name, input);
   const strong = isT2(tier);
-  if (!strong && (sessionAllowed.has(name) || alwaysRules.has(name))) return true;
+
+  // B13-5 (#437): the mode ladder is the higher-level default. A session-scoped
+  // override (`/mode`) wins over the config default; explicit per-tool policy
+  // (config.approval) still wins where set; T2 stays vetoed by EVERY mode
+  // (dontAsk denies it fast, others prompt — never auto-approve).
+  const mode = sessionMode?.current ?? config.mode?.ladder ?? DEFAULT_MODE;
+  const askRules = config.mode?.askRules ?? [];
+  const bypassEnvReady = isIsolationEnvReady(config.mode?.bypassEnv);
+
   const policy = config.approval[name] ?? (group === "write" ? "ask" : "allow");
   if (policy === "deny") {
     stdout.write(dim(`  (blocked by policy: ${name})\n`));
@@ -544,6 +585,27 @@ async function approve(
     return false;
   }
   if (!strong && policy === "allow") return true;
+  if (!strong && (sessionAllowed.has(name) || alwaysRules.has(name))) return true;
+
+  // T2 veto: no mode auto-approves a T2 call. dontAsk denies fast (headless
+  // fail-fast); every other mode falls through to the strong prompt below.
+  if (strong && mode === "dontAsk") {
+    recentlyDenied.add({ tool: name, tier, reason: "T2 in dontAsk" });
+    stdout.write(dim(`  (dontAsk: ${name} auto-denied, no prompt)\n`));
+    audit?.append("approval", "user", `${name} auto-denied (dontAsk mode)`, bot);
+    return false;
+  }
+
+  // Mode ladder decides the default for T1 (and ASKs on T2 via the veto above).
+  const preAllowed = new Set<string>([...sessionAllowed, ...alwaysRules]);
+  const ladder = decideModeAction({ mode, tier, tool: name, input, askRules, preAllowed, bypassEnvReady });
+  if (ladder.action === "DENY" || ladder.action === "REFUSE") {
+    recentlyDenied.add({ tool: name, tier, reason: ladder.reason });
+    stdout.write(dim(`  (${ladder.reason})\n`));
+    audit?.append("approval", "user", `${name} ${ladder.action === "DENY" ? "denied by mode" : "refused by mode"} (${ladder.reason})`, bot);
+    return false;
+  }
+  if (ladder.action === "ALLOW" && !strong) return true;
 
   // #406: one approval visible at a time — concurrent prompts serialize FIFO.
   return approvalQueue.run(async () => {
