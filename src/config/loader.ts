@@ -103,6 +103,16 @@ const SCHEMA: Record<string, FieldDef> = {
   defaultBot: { types: ["string"] },
   maxTreeIterations: { types: ["number"] },
   approval: { types: ["mapping"], valueType: "string" },
+  // B13-5 (#437): mode ladder — validated at runtime in security/mode-ladder.ts.
+  mode: {
+    types: ["mapping"],
+    children: {
+      ladder: { types: ["string"] },
+      bypassEnv: { types: ["string"] },
+      askRules: { types: ["list"] },
+      autoAllow: { types: ["list"] },
+    },
+  },
   pricing: {
     types: ["mapping"],
     children: {
@@ -370,6 +380,11 @@ approval:                  # ask | allow | deny, per tool
   grep: allow
   write: ask
   edit: ask
+# mode:                     # B13-5 mode ladder (default: manual) — higher-level
+#   ladder: manual          #   higher-level than approval; never widens the T2 law.
+#                           #   manual | acceptEdits | auto | dontAsk | bypass
+#   bypassEnv: STEALTH_ISOLATION   # env var required before bypass is usable
+#   askRules: [bash]        # tool names that force a human checkpoint even in auto
   bash: ask
 # pricing:
 #   default:                 # USD per 1M tokens for models not in the built-in table
