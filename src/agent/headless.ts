@@ -21,6 +21,7 @@ import { webFetchTool } from "../tools/web-fetch";
 import type { ToolDef } from "../tools/registry";
 import { Redactor } from "../security/redact";
 import { readFacts, createRecordLearningTool, createCoreMemoryTool } from "../tools/memory";
+import { createCheckpointTool } from "../tools/checkpoint";
 import { buildMemorySection, loadCoreBlocks, renderCoreMemory } from "../memory/inject";
 import { listSummaries } from "../memory/summaries";
 import { readLearnings } from "../memory/learnings";
@@ -109,6 +110,19 @@ export interface HeadlessOptions {
     memoryDir?: string;
     projectPath?: string;
   };
+  /** B13-6 checkpoints (#369): shadow-git snapshots at prompt/edit boundaries.
+   *  When set (enabled !== false), a `checkpoint` tool is exposed for
+   *  list/restore. */
+  checkpoints?: {
+    enabled?: boolean;
+    storeDir: string;
+    sourceDir: string;
+    /** Session/conversation log path captured into each checkpoint. */
+    logPath?: string;
+    keep?: number;
+    beforeTurn?: boolean;
+    beforeEdit?: boolean;
+  } | null;
 }
 
 export interface HeadlessResult {
@@ -215,6 +229,17 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     );
   }
 
+  // B13-6 (#369): expose the checkpoint tool when the shadow-git store is wired.
+  if (opts.checkpoints && opts.checkpoints.enabled !== false) {
+    tools.push(
+      createCheckpointTool({
+        storeDir: opts.checkpoints.storeDir,
+        sourceDir: opts.checkpoints.sourceDir,
+        logPath: opts.checkpoints.logPath,
+      }),
+    );
+  }
+
   const result = await runAgentTurn({
     provider: opts.provider,
     model: opts.model,
@@ -249,6 +274,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           sessionLog: logger ?? null,
         }
       : undefined,
+    checkpoints: opts.checkpoints,
     onEvent: (e: TurnEvent) => {
       if (e.t === "tool_call") opts.onToolActivity?.(e.name);
       if (!logger) return;
