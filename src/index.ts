@@ -82,6 +82,7 @@ import { parseArgs, HELP, type CliArgs } from "./cli/args";
 import { listJobs, addJob, removeJob, findJob, runJob, renderJob } from "./cli/jobs";
 import { gatewayCommand } from "./cli/gateway";
 import { botCommand } from "./cli/bot";
+import { pluginCommand } from "./cli/plugin";
 import { runOnboard, usage as onboardUsage } from "./cli/onboard";
 import { PRODUCT, VERSION } from "./version";
 import { backupHome, restoreHome, buildExportTarArgs } from "./backup";
@@ -137,6 +138,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   team: (a) => teamCommand(a),
   keyring: (a) => keyringCommand(a),
   skills: (a) => skillsCommand(a),
+  plugin: (a) => pluginCommand(a),
 };
 
 async function main(): Promise<number> {

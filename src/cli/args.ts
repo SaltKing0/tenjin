@@ -36,6 +36,10 @@ Usage:
                              job rm <id>         remove a job
                              job run <id>        run a job immediately
                              (gateway picks up changes via SIGHUP or restart)
+  tenjin plugin marketplace add <url>   add a git marketplace (marketplace.json at root)
+  tenjin plugin install <name>          install an @org/plugin (manifest-first, no scripts run)
+  tenjin plugin update <name> [--yes]   update to newest version (major bump needs --yes)
+  tenjin plugin list                    list installed plugins
 
 Options:
   -h, --help                 show this help
