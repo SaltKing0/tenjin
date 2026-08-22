@@ -241,7 +241,7 @@ export class AnthropicProvider implements Provider {
     }
     const assembler = new AnthropicStreamAssembler();
     assembler.onTextDelta = callbacks?.onTextDelta;
-    for await (const frame of parseSse(res.body)) {
+    for await (const frame of parseSse(res.body, signal)) {
       assembler.handle(frame);
     }
     // #309: a clean EOF without `message_stop` is a truncated response, not a

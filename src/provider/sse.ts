@@ -5,12 +5,22 @@ export interface SseFrame {
 
 export async function* parseSse(
   body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
 ): AsyncGenerator<SseFrame> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
+  let aborted = false;
+  // B13-2 (#384): on abort, cancel the reader so no orphaned HTTP stream is
+  // left polling — the pending read() resolves as done and we throw below.
+  const onAbort = () => {
+    aborted = true;
+    reader.cancel().catch(() => {});
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
   try {
     while (true) {
+      if (signal?.aborted) throw toAbortError(signal);
       const { done, value } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
@@ -27,8 +37,18 @@ export async function* parseSse(
       if (parsed) yield parsed;
     }
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
+  if (signal && (aborted || signal.aborted)) throw toAbortError(signal);
+}
+
+function toAbortError(signal: AbortSignal): Error {
+  const r = signal.reason;
+  if (r instanceof Error) return r;
+  const e = new Error("aborted");
+  e.name = "AbortError";
+  return e;
 }
 
 function parseFrame(frame: string): SseFrame | null {
