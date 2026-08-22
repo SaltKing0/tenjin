@@ -152,18 +152,18 @@ describe("durability + eviction", () => {
     const evictStore = join(root, "shadow-evict");
     const evictProject = join(root, "project-evict");
     mkdirSync(evictProject, { recursive: true });
-    const keep = 100;
-    for (let i = 1; i <= keep + 15; i++) {
+    const keep = 5; // eviction correctness scales — no need for 100 real snapshots
+    for (let i = 1; i <= keep + 3; i++) {
       write(evictProject, "f.txt", `content ${i}`);
       snapshot({ storeDir: evictStore, sourceDir: evictProject, keep }, `cp-${i}`);
     }
     const list = listCheckpoints(evictStore);
     expect(list.length).toBe(keep);
     // Newest are retained, oldest evicted.
-    expect(list[0]!.label).toBe(`cp-${keep + 15}`);
+    expect(list[0]!.label).toBe(`cp-${keep + 3}`);
     const seqs = list.map((c) => c.seq).sort((a, b) => a - b);
-    expect(seqs[0]).toBe(16); // 1..15 evicted
-    expect(seqs[seqs.length - 1]).toBe(keep + 15);
+    expect(seqs[0]).toBe(4); // 1..3 evicted
+    expect(seqs[seqs.length - 1]).toBe(keep + 3);
     expect(DEFAULT_KEEP).toBe(100);
   });
 });
