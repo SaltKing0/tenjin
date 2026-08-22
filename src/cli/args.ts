@@ -7,6 +7,7 @@ export const HELP = `${PRODUCT} v${VERSION} — personal agent harness
 Usage:
   tenjin                     interactive REPL in current directory
   tenjin -p "<prompt>"       one-shot: answer and exit
+  tenjin --json -p "<prompt>"  one-shot as newline-delimited JSON (events + final stats block)
   tenjin --model <id>        override configured model
   tenjin --provider <name>   anthropic | openai
   tenjin --budget <usd>      session spend cap
@@ -50,6 +51,8 @@ export interface CliArgs {
   help: boolean;
   version: boolean;
   print?: string;
+  /** B13-7: emit the one-shot run as newline-delimited JSON (must precede -p). */
+  json?: boolean;
   model?: string;
   provider?: string;
   budget?: number;
@@ -88,6 +91,10 @@ export function parseArgs(argv: string[]): CliArgs {
       }
       case "--model":
         args.model = needValue("--model");
+        break;
+      case "--json":
+      case "--ndjson":
+        args.json = true;
         break;
       case "--provider":
         args.provider = needValue("--provider");

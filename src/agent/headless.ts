@@ -81,6 +81,8 @@ export interface HeadlessOptions {
   onTextDelta?: (delta: string) => void;
   /** Live side-channel invoked when the agent invokes a tool (name only). */
   onToolActivity?: (name: string) => void;
+  /** Live side-channel for every turn event (B13-7 ndjson mode feeds on this). */
+  onEvent?: (e: TurnEvent) => void;
   /** Context-window guard config (`context` in config.yaml, #101). */
   context?: import("../config/loader").ContextConfig | null;
   /** Abort the run (e.g. a per-task timeout). Propagates to provider calls. */
@@ -285,6 +287,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     recovery: opts.recovery,
     onEvent: (e: TurnEvent) => {
       if (e.t === "tool_call") opts.onToolActivity?.(e.name);
+      opts.onEvent?.(e);
       if (!logger) return;
       const ts = new Date().toISOString();
       if (e.t === "assistant_message") {

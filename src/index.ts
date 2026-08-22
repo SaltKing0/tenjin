@@ -24,6 +24,7 @@ import { loadSoul, loadAgentsMd, buildSystemPrompt } from "./agent/prompt";
 import { formatUSD } from "./agent/budget";
 import { runAgentTurn } from "./agent/loop";
 import { runHeadless, capPolicy, applyDenyTools } from "./agent/headless";
+import { runHeadlessNdjson } from "./cli/headless-ndjson";
 import type { EffortLevel } from "./agent/effort";
 import { runArena, renderArena, type ArenaEntry } from "./arena";
 import { startRepl } from "./ui/repl";
@@ -347,7 +348,7 @@ async function main(): Promise<number> {
     };
 
     if (cli.print !== undefined) {
-      return await oneShot(ctx, cli.print);
+      return cli.json ? await oneShotNdjson(ctx, cli.print) : await oneShot(ctx, cli.print);
     }
 
     if (cli.fork) {
@@ -872,6 +873,35 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     `  [in ${result.usage.inputTokens} out ${result.usage.outputTokens} · ${formatUSD(result.costUSD)}]\n`,
   );
   return result.stopReason === "end_turn" ? 0 : 1;
+}
+
+/** B13-7: `--json -p "<prompt>"` — one-shot run emitting pure ndjson (events + stats). */
+async function oneShotNdjson(ctx: AppContext, prompt: string): Promise<number> {
+  return runHeadlessNdjson({
+    provider: ctx.registry.get(ctx.defaultRef.provider),
+    model: ctx.defaultRef.model,
+    soulText: loadSoul(ctx.home, ctx.cwd).text,
+    cwd: ctx.cwd,
+    message: prompt,
+    maxTokens: ctx.config.maxTokens,
+    maxTreeIterations: ctx.config.maxTreeIterations ?? 0,
+    capUSD: ctx.config.budgetUSD,
+    pricing: ctx.config.pricing,
+    globalBudget: ctx.config.globalBudget,
+    policy: capPolicy("read-only", ctx.botSecurity?.policy),
+    denyTools: ctx.botSecurity?.denyTools,
+    agentsMd: loadAgentsMd(ctx.cwd),
+    home: ctx.home,
+    memoryDir: ctx.memoryDir,
+    guard: ctx.guard,
+    paranoid: resolveParanoid(ctx.config.security, ctx.botSecurity),
+    audit: (kind, detail, correlationId) =>
+      new AuditLog(auditPath(ctx.home)).append(kind, "user", detail, undefined, correlationId),
+    redactor: Redactor.fromConfig(ctx.config.security),
+    context: ctx.config.context,
+    effort: ctx.effort,
+    heartbeatMs: 5_000,
+  });
 }
 
 process.exitCode = await main();
