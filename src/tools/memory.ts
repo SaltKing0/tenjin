@@ -9,6 +9,11 @@ import {
   type VectorStore,
 } from "../memory/vector-store";
 import { recordLearning } from "../memory/learnings";
+import {
+  CORE_BLOCK_NAMES,
+  editCoreBlock,
+  DEFAULT_CORE_BUDGET_TOKENS,
+} from "../memory/inject";
 
 export function factsPath(memoryDirPath: string): string {
   return join(memoryDirPath, "facts.md");
@@ -143,6 +148,65 @@ export function createRecallTool(deps: {
           })
           .join("\n")
       );
+    },
+  };
+}
+
+/**
+ * B9-1 (#363): the block-scoped core-memory edit primitive. The agent may only
+ * add/replace/remove the named Tier-0 blocks (persona, user, learnings-synopsis,
+ * conventions). Overflowing a block's budget throws an instructive error naming
+ * the block + budget (nothing is written), forcing the model to self-consolidate.
+ */
+export function createCoreMemoryTool(deps: {
+  memoryDirPath: string;
+  /** Per-block token budget override; defaults to DEFAULT_CORE_BUDGET_TOKENS. */
+  budgetTokens?: number;
+}): ToolDef {
+  return {
+    name: "core_memory",
+    group: "write",
+    description:
+      "Edit a named Tier-0 core-memory block (persona, user, learnings-synopsis, conventions). " +
+      "Only these blocks are editable. op=add/replace sets a block's content; op=remove clears it. " +
+      "Each block has a hard token budget — exceeding it returns an error and writes nothing, so " +
+      "consolidate or shorten instead of growing it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        block: {
+          type: "string",
+          enum: [...CORE_BLOCK_NAMES],
+          description: "Which core-memory block to edit",
+        },
+        op: {
+          type: "string",
+          enum: ["add", "replace", "remove"],
+          description: "add/replace set content; remove clears the block",
+        },
+        content: {
+          type: "string",
+          description: "New content for the block (ignored for remove)",
+        },
+      },
+      required: ["block", "op"],
+    },
+    async handler(args, _ctx) {
+      const block = String(args.block);
+      const op = String(args.op);
+      if (op !== "add" && op !== "replace" && op !== "remove") {
+        throw new Error(`Invalid core-memory op "${op}". Valid ops: add, replace, remove.`);
+      }
+      const content = args.content == null ? "" : String(args.content);
+      const result = editCoreBlock(
+        deps.memoryDirPath,
+        block,
+        op,
+        content,
+        deps.budgetTokens ?? DEFAULT_CORE_BUDGET_TOKENS,
+      );
+      if (op === "remove") return `Cleared core-memory block "${result.block}".`;
+      return `Set core-memory block "${result.block}" (${result.content.length} chars).`;
     },
   };
 }
