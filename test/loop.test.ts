@@ -31,6 +31,16 @@ const endTurn = (text: string): ChatResponse => ({
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 
+/** Await a rejected runAgentTurn and return the thrown Error (type-safe). */
+async function captureError(fn: () => Promise<unknown>): Promise<Error> {
+  try {
+    await fn();
+  } catch (e) {
+    return e as Error;
+  }
+  throw new Error("expected runAgentTurn to throw");
+}
+
 describe("runAgentTurn", () => {
   const tools = [readTool];
   const base = {
@@ -265,12 +275,14 @@ describe("runAgentTurn", () => {
         throw new Error("boom\n    at Provider.chat (/app/src/provider/factory.ts:12:7)");
       },
     };
-    const err = await runAgentTurn({
-      ...base,
-      provider,
-      messages: [{ role: "user", content: "hi" }],
-      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
-    }).catch((e: unknown) => e as unknown) as Promise<Error>;
+    const err = await captureError(() =>
+      runAgentTurn({
+        ...base,
+        provider,
+        messages: [{ role: "user", content: "hi" }],
+        budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      }),
+    );
     expect(err.message).toBe("boom");
   });
 
@@ -302,12 +314,14 @@ describe("runAgentTurn", () => {
         throw { code: 429, body: "rate limit" }; // non-Error value
       },
     };
-    const err = await runAgentTurn({
-      ...base,
-      provider,
-      messages: [{ role: "user", content: "hi" }],
-      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
-    }).catch((e: unknown) => e as unknown) as Promise<Error>;
+    const err = await captureError(() =>
+      runAgentTurn({
+        ...base,
+        provider,
+        messages: [{ role: "user", content: "hi" }],
+        budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      }),
+    );
     expect(err.message).not.toContain("[object Object]");
     expect(err.message.length).toBeGreaterThan(0);
   });
@@ -320,12 +334,14 @@ describe("runAgentTurn", () => {
         return { stopReason: "end_turn", content: null, usage: { inputTokens: 0, outputTokens: 0 } } as never;
       },
     };
-    const err = await runAgentTurn({
-      ...base,
-      provider,
-      messages: [{ role: "user", content: "hi" }],
-      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
-    }).catch((e: unknown) => e as unknown) as Promise<Error>;
+    const err = await captureError(() =>
+      runAgentTurn({
+        ...base,
+        provider,
+        messages: [{ role: "user", content: "hi" }],
+        budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      }),
+    );
     expect(err.message).toMatch(/malformed/i);
   });
 });
