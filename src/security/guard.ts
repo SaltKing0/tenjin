@@ -444,3 +444,24 @@ export function guardForBot(
     onBlock,
   );
 }
+
+// B13-3 risk tiers (T0/T1/T2) + evaluation order DENY > ASK > ALLOW (#401).
+// Re-exported from guard so the runtime approval gate and any consumer can
+// reach the risk-tier law through the guard module. See risk-tiers.ts.
+export {
+  type RiskTier,
+  type RiskAction,
+  type ConfirmationStrength,
+  type RiskRule,
+  RISK_TIER_BY_TOOL,
+  DEFAULT_RISK_TIER,
+  KNOWN_TOOLS,
+  isT2Input,
+  classifyRisk,
+  tierToAction,
+  confirmationStrength,
+  isT2,
+  canAutoApprove,
+  evaluateRisk,
+  defaultRiskRules,
+} from "./risk-tiers";

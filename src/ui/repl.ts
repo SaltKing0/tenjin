@@ -28,6 +28,7 @@ import { loadChunks, indexedSessionIds } from "../memory/vector-store";
 import { readFacts } from "../tools/memory";
 import { memoryEnabled } from "../config/loader";
 import { VERSION } from "../version";
+import { classifyRisk, isT2, confirmationStrength } from "../security/guard";
 import { FrameBatcher } from "./stream-ux";
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -509,23 +510,33 @@ async function handleCommand(
 async function approve(
   name: string,
   group: "read" | "write",
-  _input: unknown,
+  input: unknown,
   config: HarnessConfig,
   rl: Interface,
   sessionAllowed: Set<string>,
   audit?: AuditLog,
   bot?: string,
 ): Promise<boolean> {
-  if (sessionAllowed.has(name)) return true;
+  // B13-3 (#401): a T2 (irreversible/credential) call is NEVER auto-approved —
+  // not via a policy "allow", not via a session-wide allow, and never
+  // remembered for the session. It always prompts with the strongest shape.
+  const tier = classifyRisk(name, input);
+  const strong = isT2(tier);
+  if (!strong && sessionAllowed.has(name)) return true;
   const policy = config.approval[name] ?? (group === "write" ? "ask" : "allow");
-  if (policy === "allow") return true;
   if (policy === "deny") {
     stdout.write(dim(`  (blocked by policy: ${name})\n`));
     audit?.append("approval", "user", `${name} denied by policy`, bot);
     return false;
   }
-  const answer = (await rl.question(green(`  approve ${name}? [y/N/a] `))).trim().toLowerCase();
-  if (answer === "a") {
+  if (!strong && policy === "allow") return true;
+  const shape = confirmationStrength(tier);
+  const prompt =
+    shape === "strong"
+      ? `  ⚠ approve ${name}? (T2 irreversible/credential) [y/N] `
+      : `  approve ${name}? [y/N/a] `;
+  const answer = (await rl.question(green(prompt))).trim().toLowerCase();
+  if (answer === "a" && !strong) {
     sessionAllowed.add(name);
     audit?.append("approval", "user", `${name} approved (always this session)`, bot);
     return true;

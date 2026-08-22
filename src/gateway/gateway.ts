@@ -7,7 +7,7 @@ import { resolveBot, listBots, botModelRef, botBudgetUSD, type BotProfile, type 
 import { scanInstalledBots } from "../bots/catalog";
 import { reconcileOrphanedTasks } from "../bots/tasks";
 import { runHeadless, capPolicy, type HeadlessOptions, type HeadlessResult, type ToolPolicy } from "../agent/headless";
-import { guardForBot } from "../security/guard";
+import { guardForBot, classifyRisk, isT2 } from "../security/guard";
 import { resolveParanoid, hardenUntrustedInput } from "../security/injection";
 import { createBudget, formatUSD, type Budget } from "../agent/budget";
 import { parseSchedule, nextRun, parseEvery, type Schedule } from "./schedule";
@@ -522,8 +522,12 @@ function buildHeartbeatRun(
     createRememberTool({ memoryDirPath: profile.memoryDir }),
   ];
   // The heartbeat is fully autonomous: allow its own tools, keep read access.
-  const approve: HeadlessOptions["approve"] = async (name, group) =>
-    group === "read" || tools.some((t) => t.name === name);
+  // B13-3 (#401): T2 (irreversible/credential) is NEVER auto-approved — not
+  // even for the heartbeat's own tools; those need a human.
+  const approve: HeadlessOptions["approve"] = async (name, group, input) => {
+    if (isT2(classifyRisk(name, input))) return false;
+    return group === "read" || tools.some((t) => t.name === name);
+  };
   return { message, policy: jobPolicy, extraTools: tools, approve };
 }
 
@@ -545,8 +549,12 @@ function buildJobRun(
     message: job.prompt,
     policy: jobPolicy,
     // Scheduled jobs are headless/autonomous: reads are fine, writes are
-    // allowed only when the job's (bot-capped) policy is full.
-    approve: async (_name, group) => (group === "read" ? true : jobPolicy === "full"),
+    // allowed only when the job's (bot-capped) policy is full. B13-3 (#401):
+    // a T2 (irreversible/credential) call is NEVER auto-approved by any mode.
+    approve: async (name, group, input) => {
+      if (isT2(classifyRisk(name, input))) return false;
+      return group === "read" ? true : jobPolicy === "full";
+    },
   };
 }
 
