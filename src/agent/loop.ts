@@ -26,6 +26,7 @@ import {
   sharedTokenPressure,
   type TokenPressure,
 } from "../session/token-pressure";
+import { markInterrupted } from "../session/abort";
 import {
   runConsolidation,
   shouldConsolidate,
@@ -237,6 +238,9 @@ async function runTurns(
 
 
     let response: ChatResponse;
+    // B13-2 (#384): accumulate streamed text so a mid-stream abort can keep
+    // the partial output instead of discarding it.
+    let streamedPartial = "";
     try {
       // B2-1 cache-shape (#353): append the volatile tail AFTER the transcript
       // as a trailing user message for THIS call only. The persistent
@@ -255,13 +259,30 @@ async function runTurns(
           tools: schemas(opts.tools),
           maxTokens: opts.maxTokens,
         },
-        { onTextDelta: opts.onTextDelta },
+        {
+          onTextDelta: (d) => {
+            streamedPartial += d;
+            opts.onTextDelta?.(d);
+          },
+        },
         opts.signal,
       );
     } catch (e) {
       // #338: provider failures (4xx/5xx, timeout, abort, malformed payload)
       // must surface as a clean, one-line, human-readable error — never a raw
       // stack trace or provider payload reaching the user/channel.
+      if (isAbortError(e) && streamedPartial) {
+        // B13-2 (#384): PARTIAL OUTPUT IS KEPT — write the streamed text so
+        // far (marked interrupted) into the transcript + session trail. Tool
+        // results from this aborted iteration were never produced, so none are
+        // recorded — nothing to discard.
+        const partial = markInterrupted(streamedPartial);
+        opts.messages.push({ role: "assistant", content: partial });
+        opts.onEvent?.({
+          t: "assistant_message",
+          content: [{ type: "text", text: partial }],
+        });
+      }
       throw toCleanProviderError(e);
     }
     if (!response || !Array.isArray(response.content)) {

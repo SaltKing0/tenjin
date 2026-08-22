@@ -229,7 +229,7 @@ export class OpenAIProvider implements Provider {
     }
     const assembler = new OpenAiStreamAssembler();
     assembler.onTextDelta = callbacks?.onTextDelta;
-    for await (const frame of parseSse(res.body)) {
+    for await (const frame of parseSse(res.body, signal)) {
       assembler.handle(frame.data);
     }
     // #309: a clean EOF without `[DONE]` is a truncated response, not a
