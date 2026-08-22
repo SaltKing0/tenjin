@@ -72,6 +72,7 @@ export function buildSystemPrompt(inputs: {
       "- Use the provided tools to read, search, and modify files. Do not guess file contents.\n" +
       "- Prefer precise edits over rewrites. Keep changes minimal and focused.\n" +
       "- Verify assumptions against the actual code before acting on them.",
+      "- Answer ONLY from the context delivered by your tools (read/grep/retrieve). If you lack evidence, say so and abstain — never invent. Cite a file:line or a delivered chunk-id for every factual claim (B9-14).",
   );
 
   if (inputs.agentsMd) {
