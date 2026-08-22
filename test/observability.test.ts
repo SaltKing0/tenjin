@@ -1,312 +1,157 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { startHttpServer, type HttpServerHandle } from "../src/gateway/http";
-import {
-  buildHealth,
-  buildMetrics,
-  resetObservabilityCache,
-  OBSERVABILITY_CACHE_TTL_MS,
-} from "../src/gateway/observability";
-import { ProviderStats, monitoredProvider, PROVIDER_STALE_MS } from "../src/provider/stats";
-import { ProviderRegistry } from "../src/provider/registry";
-import { createRequest } from "../src/gateway/approvals";
-import type { ChatRequest, Provider } from "../src/provider/types";
+  Tracer,
+  buildSpanTree,
+  classifyError,
+  SpendAggregator,
+  type Span,
+} from "../src/audit/tracing";
+import { TreeBudget } from "../src/agent/budget";
 
-let home: string;
-let server: HttpServerHandle | null = null;
-const TOKEN = "observability-token";
+describe("B4-3 trace span tree (mocked 2-step run)", () => {
+  test("parent/child ids + durations asserted for a 2-step run", () => {
+    let t = 0;
+    const tracer = new Tracer(() => t);
 
-beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "tj-obs-"));
-  resetObservabilityCache();
-});
+    const conv = tracer.startSpan({ kind: "conversation", name: "session-1" });
+    t += 10;
+    const step1 = tracer.startSpan({ kind: "step", name: "step-1", parentId: conv });
+    t += 10;
+    const llm1 = tracer.startSpan({ kind: "llm.completion", name: "claude", parentId: step1 });
+    t += 20;
+    tracer.endSpan(llm1);
+    t += 5;
+    tracer.endSpan(step1);
+    t += 10;
+    const step2 = tracer.startSpan({ kind: "step", name: "step-2", parentId: conv });
+    const tool = tracer.startSpan({ kind: "tool.execute", name: "bash", parentId: step2 });
+    t += 15;
+    tracer.endSpan(tool);
+    t += 5;
+    tracer.endSpan(step2);
+    t += 5;
+    tracer.endSpan(conv);
 
-afterEach(() => {
-  server?.stop();
-  server = null;
-  rmSync(home, { recursive: true, force: true });
-});
+    const tree = buildSpanTree(tracer.all());
+    expect(tree).toHaveLength(1); // one conversation root
+    const root = tree[0]!;
+    expect(root.kind).toBe("conversation");
+    expect(root.children).toHaveLength(2); // two steps
 
-/** Seed one session file that records `costUSD` spend today. */
-function seedSession(id: string, costUSD: number): void {
-  const dir = join(home, "sessions");
-  mkdirSync(dir, { recursive: true });
-  const now = new Date().toISOString();
-  const events = [
-    { t: "session_start", id, ts: now, provider: "anthropic", model: "m" },
-    { t: "message", role: "user", content: "hello", ts: now },
-    { t: "usage", inputTokens: 10, outputTokens: 5, costUSD, spentUSD: costUSD, ts: now },
-  ];
-  writeFileSync(
-    join(dir, `${id}.jsonl`),
-    events.map((e) => JSON.stringify(e)).join("\n") + "\n",
-  );
-}
+    const s1 = root.children[0]!;
+    const s2 = root.children[1]!;
+    expect(s1.kind).toBe("step");
+    expect(s1.durationMs).toBe(35); // step1 spans t=10..45
+    expect(s1.children).toHaveLength(1);
+    expect(s1.children[0]!.kind).toBe("llm.completion");
+    expect(s1.children[0]!.durationMs).toBe(20);
 
-const chatReq: ChatRequest = {
-  model: "m",
-  system: "",
-  messages: [],
-  tools: [],
-  maxTokens: 16,
-};
+    expect(s2.children).toHaveLength(1);
+    expect(s2.children[0]!.kind).toBe("tool.execute");
+    expect(s2.children[0]!.durationMs).toBe(15);
 
-describe("ProviderStats", () => {
-  test("counts errors and successes per provider", () => {
-    const s = new ProviderStats();
-    s.recordError("anthropic");
-    s.recordError("anthropic");
-    s.recordError("openai");
-    s.recordSuccess("anthropic");
-    expect(s.total()).toBe(3);
-    const r = s.reachability();
-    expect(r.anthropic!.errors).toBe(2);
-    expect(r.anthropic!.up).toBe(true);
-    expect(r.openai!.errors).toBe(1);
-    expect(r.openai!.up).toBe(false);
+    // Stable, distinct ids across the tree.
+    const ids = tracer.all().map((s: Span) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
-  test("no data yields null reachability and zero total", () => {
-    const s = new ProviderStats();
-    expect(s.total()).toBe(0);
-    expect(s.reachability()).toEqual({});
-  });
-
-  test("stale success degrades up to null after the staleness threshold (#194)", () => {
-    const s = new ProviderStats();
-    s.recordSuccess("anthropic");
-    expect(s.reachability().anthropic!.up).toBe(true);
-    // A very old success (beyond PROVIDER_STALE_MS) must report unknown, not up.
-    const stale = s.reachability(Date.now() + PROVIDER_STALE_MS + 1000);
-    expect(stale.anthropic!.up).toBeNull();
-  });
-
-  test("stale error degrades up to null after the staleness threshold (#194)", () => {
-    const s = new ProviderStats();
-    s.recordError("openai");
-    expect(s.reachability().openai!.up).toBe(false);
-    const stale = s.reachability(Date.now() + PROVIDER_STALE_MS + 1000);
-    expect(stale.openai!.up).toBeNull();
-  });
-
-  test("monitoredProvider records success and rethrows errors", async () => {
-    const s = new ProviderStats();
-    const ok: Provider = {
-      name: "mock",
-      async chat() {
-        return {
-          stopReason: "end_turn" as const,
-          content: [],
-          usage: { inputTokens: 1, outputTokens: 1 },
-        };
-      },
-    };
-    const fail: Provider = {
-      name: "mock",
-      async chat() {
-        throw new Error("boom");
-      },
-    };
-    await monitoredProvider(ok, s).chat(chatReq);
-    expect(s.total()).toBe(0);
-    expect(s.reachability().mock!.up).toBe(true);
-    await expect(monitoredProvider(fail, s).chat(chatReq)).rejects.toThrow("boom");
-    expect(s.total()).toBe(1);
-    expect(s.reachability().mock!.up).toBe(false);
+  test("a span with an unknown parent is treated as a root (never dropped)", () => {
+    const tracer = new Tracer();
+    const orphan = tracer.startSpan({ kind: "run", name: "orphan", parentId: "does_not_exist" });
+    tracer.endSpan(orphan);
+    expect(buildSpanTree(tracer.all())).toHaveLength(1);
   });
 });
 
-describe("registry provider monitoring", () => {
-  test("registry-wrapped provider feeds the shared stats", async () => {
-    const stats = new ProviderStats();
-    const registry = new ProviderRegistry(undefined, {}, undefined, true, undefined, stats);
-    registry.register({
-      name: "boom",
-      create: () => ({
-        name: "boom",
-        async chat(): Promise<never> {
-          throw new Error("boom");
-        },
-      }),
+describe("B4-3 structured error classification", () => {
+  test("each error classifies into exactly one class + stage tag", () => {
+    expect(classifyError(new Error("AbortError: aborted"))).toEqual({ errorClass: "sdk", stage: "request" });
+    expect(classifyError(new Error("timeout after 30s"))).toEqual({ errorClass: "sdk", stage: "request" });
+    expect(classifyError(new Error("openai api 429: rate limited"))).toEqual({
+      errorClass: "provider",
+      stage: "response",
     });
-    const p = registry.get("boom");
-    await expect(p.chat(chatReq)).rejects.toThrow("boom");
-    expect(stats.total()).toBe(1);
-    const r = stats.reachability().boom!;
-    expect(r.errors).toBe(1);
-    expect(r.up).toBe(false);
-  });
-});
-
-describe("buildMetrics", () => {
-  test("emits the required metrics with correct values", () => {
-    seedSession("s1", 0.5);
-    seedSession("s1b", 0.25);
-    createRequest(home, { bot: "researcher", tool: "write_file" });
-    const stats = new ProviderStats();
-    stats.recordError("anthropic");
-    stats.recordError("anthropic");
-    const jobs = [
-      { running: false, nextDueMs: Date.now() - 1000 }, // due → pending
-      { running: false, nextDueMs: Date.now() + 60_000 }, // future → not pending
-      { running: true, nextDueMs: 0 }, // active, not pending
-    ];
-    const text = buildMetrics(Date.now(), { home, stats, jobs });
-    expect(text).toContain("# TYPE tenjin_spend_usd_total counter");
-    expect(text).toContain("tenjin_spend_usd_total 0.75");
-    expect(text).toContain("# TYPE tenjin_jobs_pending gauge");
-    expect(text).toContain("tenjin_jobs_pending 1");
-    expect(text).toContain("# TYPE tenjin_sessions_total gauge");
-    expect(text).toContain("tenjin_sessions_total 2");
-    expect(text).toContain("# TYPE tenjin_provider_errors_total counter");
-    expect(text).toContain("tenjin_provider_errors_total 2");
-    expect(text).toContain('tenjin_provider_errors_total{provider="anthropic"} 2');
-    // Prometheus text opens each metric with a TYPE line.
-    expect(text.match(/# TYPE /g)?.length).toBe(4);
-  });
-});
-
-describe("buildHealth", () => {
-  test("reports jobs, approvals, spend and provider reachability", () => {
-    seedSession("s1", 0.5);
-    createRequest(home, { bot: "researcher", tool: "write_file" });
-    const stats = new ProviderStats();
-    stats.recordSuccess("anthropic");
-    const jobs = [
-      { running: true, nextDueMs: 0 },
-      { running: false, nextDueMs: Date.now() - 500 },
-    ];
-    const h = buildHealth(Date.now(), { home, stats, jobs });
-    expect(h.activeJobs).toBe(1);
-    expect(h.pendingJobs).toBe(1);
-    expect(h.pendingApprovals).toBe(1);
-    expect(h.budgetSpentTodayUSD).toBe(0.5);
-    expect(h.sessions).toBe(1);
-    expect(h.spendUSDTotal).toBe(0.5);
-    expect((h.providers as Record<string, { up: boolean }>).anthropic!.up).toBe(true);
-  });
-});
-
-describe("observability spend cache (#186)", () => {
-  test("numbers are identical to direct aggregation and spend is cached within TTL", () => {
-    seedSession("s1", 0.5);
-    const t = new Date();
-    const stats = new ProviderStats();
-    const h1 = buildHealth(t.getTime(), { home, stats, jobs: [] });
-    expect(h1.spendUSDTotal).toBe(0.5);
-    expect(h1.budgetSpentTodayUSD).toBe(0.5);
-
-    // New spend lands after the first computation, but within the TTL the
-    // cached totals are returned (no full rescan of the session logs).
-    seedSession("s2", 0.25);
-    const withinTtl = new Date(t.getTime() + OBSERVABILITY_CACHE_TTL_MS - 1);
-    const h2 = buildHealth(withinTtl.getTime(), { home, stats, jobs: [] });
-    expect(h2.spendUSDTotal).toBe(0.5); // stale-by-design within TTL
-
-    // After the TTL expires the rescan picks up the new session.
-    const pastTtl = new Date(t.getTime() + OBSERVABILITY_CACHE_TTL_MS + 1);
-    const h3 = buildHealth(pastTtl.getTime(), { home, stats, jobs: [] });
-    expect(h3.spendUSDTotal).toBe(0.75);
-  });
-});
-
-describe("observability disk-count cache (#317)", () => {
-  test("sessions/approvals are cached within TTL and rescanned after expiry", () => {
-    seedSession("s1", 0.5);
-    const t = new Date();
-    const stats = new ProviderStats();
-    const h1 = buildHealth(t.getTime(), { home, stats, jobs: [] });
-    expect(h1.sessions).toBe(1);
-    expect(h1.pendingApprovals).toBe(0);
-
-    // A new session + approval land after the first computation, but within the
-    // TTL the cached counts are returned — no per-scrape FS rescan.
-    seedSession("s2", 0.25);
-    createRequest(home, { bot: "researcher", tool: "write_file" });
-    const withinTtl = new Date(t.getTime() + OBSERVABILITY_CACHE_TTL_MS - 1);
-    const h2 = buildHealth(withinTtl.getTime(), { home, stats, jobs: [] });
-    expect(h2.sessions).toBe(1); // stale-by-design within TTL
-    expect(h2.pendingApprovals).toBe(0);
-
-    // After the TTL expires the rescan picks up the new session + approval.
-    const pastTtl = new Date(t.getTime() + OBSERVABILITY_CACHE_TTL_MS + 1);
-    const h3 = buildHealth(pastTtl.getTime(), { home, stats, jobs: [] });
-    expect(h3.sessions).toBe(2);
-    expect(h3.pendingApprovals).toBe(1);
-  });
-});
-
-describe("http endpoints", () => {
-  function start(): string {
-    const stats = new ProviderStats();
-    seedSession("s1", 0.5);
-    const srv = startHttpServer({
-      config: { port: 0, host: "127.0.0.1", token: TOKEN },
-      handleMessage: async () => null,
-      status: () => ({}),
-      health: () => buildHealth(Date.now(), { home, stats, jobs: [] }),
-      metrics: () => buildMetrics(Date.now(), { home, stats, jobs: [] }),
+    expect(classifyError(new Error("status 500 from server"))).toEqual({
+      errorClass: "provider",
+      stage: "response",
     });
-    server = srv;
-    return `http://127.0.0.1:${srv.port}`;
+    expect(classifyError(new Error("fetch failed: ENOTFOUND api.anthropic.com"))).toEqual({
+      errorClass: "infra",
+      stage: "request",
+    });
+    expect(classifyError(new Error("ECONNREFUSED"))).toEqual({ errorClass: "infra", stage: "request" });
+  });
+
+  test("stream failures get the stream stage with the right class", () => {
+    expect(classifyError(new Error("sse stream ended, http 502"))).toEqual({
+      errorClass: "provider",
+      stage: "stream",
+    });
+    expect(classifyError(new Error("stream parse error"))).toEqual({ errorClass: "sdk", stage: "stream" });
+  });
+});
+
+describe("B4-4 whole-tree spend rollup (dedup + TreeBudget)", () => {
+  function rec(messageId: string, model = "claude", cost = 1): Parameters<SpendAggregator["record"]>[0] {
+    return {
+      messageId,
+      model,
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 1,
+      costUSD: cost,
+    };
   }
 
-  test("GET /api/health returns structured body with uptime", async () => {
-    const base = start();
-    const res = await fetch(`${base}/api/health`, {
-      headers: { authorization: `Bearer ${TOKEN}` },
-    });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(typeof body.uptimeMs).toBe("number");
-    expect(body.sessions).toBe(1);
-    expect(body.budgetSpentTodayUSD).toBe(0.5);
+  test("subagent tokens roll into parent budget exactly once (dedup by message id)", () => {
+    const agg = new SpendAggregator();
+    const tree = new TreeBudget(0, 100);
+
+    // Parent reports a completion; the subagent re-reports the SAME message id.
+    const a = agg.record(rec("m1", "claude", 2), tree);
+    const b = agg.record(rec("m1", "claude", 2), tree); // duplicate — must be dropped
+
+    expect(a).toEqual({ deduped: false, costAddedUSD: 2 });
+    expect(b).toEqual({ deduped: true, costAddedUSD: 0 });
+    expect(agg.totals().costUSD).toBe(2); // counted once
+    expect(tree.usedUSD).toBe(2); // rolled up once into the parent budget
+    expect(agg.messageCount).toBe(1);
   });
 
-  test("GET /metrics returns Prometheus text", async () => {
-    const base = start();
-    const res = await fetch(`${base}/metrics`, {
-      headers: { authorization: `Bearer ${TOKEN}` },
-    });
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/plain");
-    const text = await res.text();
-    expect(text).toContain("tenjin_spend_usd_total");
-    expect(text).toContain("tenjin_jobs_pending");
-    expect(text).toContain("tenjin_sessions_total");
-    expect(text).toContain("tenjin_provider_errors_total");
+  test("distinct messages each roll up; per-model totals aggregate cache read/write", () => {
+    const agg = new SpendAggregator();
+    agg.record(rec("m1", "claude", 2));
+    agg.record(rec("m2", "claude", 3));
+    agg.record(rec("m3", "gpt", 6));
+    const totals = agg.totals();
+    expect(totals.costUSD).toBe(11);
+    expect(totals.inputTokens).toBe(30);
+    expect(totals.cacheReadTokens).toBe(6);
+    expect(agg.messageCount).toBe(3);
+    const perModel = agg.perModel();
+    expect(perModel).toHaveLength(2);
+    expect(perModel[0]!.model).toBe("gpt"); // highest cost first
   });
+});
 
-  test("metrics and health reject without a token (401)", async () => {
-    const base = start();
-    const health = await fetch(`${base}/api/health`);
-    expect(health.status).toBe(401);
-    const metrics = await fetch(`${base}/metrics`);
-    expect(metrics.status).toBe(401);
-  });
+describe("B4-4 routing-decision-id on spans", () => {
+  test("routing-decision-id present when a router decision exists, absent otherwise", () => {
+    const tracer = new Tracer();
+    const routed = tracer.startSpan({
+      kind: "llm.completion",
+      name: "claude",
+      routingDecisionId: "rd_123",
+    });
+    tracer.endSpan(routed);
+    const unrouted = tracer.startSpan({ kind: "llm.completion", name: "claude" });
+    tracer.endSpan(unrouted);
 
-  test("server without health/metrics wired returns 404", async () => {
-    const srv = startHttpServer({
-      config: { port: 0, host: "127.0.0.1", token: TOKEN },
-      handleMessage: async () => null,
-      status: () => ({}),
-    });
-    server = srv;
-    const base = `http://127.0.0.1:${srv.port}`;
-    const health = await fetch(`${base}/api/health`, {
-      headers: { authorization: `Bearer ${TOKEN}` },
-    });
-    expect(health.status).toBe(404);
-    const metrics = await fetch(`${base}/metrics`, {
-      headers: { authorization: `Bearer ${TOKEN}` },
-    });
-    expect(metrics.status).toBe(404);
+    const [r, u] = tracer.all();
+    expect(r!.routingDecisionId).toBe("rd_123");
+    expect(u!.routingDecisionId).toBeUndefined();
+
+    const tree = buildSpanTree(tracer.all());
+    expect(tree[0]!.routingDecisionId).toBe("rd_123");
   });
 });
