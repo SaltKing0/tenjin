@@ -13,6 +13,7 @@ import {
   sessionsDir,
   memoryDir,
   memoryEnabled,
+  webSearchEnabled,
   ConfigError,
   type HarnessConfig,
 } from "./config/loader";
@@ -71,6 +72,7 @@ import { writeTool } from "./tools/write";
 import { editTool } from "./tools/edit";
 import { applyPatchTool } from "./tools/apply-patch";
 import { bashTool } from "./tools/bash";
+import { createWebSearchTool } from "./tools/web-search";
 import type { ToolDef } from "./tools/registry";
 import { parseArgs, HELP, type CliArgs } from "./cli/args";
 import { listJobs, addJob, removeJob, findJob, runJob, renderJob } from "./cli/jobs";
@@ -288,6 +290,9 @@ async function main(): Promise<number> {
       applyPatchTool,
       bashTool,
     ];
+    if (webSearchEnabled(config)) {
+      tools.push(createWebSearchTool(config.webSearch));
+    }
     if (memoryEnabled(config)) {
       tools.push(createRememberTool({ memoryDirPath: memDir }));
       tools.push(createRecordLearningTool({ memoryDirPath: memDir, projectPath: cwd, maxEntries: config.memory?.learnings?.maxEntries }));
