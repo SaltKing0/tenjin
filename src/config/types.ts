@@ -80,6 +80,9 @@ export interface HarnessConfig {
   context?: ContextConfig;
   /** MCP stdio servers (default OFF — see tools/mcp.ts). */
   mcp?: McpConfig;
+  /** B15-7 (#439): expose Tenjin's own tools/skills to external MCP clients.
+   *  DENY-BY-DEFAULT — only names listed here are advertised/callable. */
+  mcpServer?: McpServerConfig;
   /** B12-3 (#424): execution-surface switch — local | docker | remote. */
   workspace?: {
     mode?: "local" | "docker" | "remote";
@@ -186,4 +189,11 @@ export interface ContextConfig {
 /** `mcp` in config.yaml — MCP stdio servers (WPs 3.1+3.2). Default OFF. */
 export interface McpConfig {
   servers?: Array<Record<string, unknown>>;
+}
+
+/** B15-7 (#439) — expose Tenjin's own tools/skills to external MCP clients.
+ *  DENY-BY-DEFAULT: an empty/absent list exposes nothing. */
+export interface McpServerConfig {
+  /** Allowlisted native tool / skill names advertised to MCP clients. */
+  expose?: string[];
 }

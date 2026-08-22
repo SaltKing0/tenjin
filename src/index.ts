@@ -84,6 +84,7 @@ import { gatewayCommand } from "./cli/gateway";
 import { botCommand } from "./cli/bot";
 import { pluginCommand } from "./cli/plugin";
 import { runOnboard, usage as onboardUsage } from "./cli/onboard";
+import { mcpServeCommand } from "./cli/mcp-serve";
 import { PRODUCT, VERSION } from "./version";
 import { backupHome, restoreHome, buildExportTarArgs } from "./backup";
 
@@ -348,6 +349,13 @@ async function main(): Promise<number> {
       botSecurity: profile?.config.security,
       effort: cli.effort ?? profile?.config.effort,
     };
+
+    // B15-7 (#439): serve our own tools/skills to external MCP clients.
+    // Intercepted here (after tools + guard are built) so the server wires to
+    // the real dispatch; deny-by-default via config.mcpServer.expose[].
+    if (process.argv[2] === "mcp-serve") {
+      return mcpServeCommand(process.argv.slice(3), { config, tools, ctx });
+    }
 
     if (cli.print !== undefined) {
       return cli.json ? await oneShotNdjson(ctx, cli.print) : await oneShot(ctx, cli.print);
