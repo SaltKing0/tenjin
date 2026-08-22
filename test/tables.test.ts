@@ -86,21 +86,22 @@ describe("style.css mobile media query", () => {
   });
 });
 
-// #283: two font roles — UI sans for labels/buttons/prose, mono for data/code.
-// (Full visual verification is documented via screenshots in the PR per the
-// issue; these assertions pin the behavioural contract the CSS implements.)
+// #283: two font roles — UI serif for prose/labels (Ledger Desk paper-and-ink),
+// mono for data/code. (Full visual verification is documented via screenshots
+// in the PR per the issue; these assertions pin the behavioural contract the
+// CSS implements.)
 describe("style.css font roles (#283)", () => {
   const css = readFileSync(
     join(import.meta.dir, "../src/gateway/console/style.css"),
     "utf8",
   );
 
-  test("defines --font-ui (sans) and --font-mono (mono) variables", () => {
-    expect(css).toMatch(/--font-ui:\s*-apple-system/);
+  test("defines --font-ui (serif) and --font-mono (mono) variables", () => {
+    expect(css).toMatch(/--font-ui:\s*Georgia/);
     expect(css).toMatch(/--font-mono:\s*"SF Mono"/);
   });
 
-  test("body uses the UI (sans) font, not mono", () => {
+  test("body uses the UI (serif) font, not mono", () => {
     expect(css).toMatch(/body\s*\{[\s\S]*font-family:\s*var\(--font-ui\)/);
   });
 

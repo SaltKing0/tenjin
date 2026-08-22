@@ -3,8 +3,11 @@
 
    Single source of truth for raw values. The `:root` block below is the ONLY
    place where color literals, px scales, radii and shadows may appear; every
-   rule must consume tokens. The default palette is dark "Sumi"; a light theme
-   (#286) only needs a `[data-theme="light"]` override of this layer.
+   rule must consume tokens. Stance: "Ledger Desk" — a warm paper-and-ink
+   console that treats agent activity like an accountant's ledger: ruled
+   lines, tabular numerals, serif body, one ink-blue accent. The default
+   palette is the dark "night ledger"; a light "day ledger" theme (#286) only
+   needs a `[data-theme="light"]` override of this layer.
 
    Usage rules — colors:
      --bg            page canvas behind everything
@@ -33,30 +36,30 @@
    ========================================================================== */
 
 :root {
-  /* neutrals */
-  --bg: #0d1117;
-  --bg-raised: #21262d;
-  --panel: #161b22;
-  --panel-raised: #1f2630;
-  --border: #30363d;
-  --border-strong: #6e7681;
-  --text: #e6edf3;
-  --text-dim: #8b949e;
+  /* neutrals — warm inked paper, "night ledger" (dark default) */
+  --bg: #12100c;
+  --bg-raised: #201c15;
+  --panel: #1a1712;
+  --panel-raised: #201c15;
+  --border: #2b261d;
+  --border-strong: #453c2b;
+  --text: #ece4d3;
+  --text-dim: #9d9180;
 
-  /* accent */
-  --accent: #58a6ff;
-  --accent-strong: #1f6feb;
-  --accent-wash: rgba(31, 111, 235, 0.2);
-  --accent-line: rgba(31, 111, 235, 0.4);
-  --on-accent: #ffffff;
+  /* accent — one ink-blue */
+  --accent: #6fa8e0;
+  --accent-strong: #6fa8e0;
+  --accent-wash: rgba(29, 42, 56, 0.6);
+  --accent-line: rgba(111, 168, 224, 0.45);
+  --on-accent: #0e1c2b;
 
-  /* status */
-  --success: #3fb950;
-  --success-wash: rgba(63, 185, 80, 0.15);
-  --warning: #d29922;
-  --warning-wash: rgba(210, 153, 34, 0.15);
-  --danger: #f85149;
-  --danger-wash: rgba(248, 81, 73, 0.15);
+  /* status — ink-wash softs */
+  --success: #7ec88f;
+  --success-wash: rgba(30, 47, 34, 0.45);
+  --warning: #d9a94d;
+  --warning-wash: rgba(53, 42, 24, 0.45);
+  --danger: #e07a6e;
+  --danger-wash: rgba(58, 34, 32, 0.45);
 
   /* B13-10 approval-status semantics (danger = deny, success = allow-once,
      info = allow-always): map approval outcomes to the status scale. */
@@ -66,7 +69,7 @@
   --color-approval-allow-always: var(--success);
 
   /* neutral tint */
-  --wash: rgba(127, 127, 127, 0.08);
+  --wash: rgba(111, 104, 85, 0.14);
 
   /* spacing scale (4px grid) */
   --sp-1: 4px;
@@ -88,17 +91,18 @@
   --lh-tight: 1.3;
   --lh-body: 1.5;
 
-  /* #283: two font roles — UI (sans) for labels/buttons/prose, mono for data. */
-  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  /* #283: two font roles — UI is the warm paper-and-ink serif for prose and
+     labels; mono carries the ledger data (numerals, ids, code). */
+  --font-ui: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
 
   /* radii + shadows */
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-full: 999px;
-  --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.35);
-  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-1: 0 1px 0 rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.5);
 
   /* component dimensions shared across rules */
   --nav-h: 64px;
@@ -106,20 +110,31 @@
   font-size: var(--fs-base);
 }
 
-/* #286: light theme — applied via data-theme="light" on <html>; dark is default. */
+/* #286: light "day ledger" theme — warm paper, applied via data-theme="light"
+   on <html>; dark night-ledger is default. */
 [data-theme="light"] {
-  --bg: #ffffff;
-  --bg-raised: #e0e4e8;
-  --panel: #f6f8fa;
-  --border: #d0d7de;
-  --text: #1f2328;
-  --text-dim: #59636e;
-  --accent: #0969da;
-  --accent-strong: #0969da;
+  --bg: #faf7f0;
+  --bg-raised: #fffdf8;
+  --panel: #fffdf8;
+  --panel-raised: #fffdf8;
+  --border: #e4ddcf;
+  --border-strong: #cfc6b2;
+  --text: #2b2620;
+  --text-dim: #7a7061;
+  --accent: #1f5fa8;
+  --accent-strong: #1f5fa8;
+  --accent-wash: #e3edf8;
+  --accent-line: rgba(31, 95, 168, 0.4);
   --on-accent: #ffffff;
-  --success: #1a7f37;
-  --warning: #9a6700;
-  --danger: #d1242f;
+  --success: #2e7d43;
+  --success-wash: rgba(46, 125, 67, 0.12);
+  --warning: #a06a00;
+  --warning-wash: rgba(160, 106, 0, 0.12);
+  --danger: #b3372e;
+  --danger-wash: rgba(179, 55, 46, 0.1);
+  --wash: rgba(127, 118, 100, 0.1);
+  --shadow-1: none;
+  --shadow-2: none;
 }
 
 * { box-sizing: border-box; }
@@ -130,6 +145,7 @@ body {
   color: var(--text);
   font-family: var(--font-ui);
   line-height: var(--lh-body);
+  transition: background 0.2s, color 0.2s;
 }
 
 #app { display: flex; flex-wrap: wrap; min-height: 100vh; }
@@ -153,15 +169,21 @@ body {
 }
 
 .sidebar nav a {
-  display: block;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
   padding: var(--sp-2) var(--sp-4);
   color: var(--text-dim);
   text-decoration: none;
   cursor: pointer;
 }
-
 .sidebar nav a:hover { color: var(--text); background: var(--bg-raised); }
-.sidebar nav a.active { color: var(--text); border-left: 2px solid var(--accent); }
+.sidebar nav a.active {
+  color: var(--text);
+  background: var(--accent-wash);
+  border-left: 2px solid var(--accent);
+  font-style: italic;
+}
 
 /* #276: bot section under the panel nav in the sidebar */
 .sidebar-bots {
@@ -180,6 +202,7 @@ body {
 /* #287: section labels between the grouped panel links */
 .sidebar-group-label {
   padding: var(--sp-3) var(--sp-4) var(--sp-1);
+  font-family: var(--font-mono);
   font-size: var(--fs-xs);
   letter-spacing: 1px;
   color: var(--text-dim);
@@ -309,10 +332,14 @@ body {
 }
 
 h1 { font-size: var(--fs-lg); margin: 0 0 var(--sp-4); }
+/* Ledger column header: mono, uppercase, ruled below. */
 h2 {
+  font-family: var(--font-mono);
   font-size: var(--fs-base);
   color: var(--text-dim);
   margin: var(--sp-6) 0 var(--sp-2);
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border);
   text-transform: uppercase;
   letter-spacing: 1px;
 }
@@ -326,17 +353,23 @@ h2 {
 }
 
 table { width: 100%; border-collapse: collapse; }
-th, td {
+th {
   text-align: left;
   padding: var(--sp-1) var(--sp-2);
-  border-bottom: 1px solid var(--border);
-}
-th {
+  border-bottom: 1px solid var(--border-strong);
   color: var(--text-dim);
   font-weight: normal;
   text-transform: uppercase;
   font-size: var(--fs-xs);
   letter-spacing: 1px;
+  font-family: var(--font-mono);
+}
+/* Ledger stance: rows are ruled with a light dashed hairline, like ledger
+   entries; the last row closes without a rule. */
+td {
+  text-align: left;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px dashed var(--border);
 }
 td.num, th.num { text-align: right; font-family: var(--font-mono); }
 
@@ -377,7 +410,7 @@ button {
   border-radius: var(--radius-md);
   padding: var(--sp-1) var(--sp-3);
   cursor: pointer;
-  font-family: inherit;
+  font-family: var(--font-mono);
 }
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent-strong); border-color: var(--accent-strong); color: var(--on-accent); }
@@ -455,8 +488,9 @@ input, select {
 .badge {
   display: inline-block;
   padding: 0 var(--sp-2);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   font-size: var(--fs-xs);
+  font-family: var(--font-mono);
   border: 1px solid var(--border);
   color: var(--text-dim);
 }

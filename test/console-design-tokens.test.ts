@@ -34,7 +34,7 @@ describe("style.css design tokens (#293)", () => {
   test("token block exists and is documented", () => {
     expect(root).toBeTruthy();
     expect(css).toMatch(/design tokens/i);
-    expect(css).toMatch(/sumi/i);
+    expect(css).toMatch(/ledger desk/i);
   });
 
   test("color scale: bg/panel/border/text/accent/status with steps", () => {
