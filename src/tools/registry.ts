@@ -68,8 +68,21 @@ export async function dispatch(
   try {
     return { ok: true, output: await def.handler(args, ctx) };
   } catch (e) {
-    return { ok: false, output: String((e as Error)?.message ?? e) };
+    return { ok: false, output: cleanToolError(e) };
   }
+}
+
+/**
+ * #338: a handler exception must surface as a clean, one-line, actionable
+ * message — never a raw stack trace or a leaked "[object Object]".
+ */
+function cleanToolError(e: unknown): string {
+  const firstLine = (msg: string) => msg.split("\n")[0]?.trim() ?? "";
+  if (e instanceof Error && e.message) return firstLine(e.message) || "Tool execution failed.";
+  if (typeof e === "string") return firstLine(e) || "Tool execution failed.";
+  // Non-Error thrown value (object, undefined, …): give a generic, actionable
+  // message instead of leaking String(object) === "[object Object]".
+  return "Tool execution failed.";
 }
 
 export function cap(text: string, max = 30_000): string {

@@ -31,6 +31,16 @@ const endTurn = (text: string): ChatResponse => ({
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 
+/** Await a rejected runAgentTurn and return the thrown Error (type-safe). */
+async function captureError(fn: () => Promise<unknown>): Promise<Error> {
+  try {
+    await fn();
+  } catch (e) {
+    return e as Error;
+  }
+  throw new Error("expected runAgentTurn to throw");
+}
+
 describe("runAgentTurn", () => {
   const tools = [readTool];
   const base = {
@@ -234,5 +244,104 @@ describe("runAgentTurn", () => {
       contextGuard: { enabled: false, thresholdRatio: 0.8, windowTokens: 1_000 },
     });
     expect(events).not.toContain("compression");
+  });
+
+  // --- error-path sweep (#338): provider failures must surface as clean,
+  // one-line, human-readable errors — never a raw stack trace / payload. ---
+
+  test("provider Error surfaces as a clean one-line message, no stack", async () => {
+    const provider = {
+      name: "mock",
+      requests: [] as never[],
+      async chat() {
+        throw new Error("HTTP 500 upstream exploded\n    at Provider.chat (/app/src/provider/factory.ts:12:7)");
+      },
+    };
+    await expect(
+      runAgentTurn({
+        ...base,
+        provider,
+        messages: [{ role: "user", content: "hi" }],
+        budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      }),
+    ).rejects.toThrow(/HTTP 500 upstream exploded/);
+  });
+
+  test("provider error message is collapsed to its first line (no stack leak)", async () => {
+    const provider = {
+      name: "mock",
+      requests: [] as never[],
+      async chat() {
+        throw new Error("boom\n    at Provider.chat (/app/src/provider/factory.ts:12:7)");
+      },
+    };
+    const err = await captureError(() =>
+      runAgentTurn({
+        ...base,
+        provider,
+        messages: [{ role: "user", content: "hi" }],
+        budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      }),
+    );
+    expect(err.message).toBe("boom");
+  });
+
+  test("provider abort surfaces as a clean abort message", async () => {
+    const provider = {
+      name: "mock",
+      requests: [] as never[],
+      async chat() {
+        const e = new Error("This operation was aborted");
+        e.name = "AbortError";
+        throw e;
+      },
+    };
+    await expect(
+      runAgentTurn({
+        ...base,
+        provider,
+        messages: [{ role: "user", content: "hi" }],
+        budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      }),
+    ).rejects.toThrow(/abort/i);
+  });
+
+  test("provider non-Error throw (object) never leaks [object Object]", async () => {
+    const provider = {
+      name: "mock",
+      requests: [] as never[],
+      async chat() {
+        throw { code: 429, body: "rate limit" }; // non-Error value
+      },
+    };
+    const err = await captureError(() =>
+      runAgentTurn({
+        ...base,
+        provider,
+        messages: [{ role: "user", content: "hi" }],
+        budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      }),
+    );
+    expect(err.message).not.toContain("[object Object]");
+    expect(err.message.length).toBeGreaterThan(0);
+  });
+
+  test("malformed provider response surfaces a clean error, not a TypeError", async () => {
+    const provider = {
+      name: "mock",
+      requests: [] as never[],
+      async chat() {
+        return { stopReason: "end_turn", content: null, usage: { inputTokens: 0, outputTokens: 0 } } as never;
+      },
+    };
+    const err = await captureError(() =>
+      runAgentTurn({
+        ...base,
+        provider,
+        messages: [{ role: "user", content: "hi" }],
+        budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      }),
+    );
+    expect(err.message).toMatch(/malformed/i);
   });
 });
