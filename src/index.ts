@@ -36,6 +36,7 @@ import { VectorStore, vectorsFilePath } from "./memory/vector-store";
 import { createEmbeddings } from "./provider/embeddings";
 import { vectorEnabled } from "./config/loader";
 import { createRecallTool, createRememberTool, createRecordLearningTool, createCoreMemoryTool, readFacts } from "./tools/memory";
+import { createRetrieveTool } from "./tools/retrieve";
 import { readLearnings } from "./memory/learnings";
 import { createUseSkillTool } from "./skills/activate";
 import { listSkills } from "./skills/loader";
@@ -302,6 +303,8 @@ async function main(): Promise<number> {
       tools.push(createCoreMemoryTool({ memoryDirPath: memDir }));
       tools.push(createRecordLearningTool({ memoryDirPath: memDir, projectPath: cwd, maxEntries: config.memory?.learnings?.maxEntries }));
       tools.push(createRecallTool({ memoryDirPath: memDir, projectPath: cwd, embeddings, store: vectorStore ?? undefined }));
+      // B9-14 (#394): retrieval as an explicit, on-demand tool (never auto-inject).
+      tools.push(createRetrieveTool({ memoryDirPath: memDir, projectPath: cwd, embeddings, store: vectorStore ?? undefined }));
     }
     tools.push(createUseSkillTool({ home, projectDir: cwd }));
     tools.push(createSaveSkillTool({ projectDir: cwd }));
