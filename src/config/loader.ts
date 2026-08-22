@@ -220,6 +220,16 @@ const SCHEMA: Record<string, FieldDef> = {
       thresholdRatio: { types: ["number"] },
       defaultWindow: { types: ["number"] },
       windows: { types: ["mapping"], valueType: "number" },
+      compaction: {
+        types: ["mapping"],
+        children: {
+          enabled: { types: ["boolean"] },
+          keepLast: { types: ["number"] },
+          minTurnsBetween: { types: ["number"] },
+          archiveDir: { types: ["string"] },
+          table: { types: ["mapping"], valueType: "number" },
+        },
+      },
     },
   },
   // `mcp` from WPs 3.1+3.2 (MCP stdio servers, default off). Server entries are

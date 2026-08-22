@@ -116,6 +116,14 @@ export interface ContextConfig {
   defaultWindow?: number;
   /** Per-model context-window override (tokens). */
   windows?: Record<string, number>;
+  /** Adaptive staged compaction (B2-3/B2-4). */
+  compaction?: {
+    enabled?: boolean;
+    table?: Record<string, number>;
+    keepLast?: number;
+    minTurnsBetween?: number;
+    archiveDir?: string;
+  };
 }
 
 /** `mcp` in config.yaml — MCP stdio servers (WPs 3.1+3.2). Default OFF. */

@@ -1,4 +1,7 @@
 import { describe, test, expect } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ChatMessage, ChatResponse, Provider } from "../src/provider/types";
 import { runAgentTurn } from "../src/agent/loop";
 import { Budget } from "../src/agent/budget";
@@ -100,29 +103,38 @@ describe("TokenPressure integration with runAgentTurn", () => {
     expect(tp.lastReported(DEFAULT_SESSION_KEY)).toBeUndefined();
   });
 
-  test("calibrated pressure drives compression even when the local estimate is under threshold", async () => {
+  test("calibrated pressure drives compaction even when the local estimate is under threshold", async () => {
     const tp = new TokenPressure();
-    tp.record("s", 900); // reported real pressure exceeds the 800 target
+    tp.record("s", 900); // reported real pressure: 900/1000 → stage 4 (summarize)
     const events: string[] = [];
     const provider = mockProvider([endTurn(900)]);
     const messages: ChatMessage[] = smallMessages.map((m) => structuredClone(m));
+    const archiveDir = mkdtempSync(join(tmpdir(), "tok-pressure-archive-"));
 
-    await runAgentTurn({
-      ...base,
-      provider,
-      messages,
-      tokenPressure: tp,
-      sessionKey: "s",
-      onEvent: (e) => events.push(e.t),
-    });
+    try {
+      await runAgentTurn({
+        ...base,
+        provider,
+        messages,
+        tokenPressure: tp,
+        sessionKey: "s",
+        archiveDir,
+        compaction: { keepLast: 0 }, // force the single tool result to be elided
+        onEvent: (e) => events.push(e.t),
+      });
 
-    expect(events).toContain("compression");
-    // compressMessages mutates `messages` in place: the tool result must now be
-    // a placeholder rather than the original 2000-char content.
-    const toolMsg = messages.find((m) => Array.isArray(m.content));
-    const block = toolMsg?.content as { type: "tool_result"; content: string }[] | undefined;
-    expect(block?.[0]?.type).toBe("tool_result");
-    expect(block?.[0]?.content).toMatch(/^\[elided \d+ tokens\]$/);
+      expect(events).toContain("compression");
+      // B2-3/B2-4: the old tool result is pointer-replaced (not "[elided N]")
+      // and its original content was offloaded non-lossy to the archive.
+      const toolMsg = messages.find((m) => Array.isArray(m.content));
+      const block = toolMsg?.content as { type: "tool_result"; content: string }[] | undefined;
+      expect(block?.[0]?.type).toBe("tool_result");
+      expect(block?.[0]?.content).toMatch(/^\[tool result archived → .+\]$/);
+      // A stage-4 archive note was injected.
+      expect(messages[0]?.content).toContain("Full history archived at");
+    } finally {
+      rmSync(archiveDir, { recursive: true, force: true });
+    }
   });
 
   test("no report (first turn) → compression still keyed on the local estimate only", async () => {

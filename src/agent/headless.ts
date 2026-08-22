@@ -1,4 +1,5 @@
 import type { Provider, Usage } from "../provider/types";
+import { join } from "node:path";
 import { buildSystemPrompt } from "./prompt";
 import { createBudget, TreeBudget, type Budget } from "./budget";
 import type { PricingConfig } from "../config/loader";
@@ -93,6 +94,10 @@ export interface HeadlessOptions {
   maxTreeIterations?: number;
   /** #154: optional shared USD cap for a new tree (`0` = unlimited). */
   maxTreeUsd?: number;
+  /** B2-3/B2-4: override the per-session archive dir (default `<memoryDir>/archives`). */
+  archiveDir?: string;
+  /** B2-3/B2-4: cheap-model summarizer for stage-4 compaction (optional). */
+  summarize?: (segment: string) => Promise<string>;
 }
 
 export interface HeadlessResult {
@@ -220,6 +225,9 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     onTextDelta: opts.onTextDelta,
     contextGuard: resolveContextGuard(opts.model, opts.context ?? undefined),
     sessionKey: logger?.id,
+    compaction: opts.context?.compaction,
+    archiveDir: opts.archiveDir ?? (opts.memoryDir ? join(opts.memoryDir, "archives") : undefined),
+    summarize: opts.summarize,
     onEvent: (e: TurnEvent) => {
       if (e.t === "tool_call") opts.onToolActivity?.(e.name);
       if (!logger) return;
@@ -259,6 +267,9 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           beforeTokens: e.beforeTokens,
           afterTokens: e.afterTokens,
           elidedTokens: e.elidedTokens,
+          ...(e.stage !== undefined ? { stage: e.stage } : {}),
+          ...(e.archivePath ? { archivePath: e.archivePath } : {}),
+          ...(e.skipped ? { skipped: e.skipped } : {}),
           ts,
         });
       }
