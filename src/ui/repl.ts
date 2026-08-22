@@ -28,6 +28,7 @@ import { loadChunks, indexedSessionIds } from "../memory/vector-store";
 import { readFacts } from "../tools/memory";
 import { memoryEnabled } from "../config/loader";
 import { VERSION } from "../version";
+import { FrameBatcher } from "./stream-ux";
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
@@ -151,6 +152,15 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       controller = new AbortController();
       turnActive = true;
       stdout.write("\n");
+      // B13-1 (#383): append-only streaming — provider deltas are buffered and
+      // flushed in ~30ms frames, never per-token, so slow/free models don't
+      // flicker and already-emitted lines are never rewritten.
+      const stream = new FrameBatcher({
+        frameMs: 30,
+        now: Date.now,
+        write: (s) => stdout.write(s),
+      });
+      const ticker = setInterval(() => stream.tick(), 30);
       // B2-1 cache-shape (#353): keep the system prompt as the byte-stable
       // prefix. Per-turn data (clock + pinned skills) goes into the volatile
       // TAIL after the transcript — never appended to the system prefix — so
@@ -181,7 +191,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           guard: opts.guard,
           audit: (kind, detail, correlationId) =>
             audit.append(kind, "user", detail, opts.bot, correlationId),
-          onTextDelta: (d) => stdout.write(d),
+          onTextDelta: (d) => stream.push(d),
           onEvent: (e) => forwardEvent(e, state.logger, state.budget),
           signal: controller.signal,
           contextGuard: resolveContextGuard(state.active.model, opts.config.context),
@@ -207,6 +217,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           logEvent(state.logger, { t: "error", message: msg, ts: now() });
         }
       } finally {
+        clearInterval(ticker);
+        stream.flush();
         turnActive = false;
         controller = null;
       }
