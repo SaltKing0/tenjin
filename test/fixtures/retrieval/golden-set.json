@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "corpusPath": "test/fixtures/retrieval/corpus.md",
+  "topK": 3,
+  "thresholds": {
+    "contextRecall": 1.0,
+    "contextPrecision": 0.5,
+    "grepRecall": 1.0
+  },
+  "entries": [
+    {
+      "id": "exact-symbol-parseAuthToken",
+      "query": "parseAuthToken",
+      "groundTruth": "The parseAuthToken helper validates an incoming bearer token and returns its subject claim.",
+      "expectedChunkIds": ["parent-1"],
+      "grepTerms": ["parseAuthToken"]
+    },
+    {
+      "id": "paraphrase-login-authentication",
+      "query": "how does login and authentication work",
+      "groundTruth": "Authentication is handled by the login service (auth.ts), which issues signed tokens and verifies them on every request.",
+      "expectedChunkIds": ["parent-1"],
+      "grepTerms": ["login", "authentication"]
+    },
+    {
+      "id": "temporal-0.2.0-release",
+      "query": "0.2.0 release on 2026-08-22",
+      "groundTruth": "On 2026-08-22 the 0.2.0 release shipped with the new memory retrieval layer and the golden-set CI gate.",
+      "expectedChunkIds": ["parent-2"],
+      "grepTerms": ["2026-08-22", "0.2.0", "release"]
+    },
+    {
+      "id": "mixed-fix-symbol-in-service",
+      "query": "fix parseAuthToken in the authentication service",
+      "groundTruth": "The parseAuthToken helper in the authentication service validates bearer tokens.",
+      "expectedChunkIds": ["parent-1"],
+      "grepTerms": ["parseAuthToken", "authentication"]
+    }
+  ]
+}
