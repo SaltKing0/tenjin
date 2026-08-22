@@ -71,6 +71,7 @@ import { writeTool } from "./tools/write";
 import { editTool } from "./tools/edit";
 import { applyPatchTool } from "./tools/apply-patch";
 import { bashTool } from "./tools/bash";
+import { webFetchTool } from "./tools/web-fetch";
 import type { ToolDef } from "./tools/registry";
 import { parseArgs, HELP, type CliArgs } from "./cli/args";
 import { listJobs, addJob, removeJob, findJob, runJob, renderJob } from "./cli/jobs";
@@ -287,6 +288,7 @@ async function main(): Promise<number> {
       editTool,
       applyPatchTool,
       bashTool,
+      webFetchTool,
     ];
     if (memoryEnabled(config)) {
       tools.push(createRememberTool({ memoryDirPath: memDir }));

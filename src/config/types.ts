@@ -42,6 +42,8 @@ export interface HarnessConfig {
     allowedPaths?: string[];
     /** Mask suspected prompt-injection tool output before it reaches the model. */
     paranoid?: boolean;
+    /** Domains (or *.sub) that web_fetch may never access. */
+    denyDomains?: string[];
   };
   memory?: {
     enabled?: boolean;

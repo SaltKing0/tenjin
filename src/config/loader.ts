@@ -139,6 +139,7 @@ const SCHEMA: Record<string, FieldDef> = {
       blockedPatterns: { types: ["list"] },
       allowedPaths: { types: ["list"] },
       paranoid: { types: ["boolean"] },
+      denyDomains: { types: ["list"] },
     },
   },
   memory: {
