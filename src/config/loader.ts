@@ -16,10 +16,11 @@ import {
   type PricingOverride,
   type ProviderName,
   type RetryConfig,
+  type RouterConfig,
 } from "./types";
 
 export { ConfigError };
-export type { ApprovalMode, ContextConfig, GlobalBudgetConfig, HarnessConfig, PricingConfig, PricingOverride, ProviderName };
+export type { ApprovalMode, ContextConfig, GlobalBudgetConfig, HarnessConfig, PricingConfig, PricingOverride, ProviderName, RouterConfig };
 
 const DEFAULTS: HarnessConfig = {
   provider: "anthropic",
@@ -127,6 +128,17 @@ const SCHEMA: Record<string, FieldDef> = {
   models: {
     types: ["mapping"],
     children: { default: { types: ["string"] }, cheap: { types: ["string"] } },
+  },
+  // B10-1/B10-4 routing core: task→alias→deployment chains. Deep-validated in
+  // validateRouting (alias values are mappings whose shape is checked there).
+  routing: {
+    types: ["mapping"],
+    children: {
+      aliases: { types: ["mapping"], valueType: "mapping" },
+      tasks: { types: ["mapping"], valueType: "string" },
+      stickyTtlMs: { types: ["number"] },
+      retriesPerDeployment: { types: ["number"] },
+    },
   },
   // web_search is default-OFF: `webSearch.enabled: true` turns it on.
   webSearch: {
@@ -725,6 +737,7 @@ function validate(cfg: HarnessConfig, globalPath: string, skipModelCheck: boolea
   validateRetry(cfg.retry);
   validateGlobalBudget(cfg.globalBudget);
   validateContext(cfg.context);
+  validateRouting(cfg.routing);
 }
 
 function validateRatePair(pair: unknown, label: string): void {
@@ -737,6 +750,49 @@ function validateRatePair(pair: unknown, label: string): void {
   }
   if (typeof obj.outputPerMTok !== "number" || obj.outputPerMTok < 0) {
     throw new ConfigError(`${label}.outputPerMTok must be a number >= 0`);
+  }
+}
+
+function validateRouting(routing: RouterConfig | undefined): void {
+  if (routing === undefined) return;
+  if (typeof routing !== "object" || routing === null) {
+    throw new ConfigError(`routing must be a mapping`);
+  }
+  if (routing.stickyTtlMs !== undefined && (typeof routing.stickyTtlMs !== "number" || routing.stickyTtlMs < 0)) {
+    throw new ConfigError(`routing.stickyTtlMs must be a number >= 0`);
+  }
+  if (
+    routing.retriesPerDeployment !== undefined &&
+    (typeof routing.retriesPerDeployment !== "number" ||
+      !Number.isInteger(routing.retriesPerDeployment) ||
+      routing.retriesPerDeployment < 1)
+  ) {
+    throw new ConfigError(`routing.retriesPerDeployment must be an integer >= 1`);
+  }
+  for (const [alias, chain] of Object.entries(routing.aliases ?? {})) {
+    if (typeof chain !== "object" || chain === null || !Array.isArray(chain.deployments)) {
+      throw new ConfigError(`routing.aliases.${alias} must be a mapping with a deployments list`);
+    }
+    if (chain.deployments.length === 0) {
+      throw new ConfigError(`routing.aliases.${alias}.deployments must not be empty`);
+    }
+    chain.deployments.forEach((dep, i) => {
+      const path = `routing.aliases.${alias}.deployments[${i}]`;
+      if (typeof dep !== "object" || dep === null) {
+        throw new ConfigError(`${path} must be a mapping`);
+      }
+      if (typeof dep.provider !== "string" || dep.provider.length === 0) {
+        throw new ConfigError(`${path}.provider must be a non-empty string`);
+      }
+      if (typeof dep.model !== "string" || dep.model.length === 0) {
+        throw new ConfigError(`${path}.model must be a non-empty string`);
+      }
+    });
+  }
+  for (const [task, alias] of Object.entries(routing.tasks ?? {})) {
+    if (typeof alias !== "string" || alias.length === 0) {
+      throw new ConfigError(`routing.tasks.${task} must be a non-empty alias string`);
+    }
   }
 }
 
