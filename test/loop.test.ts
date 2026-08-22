@@ -1,4 +1,7 @@
 import { describe, test, expect } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   ChatRequest,
   ChatResponse,
@@ -209,23 +212,30 @@ describe("runAgentTurn", () => {
       },
     ];
     const events: string[] = [];
-    const result = await runAgentTurn({
-      ...base,
-      provider,
-      messages,
-      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
-      onEvent: (e) => events.push(e.t),
-      contextGuard: { enabled: true, thresholdRatio: 0.8, windowTokens: 1_000 },
-    });
-    expect(result.stopReason).toBe("end_turn");
-    expect(events).toContain("compression");
-    // the tool result sent to the provider was elided to a placeholder
-    const sent = provider.requests[0]?.messages;
-    expect(sent).toBeDefined();
-    const toolMsg = sent?.find((m) => m.role === "user" && Array.isArray(m.content));
-    const block = (toolMsg?.content as { type: "tool_result"; content: string }[] | undefined)?.[0];
-    expect(block?.type).toBe("tool_result");
-    expect(block?.content).toMatch(/^\[elided \d+ tokens\]$/);
+    const archiveDir = mkdtempSync(join(tmpdir(), "loop-archive-"));
+    try {
+      const result = await runAgentTurn({
+        ...base,
+        provider,
+        messages,
+        budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+        onEvent: (e) => events.push(e.t),
+        contextGuard: { enabled: true, thresholdRatio: 0.8, windowTokens: 1_000 },
+        archiveDir,
+        compaction: { keepLast: 0 },
+      });
+      expect(result.stopReason).toBe("end_turn");
+      expect(events).toContain("compression");
+      // B2-3/B2-4: the tool result sent to the provider was pointer-replaced.
+      const sent = provider.requests[0]?.messages;
+      expect(sent).toBeDefined();
+      const toolMsg = sent?.find((m) => m.role === "user" && Array.isArray(m.content));
+      const block = (toolMsg?.content as { type: "tool_result"; content: string }[] | undefined)?.[0];
+      expect(block?.type).toBe("tool_result");
+      expect(block?.content).toMatch(/^\[tool result archived → .+\]$/);
+    } finally {
+      rmSync(archiveDir, { recursive: true, force: true });
+    }
   });
 
   test("context guard disabled emits no compression", async () => {
