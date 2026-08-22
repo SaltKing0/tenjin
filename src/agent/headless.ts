@@ -219,6 +219,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     correlationId: opts.correlationId,
     onTextDelta: opts.onTextDelta,
     contextGuard: resolveContextGuard(opts.model, opts.context ?? undefined),
+    sessionKey: logger?.id,
     onEvent: (e: TurnEvent) => {
       if (e.t === "tool_call") opts.onToolActivity?.(e.name);
       if (!logger) return;

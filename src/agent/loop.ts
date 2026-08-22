@@ -13,6 +13,11 @@ import type { SecurityGuard } from "../security/guard";
 import { detectSuspiciousOutput, frameToolOutput, maskToolOutput } from "../security/injection";
 import type { Budget, TreeBudget } from "./budget";
 import { compressMessages } from "../session/context";
+import {
+  DEFAULT_SESSION_KEY,
+  sharedTokenPressure,
+  type TokenPressure,
+} from "../session/token-pressure";
 import { emit } from "../gateway/events";
 
 export const MAX_ITERATIONS = 25;
@@ -73,6 +78,10 @@ export interface AgentTurnOptions {
   signal?: AbortSignal;
   /** Resolved context-window guard (#101); runs before each provider call. */
   contextGuard?: import("../session/context").ContextGuardConfig | null;
+  /** Token-calibration store (#354); defaults to the shared in-process store. */
+  tokenPressure?: TokenPressure | null;
+  /** Session key the reported prompt_tokens are keyed to (#354). */
+  sessionKey?: string;
   /** Override MAX_ITERATIONS (e.g. per effort level). */
   maxIterations?: number;
   /** Shared delegation-tree budget (#154): counts this run's iterations/USD
@@ -161,6 +170,13 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
     if (response.usage.cacheCreationInputTokens != null)
       totals.cacheCreationInputTokens =
         (totals.cacheCreationInputTokens ?? 0) + response.usage.cacheCreationInputTokens;
+    // #354: record the provider-reported prompt-token count for the active
+    // session so context pressure can be calibrated against the real number the
+    // model saw (preamble + system + tool schemas) instead of the local estimate.
+    (opts.tokenPressure ?? sharedTokenPressure).record(
+      opts.sessionKey ?? DEFAULT_SESSION_KEY,
+      response.usage.inputTokens,
+    );
     const turnCost = opts.budget.add(response.usage, opts.model);
     costUSD += turnCost;
     opts.treeBudget?.addUsd(turnCost);
@@ -236,7 +252,14 @@ function maybeCompress(opts: AgentTurnOptions): void {
   const guard = opts.contextGuard;
   if (!guard?.enabled) return;
   const targetTokens = Math.floor(guard.windowTokens * guard.thresholdRatio);
-  const result = compressMessages(opts.messages, { targetTokens });
+  // #354: calibrated context pressure — prefer the provider-reported input-token
+  // count for this session over the local chars/4 estimate once a report exists.
+  const pressure = (opts.tokenPressure ?? sharedTokenPressure).pressureTokens(
+    opts.sessionKey ?? DEFAULT_SESSION_KEY,
+    opts.messages,
+  );
+  if (pressure <= targetTokens) return;
+  const result = compressMessages(opts.messages, { targetTokens, pressureTokens: pressure });
   if (result.compressed) {
     opts.onEvent?.({
       t: "compression",

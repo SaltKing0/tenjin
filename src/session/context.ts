@@ -124,14 +124,20 @@ export interface CompressResult {
  */
 export function compressMessages(
   messages: ChatMessage[],
-  opts: { targetTokens: number },
+  opts: { targetTokens: number; pressureTokens?: number },
 ): CompressResult {
   const beforeTokens = estimateTokens(messages);
-  if (beforeTokens <= opts.targetTokens) {
+  // #354: the pressure basis may be the provider-reported input-token count
+  // (calibrated), which includes server-side preamble/schemas the local
+  // estimate cannot see. When available it drives both the trigger and how
+  // much must be freed; the local estimate stays the fallback so existing
+  // behavior (and the reported before/after token counts) is unchanged.
+  const pressure = opts.pressureTokens ?? beforeTokens;
+  if (pressure <= opts.targetTokens) {
     return { compressed: false, elidedTokens: 0, beforeTokens, afterTokens: beforeTokens };
   }
 
-  let need = beforeTokens - opts.targetTokens; // tokens to free
+  let need = pressure - opts.targetTokens; // tokens to free
   let elidedTokens = 0;
   const placeholder = (tokens: number) => `[elided ${tokens} tokens]`;
 
