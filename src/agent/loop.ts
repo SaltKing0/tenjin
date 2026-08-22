@@ -1,5 +1,6 @@
 import type {
   ChatMessage,
+  ChatResponse,
   ContentBlock,
   Provider,
   StopReason,
@@ -122,17 +123,28 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
     maybeCompress(opts);
 
 
-    const response = await opts.provider.chat(
-      {
-        model: opts.model,
-        system: opts.system,
-        messages: opts.messages,
-        tools: schemas(opts.tools),
-        maxTokens: opts.maxTokens,
-      },
-      { onTextDelta: opts.onTextDelta },
-      opts.signal,
-    );
+    let response: ChatResponse;
+    try {
+      response = await opts.provider.chat(
+        {
+          model: opts.model,
+          system: opts.system,
+          messages: opts.messages,
+          tools: schemas(opts.tools),
+          maxTokens: opts.maxTokens,
+        },
+        { onTextDelta: opts.onTextDelta },
+        opts.signal,
+      );
+    } catch (e) {
+      // #338: provider failures (4xx/5xx, timeout, abort, malformed payload)
+      // must surface as a clean, one-line, human-readable error — never a raw
+      // stack trace or provider payload reaching the user/channel.
+      throw toCleanProviderError(e);
+    }
+    if (!response || !Array.isArray(response.content)) {
+      throw new Error("The model returned a malformed response.");
+    }
 
     opts.messages.push({ role: "assistant", content: response.content });
     opts.onEvent?.({ t: "assistant_message", content: response.content });
@@ -231,4 +243,29 @@ function maybeCompress(opts: AgentTurnOptions): void {
       elidedTokens: result.elidedTokens,
     });
   }
+}
+
+/**
+ * #338: normalize an error thrown by the provider into a clean, one-line,
+ * human-readable Error. The first line of an Error's message is kept (that is
+ * the actionable summary); the stack and any trailing provider payload are
+ * dropped. Non-Error thrown values (objects, bare strings, undefined) get a
+ * generic message rather than leaking "[object Object]".
+ */
+function toCleanProviderError(e: unknown): Error {
+  if (isAbortError(e)) {
+    return new Error("The agent run was aborted before the model finished.");
+  }
+  if (e instanceof Error && e.message) {
+    const firstLine = e.message.split("\n")[0]?.trim() ?? "";
+    if (firstLine) return new Error(firstLine);
+  }
+  if (typeof e === "string" && e.trim()) {
+    return new Error(e.trim().split("\n")[0] ?? "The model provider call failed.");
+  }
+  return new Error("The model provider call failed.");
+}
+
+function isAbortError(e: unknown): boolean {
+  return e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError");
 }
