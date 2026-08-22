@@ -91,8 +91,12 @@ describe("ask_bot", () => {
     const tool = makeTool();
     const r = await ask(tool, { bot: "researcher", message: "what is auth.ts doing?" });
     expect(r.ok).toBe(true);
+    // B11-2: the parent gets a bounded contract, not the full answer.
+    expect(r.output).toContain("[delegation contract]");
+    expect(r.output).toContain("status: success");
     expect(r.output).toContain("DELEGATED ANSWER");
-    expect(r.output).toMatch(/\[delegated to researcher \([^)]+\), \$0\.01\]/);
+    expect(r.output).toMatch(/cost: \$0\.01/);
+    expect(r.output).toContain("sidecar:");
   });
 
   test("uses target bot soul and pinned model", async () => {
@@ -169,7 +173,7 @@ describe("ask_bot", () => {
     ]);
     const tool = makeTool({ provider });
     const r = await ask(tool, { bot: "researcher", message: "big job" });
-    expect(r.output).toContain("returned no text (budget_exhausted)");
+    expect(r.output).toContain("status: budget_exhausted");
     expect(provider.requests).toHaveLength(1);
   });
 
@@ -185,7 +189,7 @@ describe("ask_bot", () => {
     sessionBudget.spentUSD = 0.4999;
     const tool = makeTool({ provider, sessionBudget });
     const r = await ask(tool, { bot: "researcher", message: "x" });
-    expect(r.output).toContain("(budget_exhausted)");
+    expect(r.output).toContain("status: budget_exhausted");
     expect(provider.requests).toHaveLength(1);
   });
 

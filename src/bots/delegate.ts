@@ -6,8 +6,86 @@ import { runHeadless, capPolicy } from "../agent/headless";
 import { guardForBot } from "../security/guard";
 import { resolveParanoid, hardenUntrustedInput } from "../security/injection";
 import { Budget, formatUSD } from "../agent/budget";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ToolDef } from "../tools/registry";
+
+// B11-2 delegation context firewall: the full subagent output is persisted to a
+// sidecar artifact; the parent transcript only receives a BOUNDED contract
+// (summary + sidecar_path + status + diff_summary), so parent context stays
+// O(k) across k delegations regardless of subagent workload. The parent never
+// auto-loads the sidecar — it reads it explicitly via read_file on demand.
+
+/** Cap on the inline contract summary (~2000 tokens at chars/4). */
+export const CONTRACT_SUMMARY_MAX_CHARS = 8000;
+
+/** Directory where delegation sidecar artifacts are written. */
+export function delegationArtifactsDir(home: string): string {
+  return join(home, "artifacts");
+}
+
+export type DelegationStatus = "success" | "budget_exhausted" | "tree_budget_exceeded" | "no_text";
+
+export interface DelegationContract {
+  target: string;
+  model: string;
+  status: DelegationStatus;
+  costUSD: number;
+  summary: string;
+  sidecarPath?: string;
+  diffSummary?: string;
+  treeIterations?: number;
+}
+
+function sanitizeFilename(s: string): string {
+  const cleaned = s.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return cleaned || "delegation";
+}
+
+/**
+ * Persist the full (framed/hardened) subagent output to
+ * `artifacts/<target>-<corr>.md` and return its path. Nothing is ever
+ * auto-loaded back into the parent prompt.
+ */
+export function writeDelegationSidecar(
+  home: string,
+  target: string,
+  content: string,
+  correlationId: string,
+): string {
+  const dir = delegationArtifactsDir(home);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${sanitizeFilename(target)}-${correlationId.slice(0, 8)}.md`);
+  const header = `# delegation ${target} · ${correlationId}\n\n`;
+  writeFileSync(path, `${header}${content}\n`, "utf8");
+  return path;
+}
+
+/** Bound the inline summary: keep the full framed text when short, else a
+ * truncated head with a pointer to the sidecar. */
+function boundedSummary(framed: string): string {
+  if (framed.length <= CONTRACT_SUMMARY_MAX_CHARS) return framed;
+  return `${framed.slice(0, CONTRACT_SUMMARY_MAX_CHARS)}\n…[truncated — full detail in sidecar]`;
+}
+
+/** Render the contract block that lands in the parent transcript. */
+export function renderDelegationContract(c: DelegationContract): string {
+  const lines: string[] = [
+    "[delegation contract]",
+    `status: ${c.status}`,
+    `target: ${c.target} (${c.model})`,
+    `cost: ${formatUSD(c.costUSD)}`,
+  ];
+  if (c.treeIterations !== undefined) lines.push(`tree_iterations: ${c.treeIterations}`);
+  if (c.sidecarPath) lines.push(`sidecar: ${c.sidecarPath}`);
+  lines.push(`diff_summary: ${c.diffSummary ?? "n/a"}`);
+  lines.push(`summary: ${c.summary}`);
+  if (c.sidecarPath) {
+    lines.push(`(Full detail is in the sidecar — read_file ${c.sidecarPath} to load it on demand.)`);
+  }
+  return lines.join("\n");
+}
 
 export interface AskBotDeps {
   home: string;
@@ -107,7 +185,7 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
 
       // #316: the delegated bot's output is untrusted data (it runs with its own
       // soul/model and may be hostile or steered) — scan, audit and frame it
-      // before returning it to the caller, mirroring the task-path hardening (#189).
+      // before persisting, mirroring the task-path hardening (#189).
       const framed = text
         ? hardenUntrustedInput(text, {
             paranoid: resolveParanoid(deps.globalConfig.security, profile.config.security),
@@ -123,17 +201,44 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
           `delegation tree budget exhausted during ${profile.name} run`,
           correlationId,
         );
-        return `Delegation to ${profile.name} stopped: shared tree budget exhausted (${ctx.treeBudget?.usedIterations ?? 0} iteration(s) across the tree).`;
       }
 
-      const meta = `[delegated to ${profile.name} (${ref.provider}:${ref.model}), ${formatUSD(result.costUSD)}]`;
-      if (!text) {
-        return `The ${profile.name} bot returned no text (${result.stopReason}). ${meta}`;
-      }
-      if (result.stopReason === "budget_exhausted") {
-        return `${framed}\n\n(note: hit its spend cap mid-thought) ${meta}`;
-      }
-      return `${framed}\n\n${meta}`;
+      // B11-2 delegation context firewall: write the FULL output to a sidecar
+      // artifact and return only a bounded contract (summary + sidecar_path +
+      // status + diff_summary). The parent never auto-loads the sidecar — it
+      // reads it explicitly via read_file on demand — so the parent transcript
+      // stays O(k) across k delegations regardless of subagent workload.
+      const sidecarPath = framed
+        ? writeDelegationSidecar(deps.home, profile.name, framed, correlationId)
+        : undefined;
+
+      const status: DelegationStatus =
+        result.stopReason === "tree_budget_exceeded"
+          ? "tree_budget_exceeded"
+          : result.stopReason === "budget_exhausted"
+            ? "budget_exhausted"
+            : !text
+              ? "no_text"
+              : "success";
+
+      const fallback =
+        result.stopReason === "tree_budget_exceeded"
+          ? `Delegation to ${profile.name} stopped: shared tree budget exhausted (${ctx.treeBudget?.usedIterations ?? 0} iteration(s) across the tree).`
+          : `The ${profile.name} bot returned no text (${result.stopReason}).`;
+
+      return renderDelegationContract({
+        target: profile.name,
+        model: `${ref.provider}:${ref.model}`,
+        status,
+        costUSD: result.costUSD,
+        summary: framed && framed.length > 0 ? boundedSummary(framed) : fallback,
+        sidecarPath,
+        diffSummary: "none (read-only delegation)",
+        treeIterations:
+          result.stopReason === "tree_budget_exceeded"
+            ? ctx.treeBudget?.usedIterations
+            : undefined,
+      });
     },
   };
 }
