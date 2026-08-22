@@ -1,5 +1,5 @@
 {
-  "name": "stealth",
+  "name": "tenjin",
   "version": "0.1.0",
   "description": "Tenjin — a personal agent harness. Repo codename: stealth.",
   "license": "MIT",
@@ -8,11 +8,18 @@
   "bin": {
     "tenjin": "./src/index.ts"
   },
+  "files": [
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "bun run src/index.ts",
     "tenjin": "bun run src/index.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run typecheck"
   },
   "dependencies": {},
   "devDependencies": {
