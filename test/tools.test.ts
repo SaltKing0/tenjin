@@ -37,6 +37,56 @@ test("dispatch reports unknown tool and missing args", async () => {
   expect(r.output).toContain("path");
 });
 
+// --- error-path sweep (#338): a handler exception must surface as a clean,
+// actionable one-line message — never "[object Object]" or a raw stack trace. ---
+
+test("handler throwing an Error surfaces its message, not a stack trace", async () => {
+  const boomTool = {
+    name: "boom",
+    group: "read" as const,
+    description: "throws",
+    inputSchema: { type: "object" as const, properties: {} },
+    async handler() {
+      throw new Error("boom happened\n    at boom (/app/src/tools/boom.ts:3:5)");
+    },
+  };
+  const r = await dispatch([boomTool], "boom", {}, { cwd: dir });
+  expect(r.ok).toBe(false);
+  expect(r.output).toBe("boom happened");
+  expect(r.output).not.toContain("at boom");
+});
+
+test("handler throwing a non-Error object never leaks [object Object]", async () => {
+  const boomTool = {
+    name: "boom",
+    group: "read" as const,
+    description: "throws",
+    inputSchema: { type: "object" as const, properties: {} },
+    async handler() {
+      throw { code: 13, detail: "oops" }; // non-Error value
+    },
+  };
+  const r = await dispatch([boomTool], "boom", {}, { cwd: dir });
+  expect(r.ok).toBe(false);
+  expect(r.output).not.toContain("[object Object]");
+  expect(r.output.length).toBeGreaterThan(0);
+});
+
+test("handler throwing a bare string surfaces it cleanly", async () => {
+  const boomTool = {
+    name: "boom",
+    group: "read" as const,
+    description: "throws",
+    inputSchema: { type: "object" as const, properties: {} },
+    async handler() {
+      throw "disk full"; // bare string
+    },
+  };
+  const r = await dispatch([boomTool], "boom", {}, { cwd: dir });
+  expect(r.ok).toBe(false);
+  expect(r.output).toBe("disk full");
+});
+
 describe("read_file", () => {
   test("numbered lines with default window", async () => {
     const r = await dispatch(tools, "read_file", { path: "a.ts" }, { cwd: dir });
