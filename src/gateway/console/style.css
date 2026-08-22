@@ -58,6 +58,13 @@
   --danger: #f85149;
   --danger-wash: rgba(248, 81, 73, 0.15);
 
+  /* B13-10 approval-status semantics (danger = deny, success = allow-once,
+     info = allow-always): map approval outcomes to the status scale. */
+  --color-approval-pending: var(--warning);
+  --color-approval-deny: var(--danger);
+  --color-approval-allow-once: var(--success);
+  --color-approval-allow-always: var(--success);
+
   /* neutral tint */
   --wash: rgba(127, 127, 127, 0.08);
 
