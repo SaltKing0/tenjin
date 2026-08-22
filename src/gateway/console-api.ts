@@ -20,6 +20,7 @@ import { sanitizeSkillName } from "../skills/loader";
 import { inboxPolicyFromConfig, unreadMessages } from "../bots/inbox";
 import { SessionLog, sessionLineage } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
+import { renderTranscript } from "./transcript";
 import { aggregateSpend, perBotBreakdown } from "../audit/spend";
 import { AuditLog, formatAuditMarkdown, AUDIT_KINDS, type AuditKind, type AuditQuery } from "../audit/log";
 import {
@@ -446,6 +447,23 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
           id: log.id,
           lines: renderTrajectory(log.events()),
         });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 404);
+      }
+    }
+
+    const transcriptMatch = /^\/api\/session\/([a-zA-Z0-9_-]+)\/transcript$/.exec(path);
+    if (transcriptMatch && req.method === "GET") {
+      const id = transcriptMatch[1];
+      if (!id) return json({ error: "missing id" }, 400);
+      const bot = url.searchParams.get("bot");
+      const dir = scopeSessionsDir(deps.home, bot);
+      if (!dir) return json({ error: "unknown bot" }, 400);
+      try {
+        const log = SessionLog.resolve(dir, id);
+        // B13-8: history replay through the SAME event-sourced transcript
+        // engine the live SSE view renders with — one codepath.
+        return json({ id: log.id, cards: renderTranscript(log.events()) });
       } catch (e) {
         return json({ error: (e as Error).message }, 404);
       }
