@@ -8,7 +8,7 @@ import { ConfigError } from "../config/types";
 import type { ToolDef } from "../tools/registry";
 import type { HarnessConfig } from "../config/loader";
 import { Budget, createBudget, formatUSD, TreeBudget } from "../agent/budget";
-import { runAgentTurn, type TurnEvent } from "../agent/loop";
+import { runAgentTurn, type TurnEvent, type ApproveDecision } from "../agent/loop";
 import { checkGlobalBudget } from "../audit/global-budget";
 import type { EventLogger, SessionEvent } from "../session/events";
 import { rebuildMessages, sumUsage } from "../session/events";
@@ -28,8 +28,22 @@ import { loadChunks, indexedSessionIds } from "../memory/vector-store";
 import { readFacts } from "../tools/memory";
 import { memoryEnabled } from "../config/loader";
 import { VERSION } from "../version";
-import { classifyRisk, isT2, confirmationStrength } from "../security/guard";
+import { classifyRisk, isT2 } from "../security/guard";
 import { FrameBatcher } from "./stream-ux";
+import {
+  ApprovalQueue,
+  DEFAULT_APPROVAL_TIMEOUT_MS,
+  denyFeedback,
+  parseApprovalAnswer,
+  persistScope,
+  renderApprovalBlock,
+  timeoutVerdict,
+  withTimeout,
+} from "./approval";
+
+/** #406: one approval visible at a time (FIFO lock) + persistent always-rules. */
+const approvalQueue = new ApprovalQueue();
+const alwaysRules = new Set<string>();
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
@@ -516,13 +530,13 @@ async function approve(
   sessionAllowed: Set<string>,
   audit?: AuditLog,
   bot?: string,
-): Promise<boolean> {
+): Promise<ApproveDecision> {
   // B13-3 (#401): a T2 (irreversible/credential) call is NEVER auto-approved —
   // not via a policy "allow", not via a session-wide allow, and never
   // remembered for the session. It always prompts with the strongest shape.
   const tier = classifyRisk(name, input);
   const strong = isT2(tier);
-  if (!strong && sessionAllowed.has(name)) return true;
+  if (!strong && (sessionAllowed.has(name) || alwaysRules.has(name))) return true;
   const policy = config.approval[name] ?? (group === "write" ? "ask" : "allow");
   if (policy === "deny") {
     stdout.write(dim(`  (blocked by policy: ${name})\n`));
@@ -530,20 +544,77 @@ async function approve(
     return false;
   }
   if (!strong && policy === "allow") return true;
-  const shape = confirmationStrength(tier);
-  const prompt =
-    shape === "strong"
-      ? `  ⚠ approve ${name}? (T2 irreversible/credential) [y/N] `
-      : `  approve ${name}? [y/N/a] `;
-  const answer = (await rl.question(green(prompt))).trim().toLowerCase();
-  if (answer === "a" && !strong) {
-    sessionAllowed.add(name);
-    audit?.append("approval", "user", `${name} approved (always this session)`, bot);
+
+  // #406: one approval visible at a time — concurrent prompts serialize FIFO.
+  return approvalQueue.run(async () => {
+    const what = formatApprovalWhat(name, input);
+    stdout.write("\n" + renderApprovalBlock({ tool: name, tier, what }) + "\n");
+    const answered = await askApproval(rl, DEFAULT_APPROVAL_TIMEOUT_MS);
+    if (answered === null) {
+      // #406: timeout AUTO-DENIES — never allows.
+      const verdict = timeoutVerdict();
+      stdout.write(dim(`\n  (approval timed out — auto-${verdict.kind})\n`));
+      audit?.append("approval", "user", `${name} auto-denied (timeout)`, bot);
+      return false;
+    }
+    const parsed = parseApprovalAnswer(answered, { tier });
+    if (parsed.kind === "comment") {
+      // #406: tab-to-comment — the denial reason is fed back to the model.
+      const comment = await askApproval(
+        rl,
+        DEFAULT_APPROVAL_TIMEOUT_MS,
+        "  comment (reason for denial): ",
+      );
+      audit?.append("approval", "user", `${name} denied: ${comment ?? ""}`, bot);
+      return { allowed: false, reason: denyFeedback(name, comment ?? undefined) };
+    }
+    const verdict = parsed.verdict;
+    if (verdict.kind === "deny") {
+      audit?.append("approval", "user", `${name} denied`, bot);
+      return false;
+    }
+    if (verdict.scope === "session") sessionAllowed.add(name);
+    if (verdict.scope === "always") {
+      // always = NARROWEST scope: a rule for the exact tool, never a group.
+      const rule = persistScope("always", name);
+      if (rule) alwaysRules.add(rule.tool);
+    }
+    audit?.append("approval", "user", `${name} approved (${verdict.scope})`, bot);
     return true;
+  });
+}
+
+/** #406: derive the literal command/path shown as the approval WHAT. */
+function formatApprovalWhat(name: string, input: unknown): string {
+  if (typeof input === "object" && input !== null) {
+    const rec = input as Record<string, unknown>;
+    if (typeof rec.command === "string") return rec.command;
+    if (typeof rec.path === "string") return rec.path;
   }
-  const allowed = answer === "y" || answer === "yes";
-  audit?.append("approval", "user", `${name} ${allowed ? "approved" : "declined"}`, bot);
-  return allowed;
+  try {
+    const s = JSON.stringify(input);
+    return s ? s.slice(0, 300) : String(input);
+  } catch {
+    return String(input);
+  }
+}
+
+/** #406: write a prompt and read one line, auto-denying (null) on timeout. */
+async function askApproval(
+  rl: Interface,
+  timeoutMs: number,
+  prompt = "  answer> ",
+): Promise<string | null> {
+  stdout.write(prompt);
+  const line = new Promise<string>((resolve) => {
+    const onLine = (l: string) => {
+      rl.off("line", onLine);
+      resolve(l);
+    };
+    rl.on("line", onLine);
+  });
+  const result = await withTimeout(line, timeoutMs);
+  return result.ok ? result.value.trim() : null;
 }
 
 function adoptLog(state: ReplState, log: SessionLog, sessionAllowed: Set<string>): void {

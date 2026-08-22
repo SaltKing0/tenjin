@@ -69,8 +69,15 @@ export interface TurnResult {
 }
 
 export interface ApproveFn {
-  (toolName: string, group: ToolGroup, input: unknown): Promise<boolean>;
+  (toolName: string, group: ToolGroup, input: unknown): Promise<ApproveDecision>;
 }
+
+/**
+ * Approval decision. `true` allows; `false` denies; an object carries a
+ * user-provided denial reason (comment) that is fed back to the model as
+ * corrective feedback (#406).
+ */
+export type ApproveDecision = boolean | { allowed: false; reason?: string };
 
 /** Result of a pre-call gate check (e.g. a global spend budget). */
 export interface GateCheck {
@@ -328,9 +335,16 @@ async function runTurns(
       let ok = false;
       let output: string;
       let injectionWarning: string | undefined;
-      const approved = await opts.approve(block.name, groupOf(opts.tools, block.name), block.input);
-      if (!approved) {
-        output = "User declined this tool call.";
+      const decision = await opts.approve(block.name, groupOf(opts.tools, block.name), block.input);
+      const denied =
+        decision === false || (typeof decision === "object" && decision.allowed === false);
+      if (denied) {
+        const reason = typeof decision === "object" ? decision.reason : undefined;
+        // #406: a user denial comment is fed back to the model as corrective
+        // feedback (instructive), not a silent refusal.
+        output = reason
+          ? `User declined this tool call. Reason: ${reason}`
+          : "User declined this tool call.";
       } else {
         // B13-6 (#369): edit boundary — snapshot immediately before a file-edit
         // tool runs, so the edit can be rolled back byte-exact. bash is
