@@ -256,13 +256,15 @@ export class TranscriptSession {
         return;
       }
       case "TOOL_CALL_ARGS": {
-        const card = this.openTool(ev.id);
-        if (!card) return; // orphan args chunk — ignore, keep stream intact
+        // Streaming args only mutate the still-streaming card; chunks arriving
+        // after END (finalized) are ignored so a closed card can't be corrupted.
+        const card = this.toolCard(ev.id, new Set(["streaming"]));
+        if (!card) return;
         card.argsJson += ev.argsJson;
         return;
       }
       case "TOOL_CALL_END": {
-        const card = this.openTool(ev.id);
+        const card = this.toolCard(ev.id, new Set(["streaming"]));
         if (!card) return;
         card.state = "running";
         const parsed = tryParseJson(card.argsJson);
@@ -275,7 +277,9 @@ export class TranscriptSession {
         return;
       }
       case "TOOL_RESULT": {
-        const card = this.openTool(ev.id);
+        // A result closes a streaming or running call; a duplicate/foreign
+        // result for an already-closed card is ignored.
+        const card = this.toolCard(ev.id, new Set(["streaming", "running"]));
         if (!card) return;
         card.state = ev.ok ? "done" : "error";
         card.result = { ok: ev.ok, output: ev.output };
@@ -286,12 +290,14 @@ export class TranscriptSession {
     }
   }
 
-  /** Find an open (streaming/running) tool card by id — a tool lifecycle card
-   *  is only mutated while open; a stray result for a closed card is ignored. */
-  private openTool(id: string): TranscriptCard & { kind: "tool" } | undefined {
+  /** Find a tool card by id that is in one of the allowed lifecycle states. */
+  private toolCard(
+    id: string,
+    allowed: Set<"streaming" | "running" | "done" | "error">,
+  ): Extract<TranscriptCard, { kind: "tool" }> | undefined {
     for (let i = this.cards.length - 1; i >= 0; i--) {
       const c = this.cards[i]!;
-      if (c.kind === "tool" && c.id === id && c.state !== "done" && c.state !== "error") {
+      if (c.kind === "tool" && c.id === id && allowed.has(c.state)) {
         return c;
       }
     }

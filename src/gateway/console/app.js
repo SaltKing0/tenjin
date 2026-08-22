@@ -755,57 +755,16 @@ async function openReplay(main, id) {
     // lineage is best-effort; the timeline below still renders without it
   }
 
-  const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/events?bot=${encodeURIComponent(currentBot)}`);
+  // B13-8 (#432): history replay renders through the SAME event-sourced
+  // transcript reducer the live view uses (server endpoint returns the cards
+  // from renderTranscript). Lineage breadcrumb above is preserved.
+  const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/transcript?bot=${encodeURIComponent(currentBot)}`);
   box.append(el("h2", {}, "Timeline"));
-  if (!data.events || data.events.length === 0) {
+  if (!data.cards || data.cards.length === 0) {
     box.append(el("div", { class: "dim" }, "(empty session)"));
     return;
   }
-  for (const ev of data.events) {
-    switch (ev.t) {
-      case "session_start": {
-        const head = `session ${ev.id} · ${ev.provider || "?"}:${ev.model || "?"}`;
-        box.append(el("div", { class: "dim" }, ev.parent ? `${head} — forked from ${ev.parent.id} @${ev.parent.uptoEvent}` : head));
-        break;
-      }
-      case "message":
-        box.append(messageCard(ev));
-        break;
-      case "tool_call": {
-        const details = el(
-          "details",
-          {},
-          el("summary", {}, `→ ${ev.name}`),
-          el("pre", {}, JSON.stringify(ev.input ?? {}, null, 2)),
-        );
-        box.append(el("div", { class: "toolcall" }, details));
-        break;
-      }
-      case "tool_result": {
-        const cls = ev.ok ? "toolok" : "toolerr";
-        const label = ev.ok ? `← ${ev.name} ok` : `← ${ev.name} ERR`;
-        const details = el(
-          "details",
-          {},
-          el("summary", {}, label),
-          el("pre", {}, String(ev.output)),
-        );
-        box.append(el("div", { class: cls }, details));
-        break;
-      }
-      case "usage":
-        box.append(el("div", { class: "dim" }, `$ in ${ev.inputTokens} · out ${ev.outputTokens} · ${ev.costUSD} turn · ${ev.spentUSD} spent`));
-        break;
-      case "error":
-        box.append(el("div", { class: "err" }, `error: ${ev.message}`));
-        break;
-      case "compression":
-        box.append(el("div", { class: "dim" }, `~ context ${ev.beforeTokens} → ${ev.afterTokens} (elided ${ev.elidedTokens})`));
-        break;
-      default:
-        break;
-    }
-  }
+  for (const card of data.cards) box.append(transcriptCardEl(card));
 }
 
 // #284: shared message-block builder (used by chat history + live sends).
@@ -822,6 +781,40 @@ function messageCard(ev) {
   }
   if (!text) return el("div", {});
   return el("div", { class: "msg bot" }, el("strong", {}, "tenjin"), el("div", {}, text));
+}
+
+// B13-8 (#432): shared transcript card renderer. Renders ONE TranscriptCard
+// (produced by the same reducer for live streaming and history replay) into a
+// DOM node. Live and replay call this — one codepath.
+function transcriptCardEl(card) {
+  switch (card.kind) {
+    case "reasoning":
+      return el("div", { class: "msg reasoning dim" }, `✳ ${card.text}`);
+    case "text": {
+      const cls = card.source === "user" ? "msg you" : "msg bot";
+      const label = card.source === "user" ? "you" : "tenjin";
+      return el("div", { class: cls }, el("strong", {}, label), el("div", {}, card.text));
+    }
+    case "state":
+      return el("div", { class: "dim" }, card.text);
+    case "tool": {
+      const status = card.state === "running" ? "running" : card.state === "error" ? "err" : card.state === "done" ? "ok" : "streaming";
+      const summary = `${status === "running" ? "…" : status === "err" ? "✗" : "→"} ${card.name} ${card.state}`;
+      const details = el(
+        "details",
+        { class: `toolcall ${status}` },
+        el("summary", {}, summary),
+        el("pre", { class: "dim" }, card.argsJson || "{}"),
+      );
+      if (card.result) details.append(el("pre", {}, String(card.result.output)));
+      if (card.diff && card.diff.changed) details.append(el("pre", { class: "diff" }, card.diff.unified));
+      return el("div", { class: `toolcall ${status}` }, details);
+    }
+    case "error":
+      return el("div", { class: "err" }, `error: ${card.message}`);
+    default:
+      return el("div", {});
+  }
 }
 
 async function forkSession(main, id) {
