@@ -12,7 +12,6 @@ import {
   loadCoreBlocks,
   renderCoreMemory,
   saveCoreBlocks,
-  type CoreBlockName,
   type CoreBlocks,
 } from "../src/memory/inject";
 
@@ -82,7 +81,7 @@ describe("renderCoreMemory", () => {
     // Fixed order: each block's label precedes the next block's label.
     const positions = CORE_BLOCK_NAMES.map((n) => section.indexOf(CORE_BLOCK_LABELS[n]));
     for (let i = 1; i < positions.length; i++) {
-      expect(positions[i]).toBeGreaterThan(positions[i - 1]);
+      expect(positions[i]!).toBeGreaterThan(positions[i - 1]!);
     }
   });
 
@@ -173,7 +172,7 @@ describe("storage round-trip", () => {
     const b = filled();
     saveCoreBlocks(dir, b);
     const loaded = loadCoreBlocks(dir);
-    for (const name of CORE_BLOCK_NAMES as CoreBlockName[]) {
+    for (const name of CORE_BLOCK_NAMES) {
       expect(loaded[name]).toBe(b[name]);
     }
   });
