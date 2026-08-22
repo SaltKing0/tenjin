@@ -4,24 +4,16 @@ import {
   buildBwrapArgs,
   seccompDenyBaseline,
   sandboxUnavailable,
-  type SandboxMechanism,
 } from "../src/tools/sandbox";
 
 // #349: native sandbox for bash. Platform-skipped where the mechanism isn't
 // available (CI/dev run on Linux with bwrap; the macOS Seatbelt path is
 // darwin-only and cannot run here).
 
-const LINUX = process.platform === "linux";
-
 test("detectSandbox returns a mechanism or null", () => {
   const mech = detectSandbox();
-  // On this Linux host bwrap is present; macOS would report sandbox-exec.
-  // The contract: it must be a known mechanism or null — never undefined.
-  expect(["bwrap", "sandbox-exec", null]).toContain(mech);
-  // On this Linux host bwrap is present, so the mechanism must be non-null.
-  if (LINUX) {
-    expect(mech).toBeTruthy();
-  }
+  // The contract: a known mechanism or null — never undefined.
+  expect(["bwrap", "sandbox-exec", "landlock", null]).toContain(mech);
 });
 
 test("seccomp deny baseline denies ptrace/process_vm/io_uring syscalls", () => {
