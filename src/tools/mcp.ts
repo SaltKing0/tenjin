@@ -1,5 +1,6 @@
 import type { ToolDef } from "./registry";
 import type { HarnessConfig } from "../config/types";
+import type { Redactor } from "../security/redact";
 
 /**
  * MCP (Model Context Protocol) stdio skeleton — Roadmap §3 Phase 3 / WPs 3.1+3.2.
@@ -32,6 +33,12 @@ export interface McpServerConfig {
   scope: McpScope;
   /** Default false — an MCP server only runs when explicitly enabled. */
   enabled: boolean;
+  /**
+   * #347 governance: risk grade. `true` → the server's tools register as
+   * `group: "read"` (no approval). Default `false` → tools register as
+   * `group: "write"`, so they REQUIRE approval (untrusted-by-default).
+   */
+  readOnly?: boolean;
 }
 
 export interface McpToolSpec {
@@ -86,6 +93,7 @@ export function normalizeMcpServers(
       env: expandEnvMap(s.env, env),
       scope: s.scope === "project" || s.scope === "user" ? s.scope : "local",
       enabled: s.enabled === undefined ? false : Boolean(s.enabled),
+      readOnly: s.readOnly === undefined ? false : Boolean(s.readOnly),
     });
   }
   return out;
@@ -300,7 +308,14 @@ export function closeAllMcpClients(): void {
  */
 export async function createMcpTools(
   cfg: HarnessConfig,
-  opts: { timeoutMs?: number; warn?: (msg: string) => void } = {},
+  opts: {
+    timeoutMs?: number;
+    warn?: (msg: string) => void;
+    /** #347: redact MCP output before it re-enters context (secrets/PII). */
+    redactor?: Redactor;
+    /** #347: optional per-call budget gate; returning false halts the call. */
+    budget?: { consume(units?: number): boolean };
+  } = {},
 ): Promise<ToolDef[]> {
   const servers = normalizeMcpServers(cfg.mcp?.servers);
   const warn = opts.warn ?? ((m: string) => console.warn(m));
@@ -316,19 +331,34 @@ export async function createMcpTools(
       warn(`[mcp] server "${server.name}" failed to initialize: ${(e as Error).message}`);
       continue;
     }
+    // #347 governance: readOnly servers expose read tools (no approval);
+    // everything else is write-grade and requires approval (untrusted default).
+    const group = server.readOnly ? "read" : "write";
     for (const t of client.tools) {
       const spec = t.inputSchema ?? {};
+      const fullName = `mcp__${server.name}__${t.name}`;
       tools.push({
-        name: `mcp__${server.name}__${t.name}`,
-        group: "write",
+        name: fullName,
+        group,
         description: truncate(t.description ?? `MCP tool "${t.name}" on server "${server.name}"`),
         inputSchema: {
           type: "object",
           properties: spec.properties ?? {},
           required: spec.required ?? [],
         },
-        async handler(args) {
-          return client.callTool(t.name, args);
+        async handler(args, ctx) {
+          // Guard deny-list for MCP tools (security.mcpDenyPatterns).
+          if (ctx.guard) {
+            const g = ctx.guard.checkMcpTool(fullName);
+            if (g.blocked) {
+              throw new Error(`MCP tool "${fullName}" is denied by security policy`);
+            }
+          }
+          if (opts.budget && !opts.budget.consume(1)) {
+            throw new Error("MCP call halted: budget exhausted");
+          }
+          const out = await client.callTool(t.name, args);
+          return opts.redactor ? opts.redactor.redact(out) : out;
         },
       });
     }
