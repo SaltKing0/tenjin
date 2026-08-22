@@ -14,6 +14,7 @@ import { globTool } from "../tools/glob";
 import { grepTool } from "../tools/grep";
 import { writeTool } from "../tools/write";
 import { editTool } from "../tools/edit";
+import { applyPatchTool } from "../tools/apply-patch";
 import { bashTool } from "../tools/bash";
 import type { ToolDef } from "../tools/registry";
 import { Redactor } from "../security/redact";
@@ -120,7 +121,7 @@ export function toolsForPolicy(policy: ToolPolicy, skill?: SkillDirs): ToolDef[]
     case "read-only":
       return [readTool, globTool, grepTool, ...skillTools];
     case "full":
-      return [readTool, globTool, grepTool, writeTool, editTool, bashTool, ...skillTools];
+      return [readTool, globTool, grepTool, writeTool, editTool, applyPatchTool, bashTool, ...skillTools];
     case "none":
       return [];
   }

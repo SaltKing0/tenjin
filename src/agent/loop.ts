@@ -186,6 +186,8 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
           cwd: opts.cwd,
           guard: opts.guard,
           treeBudget: opts.treeBudget,
+          audit: opts.audit,
+          correlationId: opts.correlationId,
         });
         ok = dispatched.ok;
         output = cap(dispatched.output);

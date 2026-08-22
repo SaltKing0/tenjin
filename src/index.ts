@@ -69,6 +69,7 @@ import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
 import { writeTool } from "./tools/write";
 import { editTool } from "./tools/edit";
+import { applyPatchTool } from "./tools/apply-patch";
 import { bashTool } from "./tools/bash";
 import type { ToolDef } from "./tools/registry";
 import { parseArgs, HELP, type CliArgs } from "./cli/args";
@@ -284,6 +285,7 @@ async function main(): Promise<number> {
       grepTool,
       writeTool,
       editTool,
+      applyPatchTool,
       bashTool,
     ];
     if (memoryEnabled(config)) {
