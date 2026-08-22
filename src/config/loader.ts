@@ -149,6 +149,7 @@ const SCHEMA: Record<string, FieldDef> = {
       allowedPaths: { types: ["list"] },
       paranoid: { types: ["boolean"] },
       denyDomains: { types: ["list"] },
+      mcpDenyPatterns: { types: ["list"] },
     },
   },
   memory: {

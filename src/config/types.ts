@@ -51,6 +51,8 @@ export interface HarnessConfig {
     paranoid?: boolean;
     /** Domains (or *.sub) that web_fetch may never access. */
     denyDomains?: string[];
+    /** #347: deny-list globs for MCP tool names (`mcp__server__tool`). */
+    mcpDenyPatterns?: string[];
   };
   memory?: {
     enabled?: boolean;

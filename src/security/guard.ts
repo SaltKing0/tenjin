@@ -29,6 +29,8 @@ export interface WorkspaceOptions {
   // Domain deny-list for web_fetch: hostnames (or *.sub) that may never be
   // fetched. Matched against the URL host, exact or subdomain.
   denyDomains?: string[];
+  // #347: deny-list for MCP tool names (`mcp__<server>__<tool>`) — globs.
+  mcpDenyPatterns?: string[];
 }
 
 export const GUARD_DISABLED_WARNING =
@@ -146,6 +148,7 @@ export class SecurityGuard {
   private workspaceRoot?: string;
   private allowedPaths: string[];
   private domainEntries: Array<{ pattern: string; regex: RegExp }>;
+  private mcpDenyEntries: Array<{ pattern: string; regex: RegExp }>;
 
   constructor(
     readonly patterns: string[],
@@ -170,9 +173,14 @@ export class SecurityGuard {
       const src = globToSource(bare);
       return { pattern, regex: new RegExp(`(?:^|\\.)${src}$`, "i") };
     });
+    // #347: glob deny-list against full MCP tool names (`mcp__server__tool`).
+    this.mcpDenyEntries = (options.mcpDenyPatterns ?? []).map((pattern) => ({
+      pattern,
+      regex: new RegExp(globToSource(pattern), "i"),
+    }));
   }
 
-  static fromConfig(security: { blockedPatterns?: string[]; disabled?: boolean; workspaceRoot?: string; allowedPaths?: string[]; denyDomains?: string[] } | undefined, onBlock?: (detail: string) => void): SecurityGuard | null {
+  static fromConfig(security: { blockedPatterns?: string[]; disabled?: boolean; workspaceRoot?: string; allowedPaths?: string[]; denyDomains?: string[]; mcpDenyPatterns?: string[] } | undefined, onBlock?: (detail: string) => void): SecurityGuard | null {
     if (security?.disabled) return null;
     const patterns = security?.blockedPatterns ?? [...DEFAULT_BLOCKED_PATTERNS];
     if (!Array.isArray(patterns)) {
@@ -187,10 +195,14 @@ export class SecurityGuard {
     if (security?.denyDomains !== undefined && !Array.isArray(security.denyDomains)) {
       throw new ConfigError("security.denyDomains must be a list of domains");
     }
+    if (security?.mcpDenyPatterns !== undefined && !Array.isArray(security.mcpDenyPatterns)) {
+      throw new ConfigError("security.mcpDenyPatterns must be a list of globs");
+    }
     return new SecurityGuard(patterns, onBlock, {
       workspaceRoot: security?.workspaceRoot,
       allowedPaths: security?.allowedPaths,
       denyDomains: security?.denyDomains,
+      mcpDenyPatterns: security?.mcpDenyPatterns,
     });
   }
 
@@ -344,6 +356,20 @@ export class SecurityGuard {
     return { blocked: false };
   }
 
+  /**
+   * #347: deny-list check for MCP tool names (`mcp__<server>__<tool>`).
+   * Returns blocked when the full name matches a configured mcpDenyPatterns
+   * glob. Combined with the write-group default, this keeps MCP tools gated.
+   */
+  checkMcpTool(name: string): GuardResult {
+    for (const entry of this.mcpDenyEntries) {
+      if (entry.regex.test(name)) {
+        return { blocked: true, pattern: entry.pattern, target: name };
+      }
+    }
+    return { blocked: false };
+  }
+
   checkTool(name: string, input: Record<string, unknown>, cwd?: string): GuardResult {
     switch (name) {
       case "read_file":
@@ -378,6 +404,8 @@ export type GuardConfig = {
   allowedPaths?: string[];
   // Domain deny-list for web_fetch (hostnames or *.sub that may never be fetched).
   denyDomains?: string[];
+  // #347: deny-list globs for MCP tool names (`mcp__server__tool`).
+  mcpDenyPatterns?: string[];
 };
 
 /** Union extra bot globs onto the global set (defaults if global is unset). */

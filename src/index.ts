@@ -305,7 +305,9 @@ async function main(): Promise<number> {
     tools.push(createSaveSkillTool({ projectDir: cwd }));
     tools.push(createListSkillsTool({ home, projectDir: cwd }));
     // MCP stdio servers (WPs 3.1+3.2) — default OFF; no-op with empty config.
-    const mcpTools = await createMcpTools(config);
+    const mcpTools = await createMcpTools(config, {
+      redactor: Redactor.fromConfig(config.security),
+    });
     if (mcpTools.length) tools.push(...mcpTools);
     if (profile) {
       tools.push(createSendMessageTool({ home, fromBot: profile.name, policy: inboxPolicy }));
