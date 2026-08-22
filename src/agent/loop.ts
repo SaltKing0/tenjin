@@ -35,6 +35,7 @@ import {
   type ConsolidationTracker,
 } from "../memory/consolidate";
 import { emit } from "../gateway/events";
+import { snapshot as checkpointSnapshot } from "../checkpoints/store";
 
 export const MAX_ITERATIONS = 25;
 
@@ -125,7 +126,7 @@ export interface AgentTurnOptions {
   /** Cheap-model summarizer for stage 4 (optional; falls back to archive-only). */
   summarize?: (segment: string) => Promise<string>;
   /** B9-3 end-of-session consolidation pass (runs once at the natural turn
-   * boundary when calibrated pressure crosses `threshold`). */
+   *  boundary when calibrated pressure crosses `threshold`). */
   consolidation?: {
     enabled?: boolean;
     threshold?: number;
@@ -136,6 +137,22 @@ export interface AgentTurnOptions {
     projectPath?: string;
     sessionLog?: import("../session/log").SessionLog | null;
   };
+  /** B13-6 checkpoints (#369): shadow-git snapshots at the prompt boundary and
+   *  before each file-edit tool. Enabled iff `storeDir`+`sourceDir` are set and
+   *  `enabled` is not false. A snapshot failure never breaks the run. */
+  checkpoints?: {
+    enabled?: boolean;
+    storeDir: string;
+    sourceDir: string;
+    /** Optional session/conversation log captured into each checkpoint. */
+    logPath?: string;
+    /** Max checkpoints retained; oldest evicted (default 100). */
+    keep?: number;
+    /** Snapshot before the turn (prompt boundary). Default true. */
+    beforeTurn?: boolean;
+    /** Snapshot before file-edit tools (write/edit/apply_patch). Default true. */
+    beforeEdit?: boolean;
+  } | null;
 }
 
 export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> {
@@ -159,6 +176,10 @@ async function runTurns(
   let costUSD = 0;
   let lastText = "";
   const maxIterations = opts.maxIterations ?? MAX_ITERATIONS;
+
+  // B13-6 (#369): prompt boundary — snapshot before the turn begins so the
+  // user's prompt sees a clean, restorable pre-turn state.
+  maybeCheckpoint(opts, "prompt");
 
   let iteration = 0;
   for (; iteration < maxIterations; iteration++) {
@@ -276,6 +297,11 @@ async function runTurns(
       if (!approved) {
         output = "User declined this tool call.";
       } else {
+        // B13-6 (#369): edit boundary — snapshot immediately before a file-edit
+        // tool runs, so the edit can be rolled back byte-exact. bash is
+        // deliberately excluded (its changes are opaque; git reflog is the
+        // documented fallback).
+        if (isEditTool(block.name)) maybeCheckpoint(opts, `edit:${block.name}`);
         const dispatched = await dispatch(opts.tools, block.name, block.input, {
           cwd: opts.cwd,
           guard: opts.guard,
@@ -317,6 +343,36 @@ async function runTurns(
 
 function groupOf(tools: ToolDef[], name: string): ToolGroup {
   return tools.find((t) => t.name === name)?.group ?? "read";
+}
+
+// File-edit tools that get a checkpoint before running. bash is NOT in this set
+// (its effects are opaque to the snapshot — the honest LAW is documented in the
+// checkpoint tool / docs, with git reflog as the fallback).
+const EDIT_TOOLS = new Set(["write_file", "edit_file", "apply_patch"]);
+
+function isEditTool(name: string): boolean {
+  return EDIT_TOOLS.has(name);
+}
+
+/**
+ * B13-6 (#369): take a shadow-git checkpoint at a boundary. Swallows every
+ * failure — a snapshot problem must never break the agent run; it simply means
+ * that boundary has no checkpoint.
+ */
+function maybeCheckpoint(opts: AgentTurnOptions, label: string): void {
+  const c = opts.checkpoints;
+  if (!c || c.enabled === false) return;
+  if (!c.storeDir || !c.sourceDir) return;
+  if (label === "prompt" && c.beforeTurn === false) return;
+  if (label.startsWith("edit:") && c.beforeEdit === false) return;
+  try {
+    checkpointSnapshot(
+      { storeDir: c.storeDir, sourceDir: c.sourceDir, logPath: c.logPath, keep: c.keep },
+      label,
+    );
+  } catch {
+    // ignore — checkpoint is best-effort
+  }
 }
 
 /**
