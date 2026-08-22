@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ChatMessage } from "../provider/types";
 
 export interface SoulSource {
   text: string;
@@ -57,7 +58,6 @@ export function buildSystemPrompt(inputs: {
       "# Environment",
       `cwd: ${inputs.cwd}`,
       `platform: ${process.platform}`,
-      `date: ${new Date().toISOString().slice(0, 10)}`,
     ].join("\n"),
   );
 
@@ -81,4 +81,77 @@ export function buildSystemPrompt(inputs: {
   }
 
   return parts.join("\n\n");
+}
+
+/**
+ * B2-1 cache-shape discipline (#353): the system prompt is the STABLE prefix —
+ * it must be byte-stable across turns within a session so the provider's
+ * prompt cache (which reads the prefix at ~1/10 the list price) is not
+ * invalidated. Volatile data (clock, context pressure, directory listings,
+ * status injections) therefore must NOT live here; inject it via
+ * {@link buildVolatileTail} / {@link assembleCacheShapedPrompt} so it lands
+ * AFTER the transcript.
+ */
+
+/** Volatile, per-turn data that must move to the TAIL zone after the transcript. */
+export interface VolatileTail {
+  /** Current clock/date line (e.g. ISO date). Null to omit. */
+  now?: string | null;
+  /** Context pressure as a percentage (0-100), if known. Null to omit. */
+  contextPercent?: number | null;
+  /** Directory listings, status injections, or any other per-turn lines. */
+  statusLines?: string[];
+}
+
+/**
+ * Build the volatile TAIL zone. This data changes between turns (clock,
+ * context pressure, directory listings, status) and must be injected AFTER
+ * the transcript — never inside the stable system prefix — or it invalidates
+ * the provider's prompt cache. Returns null when there is nothing to inject.
+ */
+export function buildVolatileTail(v: VolatileTail): string | null {
+  const lines: string[] = [];
+  if (v.now) lines.push(`date: ${v.now}`);
+  if (v.contextPercent != null) lines.push(`context pressure: ${v.contextPercent}%`);
+  if (v.statusLines?.length) lines.push(...v.statusLines);
+  if (!lines.length) return null;
+  return ["# Live context", ...lines].join("\n");
+}
+
+export interface CacheShapedPrompt {
+  /** Stable system prefix (byte-stable across turns). */
+  system: string;
+  /** Append-only transcript followed by the volatile tail as the final user message (if any). */
+  messages: ChatMessage[];
+  /**
+   * Index into {@link messages} where the volatile tail begins — equal to the
+   * transcript length, i.e. the end of the stable prefix. This is where a
+   * provider-native cache breakpoint belongs.
+   */
+  breakpointIndex: number;
+}
+
+/**
+ * Assemble a cache-shaped prompt per B2-1 (#353): a stable system prefix plus
+ * the append-only transcript, then any volatile tail appended AFTER the
+ * transcript as a trailing user message. The breakpoint index marks the end of
+ * the stable prefix (start of the volatile tail) so a provider can set a
+ * native cache breakpoint there.
+ *
+ * This is the single, frozen-by-construction assembly path: no code may insert
+ * anything between the system prompt and the transcript, and volatile data may
+ * only ever be appended at the end.
+ */
+export function assembleCacheShapedPrompt(opts: {
+  system: string;
+  transcript: ChatMessage[];
+  volatileTail?: string | null;
+}): CacheShapedPrompt {
+  const tail = opts.volatileTail?.trim();
+  const messages = [...opts.transcript];
+  const breakpointIndex = messages.length;
+  if (tail) {
+    messages.push({ role: "user", content: tail });
+  }
+  return { system: opts.system, messages, breakpointIndex };
 }

@@ -16,6 +16,7 @@ import { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { resolveContextGuard } from "../session/context";
 import { buildSkillsSection, summarizeSkills } from "../skills/activate";
+import { buildVolatileTail } from "../agent/prompt";
 import { createAskBotTool } from "../bots/delegate";
 import { createAskBotAsyncTool, createBotTaskStatusTool, reconcileOrphanedTasks } from "../bots/tasks";
 import { listBots, resolveBot } from "../bots/profile";
@@ -150,13 +151,21 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       controller = new AbortController();
       turnActive = true;
       stdout.write("\n");
+      // B2-1 cache-shape (#353): keep the system prompt as the byte-stable
+      // prefix. Per-turn data (clock + pinned skills) goes into the volatile
+      // TAIL after the transcript — never appended to the system prefix — so
+      // the provider's prompt cache on the prefix survives across turns.
       const skillsSection = buildSkillsSection(opts.home, opts.cwd, state.pinnedSkills);
-      const turnSystem = skillsSection ? `${opts.system}\n\n${skillsSection}` : opts.system;
+      const volatileTail = buildVolatileTail({
+        now: new Date().toISOString().slice(0, 10),
+        statusLines: skillsSection ? [skillsSection] : [],
+      });
       try {
         const result = await runAgentTurn({
           provider: activeProvider(opts, state),
           model: state.active.model,
-          system: turnSystem,
+          system: opts.system,
+          volatileTail,
           tools: opts.tools,
           messages: state.messages,
           budget: state.budget,
