@@ -71,6 +71,7 @@ import { writeTool } from "./tools/write";
 import { editTool } from "./tools/edit";
 import { applyPatchTool } from "./tools/apply-patch";
 import { bashTool } from "./tools/bash";
+import { createMcpTools } from "./tools/mcp";
 import type { ToolDef } from "./tools/registry";
 import { parseArgs, HELP, type CliArgs } from "./cli/args";
 import { listJobs, addJob, removeJob, findJob, runJob, renderJob } from "./cli/jobs";
@@ -296,6 +297,9 @@ async function main(): Promise<number> {
     tools.push(createUseSkillTool({ home, projectDir: cwd }));
     tools.push(createSaveSkillTool({ projectDir: cwd }));
     tools.push(createListSkillsTool({ home, projectDir: cwd }));
+    // MCP stdio servers (WPs 3.1+3.2) — default OFF; no-op with empty config.
+    const mcpTools = await createMcpTools(config);
+    if (mcpTools.length) tools.push(...mcpTools);
     if (profile) {
       tools.push(createSendMessageTool({ home, fromBot: profile.name, policy: inboxPolicy }));
       tools.push(createCheckInboxTool({
