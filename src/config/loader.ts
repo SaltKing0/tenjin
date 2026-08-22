@@ -261,6 +261,25 @@ const SCHEMA: Record<string, FieldDef> = {
       servers: { types: ["list"] },
     },
   },
+  // `workspace` from B12-3 (#424): execution-surface switch. Docker image/user
+  // etc. are validated/normalized at runtime in sandbox/workspace.ts.
+  workspace: {
+    types: ["mapping"],
+    children: {
+      mode: { types: ["string"] },
+      docker: {
+        types: ["mapping"],
+        children: {
+          image: { types: ["string"] },
+          workdir: { types: ["string"] },
+          memoryMax: { types: ["string"] },
+          cpuQuota: { types: ["number"] },
+          user: { types: ["string"] },
+        },
+      },
+      ttlMs: { types: ["number"] },
+    },
+  },
 };
 
 function configTypeName(v: unknown): TypeName {
@@ -408,6 +427,13 @@ memory:
 #   # defaultWindow: 128000    # context window (tokens) for unknown models
 #   # windows:                 # per-model context-window override
 #   #   my-model: 32000
+# workspace:                   # B12-3 execution surface — local (default) | docker | remote
+#   mode: local                # docker runs every command in a per-session hardened container
+#   ttlMs: 600000              # orphan-container TTL (ms) for the docker GC
+#   # docker:                  # docker-only options
+#   #   image: alpine
+#   #   memoryMax: 512m
+#   #   cpuQuota: 2
 # gateway:                     # uncomment to start the HTTP API + web console (see docs/architecture.md)
 #   allowWrites: false         # gate write/edit/bash tool calls behind approvals
 #   listen:
