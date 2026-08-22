@@ -33,7 +33,8 @@ describe("normalizeRetry", () => {
     const p = normalizeRetry();
     expect(p.enabled).toBe(true);
     expect(p.maxAttempts).toBe(3);
-    expect(p.retryableStatuses).toEqual([429, 500, 502, 503, 504]);
+    // B3-9 (#371): 408 (request timeout) is now part of the retryable set.
+    expect(p.retryableStatuses).toEqual([408, 429, 500, 502, 503, 504]);
   });
 
   test("partial config merges over defaults without mutating them", () => {
