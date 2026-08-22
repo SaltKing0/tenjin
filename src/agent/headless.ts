@@ -20,8 +20,8 @@ import { bashTool } from "../tools/bash";
 import { webFetchTool } from "../tools/web-fetch";
 import type { ToolDef } from "../tools/registry";
 import { Redactor } from "../security/redact";
-import { readFacts, createRecordLearningTool } from "../tools/memory";
-import { buildMemorySection } from "../memory/inject";
+import { readFacts, createRecordLearningTool, createCoreMemoryTool } from "../tools/memory";
+import { buildMemorySection, loadCoreBlocks, renderCoreMemory } from "../memory/inject";
 import { listSummaries } from "../memory/summaries";
 import { readLearnings } from "../memory/learnings";
 import { listSkills } from "../skills/loader";
@@ -157,6 +157,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           learnings: readLearnings(opts.memoryDir, opts.cwd),
         })
       : null,
+    coreMemory: opts.memoryDir ? renderCoreMemory(loadCoreBlocks(opts.memoryDir)) : null,
     skillsSummary: skills.length > 0 ? summarizeSkills(skills) : null,
     teamSection: team ? buildTeamSection(team) : null,
   });
@@ -199,6 +200,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         sessionId: logger?.id,
         maxEntries: opts.maxLearnings,
       }),
+      createCoreMemoryTool({ memoryDirPath: opts.memoryDir }),
     );
   }
 

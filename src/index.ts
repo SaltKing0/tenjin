@@ -30,12 +30,12 @@ import { startRepl } from "./ui/repl";
 import { SessionLog } from "./session/log";
 import { rebuildMessages, sumUsage } from "./session/events";
 import { generatePendingSummaries, listSummaries } from "./memory/summaries";
-import { buildMemorySection } from "./memory/inject";
+import { buildMemorySection, loadCoreBlocks, renderCoreMemory } from "./memory/inject";
 import { indexPendingSessions } from "./memory/indexer";
 import { VectorStore, vectorsFilePath } from "./memory/vector-store";
 import { createEmbeddings } from "./provider/embeddings";
 import { vectorEnabled } from "./config/loader";
-import { createRecallTool, createRememberTool, createRecordLearningTool, readFacts } from "./tools/memory";
+import { createRecallTool, createRememberTool, createRecordLearningTool, createCoreMemoryTool, readFacts } from "./tools/memory";
 import { readLearnings } from "./memory/learnings";
 import { createUseSkillTool } from "./skills/activate";
 import { listSkills } from "./skills/loader";
@@ -281,6 +281,7 @@ async function main(): Promise<number> {
               learnings: readLearnings(memDir, cwd),
             })
           : null,
+      coreMemory: renderCoreMemory(loadCoreBlocks(memDir)),
       teamSection: team ? buildTeamSection(team) : null,
     });
     let tools: ToolDef[] = [
@@ -298,6 +299,7 @@ async function main(): Promise<number> {
     }
     if (memoryEnabled(config)) {
       tools.push(createRememberTool({ memoryDirPath: memDir }));
+      tools.push(createCoreMemoryTool({ memoryDirPath: memDir }));
       tools.push(createRecordLearningTool({ memoryDirPath: memDir, projectPath: cwd, maxEntries: config.memory?.learnings?.maxEntries }));
       tools.push(createRecallTool({ memoryDirPath: memDir, projectPath: cwd, embeddings, store: vectorStore ?? undefined }));
     }

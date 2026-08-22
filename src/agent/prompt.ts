@@ -38,6 +38,9 @@ export function buildSystemPrompt(inputs: {
   agentsMd: string | null;
   cwd: string;
   memorySection?: string | null;
+  /** B9-1 (#363): named Tier-0 core-memory blocks (REFERENCE DATA). Rendered
+   *  before the volatile recall section so it stays in the stable prefix. */
+  coreMemory?: string | null;
   facts?: string | null;
   skillsSummary?: string | null;
   /** Compact team context for bots (#141) — null when no team manifest exists. */
@@ -70,6 +73,10 @@ export function buildSystemPrompt(inputs: {
 
   if (inputs.agentsMd) {
     parts.push(`# Project context (AGENTS.md)\n${inputs.agentsMd}`);
+  }
+
+  if (inputs.coreMemory) {
+    parts.push(inputs.coreMemory);
   }
 
   if (inputs.memorySection) {
