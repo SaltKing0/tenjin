@@ -8,6 +8,11 @@ export interface ToolContext {
   /** #154: the shared delegation-tree budget, threaded to delegation tools so
    * a subagent run inherits the parent's counter. */
   treeBudget?: TreeBudget;
+  /** Optional audit hook threaded from the agent loop. Multi-file write tools
+   * (e.g. apply_patch) use it to emit one write_exec entry per touched file. */
+  audit?: (kind: "write_exec", detail: string, correlationId?: string) => void;
+  /** Shared correlation id forwarded with tool-emitted audit events. */
+  correlationId?: string;
 }
 
 export type ToolGroup = "read" | "write";
