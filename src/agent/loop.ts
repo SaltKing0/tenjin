@@ -78,6 +78,15 @@ export interface AgentTurnOptions {
   /** Shared delegation-tree budget (#154): counts this run's iterations/USD
    * against the same counter as every run in the tree. */
   treeBudget?: TreeBudget;
+  /**
+   * B2-1 cache-shape (#353): volatile per-turn data (clock, context pressure,
+   * directory listings, status). Rendered by {@link buildVolatileTail} and
+   * appended as a trailing user message AFTER the transcript on every provider
+   * call — it never enters the persistent transcript and never touches the
+   * stable system prefix, so the provider's prompt cache on the prefix is not
+   * invalidated.
+   */
+  volatileTail?: string | null;
 }
 
 export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> {
@@ -125,11 +134,20 @@ export async function runAgentTurn(opts: AgentTurnOptions): Promise<TurnResult> 
 
     let response: ChatResponse;
     try {
+      // B2-1 cache-shape (#353): append the volatile tail AFTER the transcript
+      // as a trailing user message for THIS call only. The persistent
+      // transcript (`opts.messages`) stays append-only and clean, and the
+      // stable system prefix is untouched — so the provider's prompt cache on
+      // the prefix survives across turns. The breakpoint index is the end of
+      // the stable prefix (transcript length).
+      const requestMessages: ChatMessage[] = opts.volatileTail
+        ? [...opts.messages, { role: "user", content: opts.volatileTail }]
+        : opts.messages;
       response = await opts.provider.chat(
         {
           model: opts.model,
           system: opts.system,
-          messages: opts.messages,
+          messages: requestMessages,
           tools: schemas(opts.tools),
           maxTokens: opts.maxTokens,
         },
