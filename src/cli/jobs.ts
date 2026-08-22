@@ -14,6 +14,7 @@ import { Redactor } from "../security/redact";
 import { formatUSD } from "../agent/budget";
 import type { Provider } from "../provider/types";
 import type { HarnessConfig } from "../config/types";
+import type { IdempotencyLedger } from "../recovery/idempotent";
 
 export const configYamlPath = (home: string): string => join(home, "config.yaml");
 
@@ -200,6 +201,10 @@ export interface RunJobDeps {
   config: HarnessConfig;
   provider: Provider;
   audit?: (kind: "write_exec" | "budget_halt" | "budget_exceeded" | "prompt_injection", detail: string, correlationId?: string) => void;
+  /** B3-3 (#372): optional idempotency ledger + invocation key. When provided, a
+   *  rerun of the SAME key after a crash returns the recorded result instead of
+   *  re-executing side effects / re-spending budget. Absent = current behaviour. */
+  idempotency?: { ledger: IdempotencyLedger; key: string };
 }
 
 export type RunJobResult =
@@ -227,29 +232,37 @@ export async function runJob(
   }
   const ref = botModelRef(profile, deps.config);
   try {
-    const result = await runHeadless({
-      provider: deps.provider,
-      model: ref.model,
-      soulText: profile.soulText,
-      cwd: deps.cwd,
-      message: job.prompt,
-      maxTokens: deps.config.maxTokens,
-      maxTreeIterations: deps.config.maxTreeIterations ?? 0,
-      capUSD: botBudgetUSD(profile, deps.config.budgetUSD),
-      pricing: deps.config.pricing,
-      policy: capPolicy("read-only", profile.config.security?.policy),
-      denyTools: profile.config.security?.denyTools,
-      agentsMd: loadAgentsMd(deps.cwd),
-      home: deps.home,
-      memoryDir: profile.memoryDir,
-      sessionLogDir: profile.sessionsDir,
-      sessionBot: profile.name,
-      guard: guardForBot(deps.config.security, profile.config.security, undefined),
-      paranoid: resolveParanoid(deps.config.security, profile.config.security),
-      effort: profile.config.effort,
-      redactor: Redactor.fromConfig(deps.config.security),
-      audit: deps.audit,
-    });
+    const run = () =>
+      runHeadless({
+        provider: deps.provider,
+        model: ref.model,
+        soulText: profile.soulText,
+        cwd: deps.cwd,
+        message: job.prompt,
+        maxTokens: deps.config.maxTokens,
+        maxTreeIterations: deps.config.maxTreeIterations ?? 0,
+        capUSD: botBudgetUSD(profile, deps.config.budgetUSD),
+        pricing: deps.config.pricing,
+        policy: capPolicy("read-only", profile.config.security?.policy),
+        denyTools: profile.config.security?.denyTools,
+        agentsMd: loadAgentsMd(deps.cwd),
+        home: deps.home,
+        memoryDir: profile.memoryDir,
+        sessionLogDir: profile.sessionsDir,
+        sessionBot: profile.name,
+        guard: guardForBot(deps.config.security, profile.config.security, undefined),
+        paranoid: resolveParanoid(deps.config.security, profile.config.security),
+        effort: profile.config.effort,
+        redactor: Redactor.fromConfig(deps.config.security),
+        audit: deps.audit,
+      });
+    // B3-3 (#372): idempotent rerun — the same invocation key after a crash
+    // returns the recorded result instead of re-running (no double side effect
+    // / double-spend). Optional; absent keeps the current behaviour.
+    const outcome = deps.idempotency
+      ? await deps.idempotency.ledger.runOnce(deps.idempotency.key, run)
+      : { value: await run(), ran: true };
+    const result = outcome.value;
     return { ok: true, stopReason: result.stopReason, costUSD: result.costUSD, text: result.text };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
