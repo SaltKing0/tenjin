@@ -80,9 +80,10 @@ test("oversize page spills to a temp file and returns its path", async () => {
   const r = await dispatch(tools, "web_fetch", { url }, { cwd });
   expect(r.ok).toBe(true);
   expect(r.output).toMatch(/saved to/);
-  expect(r.output).toMatch(/\/(tenjin|tmp)[^ ]*\.md/);
-  const m = r.output.match(/(\/(?:tenjin|tmp)[^ ]*\.md)/);
-  if (m) expect(existsSync(m[1]!)).toBe(true);
+  const m = r.output.match(/saved to ([^\s\]]+\.md)\]/);
+  expect(m).toBeTruthy();
+  expect(m![1]!.startsWith(tmpdir())).toBe(true);
+  expect(existsSync(m![1]!)).toBe(true);
 });
 
 test("output is wrapped as untrusted data", async () => {
