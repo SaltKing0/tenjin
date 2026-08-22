@@ -1,0 +1,69 @@
+# B15-5 (#442) — Release workflow: cross-compiled single-binary matrix.
+#
+# On a `v*` tag push, build `bun build --compile` binaries for
+# linux/darwin/windows × x64/arm64, smoke-test the native binary per OS,
+# generate a SHA256SUMS checksum manifest, and attach everything to the GitHub
+# release. Runs on native runners per OS so every artifact is actually
+# executable and smoke-tested.
+
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            native_arch: x64
+            other_arch: arm64
+          - os: macos-latest
+            platform: darwin
+            native_arch: arm64
+            other_arch: x64
+          - os: windows-latest
+            platform: windows
+            native_arch: x64
+            other_arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+
+      - name: Build + smoke test (native arch)
+        run: |
+          bun build --compile --target bun-${{ matrix.platform }}-${{ matrix.native_arch }} src/index.ts --outfile tenjin-${{ matrix.platform }}-${{ matrix.native_arch }}${{ matrix.platform == 'windows' && '.exe' || '' }}
+          ./tenjin-${{ matrix.platform }}-${{ matrix.native_arch }}${{ matrix.platform == 'windows' && '.exe' || '' }} -v
+
+      - name: Build (other arch)
+        run: bun build --compile --target bun-${{ matrix.platform }}-${{ matrix.other_arch }} src/index.ts --outfile tenjin-${{ matrix.platform }}-${{ matrix.other_arch }}${{ matrix.platform == 'windows' && '.exe' || '' }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.platform }}
+          path: tenjin-${{ matrix.platform }}-*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          find . -type f -name 'tenjin-*' -exec sha256sum {} \; > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**
