@@ -41,6 +41,9 @@ export function buildSystemPrompt(inputs: {
   /** B9-1 (#363): named Tier-0 core-memory blocks (REFERENCE DATA). Rendered
    *  before the volatile recall section so it stays in the stable prefix. */
   coreMemory?: string | null;
+  /** B5-3 (#378): optional byte-stable Level-1 tool/skill index (name + one-line
+   *  description). Rendered when provided; full schemas come on demand. */
+  disclosureIndex?: string | null;
   facts?: string | null;
   skillsSummary?: string | null;
   /** Compact team context for bots (#141) — null when no team manifest exists. */
@@ -85,6 +88,10 @@ export function buildSystemPrompt(inputs: {
 
   if (inputs.skillsSummary) {
     parts.push(`# Skills\nLoad with the use_skill tool.\n${inputs.skillsSummary}`);
+  }
+
+  if (inputs.disclosureIndex) {
+    parts.push(inputs.disclosureIndex);
   }
 
   return parts.join("\n\n");
