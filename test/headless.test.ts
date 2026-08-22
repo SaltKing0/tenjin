@@ -53,6 +53,7 @@ test("toolsForPolicy returns expected sets", () => {
     "read_file",
     "glob",
     "grep",
+    "web_fetch",
   ]);
   expect(toolsForPolicy("full").map((t) => t.name)).toEqual([
     "read_file",
@@ -62,6 +63,7 @@ test("toolsForPolicy returns expected sets", () => {
     "edit_file",
     "apply_patch",
     "bash",
+    "web_fetch",
   ]);
 });
 
@@ -76,7 +78,7 @@ test("capPolicy never upgrades and can only tighten", () => {
 test("applyDenyTools strips named tools so a bot is stricter than global full policy", () => {
   const full = toolsForPolicy("full");
   const denied = applyDenyTools(full, ["bash", "write_file"]);
-  expect(denied.map((t) => t.name)).toEqual(["read_file", "glob", "grep", "edit_file", "apply_patch"]);
+  expect(denied.map((t) => t.name)).toEqual(["read_file", "glob", "grep", "edit_file", "apply_patch", "web_fetch"]);
   expect(applyDenyTools(full, undefined).map((t) => t.name)).toEqual(full.map((t) => t.name));
 });
 
@@ -87,6 +89,7 @@ test("toolsForPolicy adds use_skill/list_skills/save_skill by policy when skill 
     "read_file",
     "glob",
     "grep",
+    "web_fetch",
     "use_skill",
     "list_skills",
   ]);
@@ -98,6 +101,7 @@ test("toolsForPolicy adds use_skill/list_skills/save_skill by policy when skill 
     "edit_file",
     "apply_patch",
     "bash",
+    "web_fetch",
     "use_skill",
     "list_skills",
     "save_skill",
