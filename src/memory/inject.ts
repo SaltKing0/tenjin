@@ -1,3 +1,5 @@
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import type { SummaryEntry } from "./summaries";
 import type { LearningEntry } from "./learnings";
 
@@ -138,4 +140,144 @@ export function buildMemorySection(
 
   if (body.length === 0) return null;
   return `${header}\n${body.join("\n")}`;
+}
+
+// ===========================================================================
+// B9-1 Tier-0 core-memory blocks (#363)
+// ---------------------------------------------------------------------------
+// Replace free-form memory injection with NAMED, agent-editable sections that
+// always render in a fixed order with block labels. Each block has a hard
+// token budget; overflowing is an ERROR returned to the model (forcing
+// self-consolidation) — never a silent drop or truncation. The agent edits
+// memory only through block-scoped primitives (add/replace/remove).
+// ===========================================================================
+
+/** The four named core-memory blocks, in fixed render order. */
+export const CORE_BLOCK_NAMES = [
+  "persona",
+  "user",
+  "learnings-synopsis",
+  "conventions",
+] as const;
+
+export type CoreBlockName = (typeof CORE_BLOCK_NAMES)[number];
+
+/** Human-readable render label per block. */
+export const CORE_BLOCK_LABELS: Record<CoreBlockName, string> = {
+  persona: "Persona",
+  user: "User",
+  "learnings-synopsis": "Learnings synopsis",
+  conventions: "Conventions",
+};
+
+/** Default hard token budget per block (~4 chars/token). */
+export const DEFAULT_CORE_BUDGET_TOKENS = 1000;
+
+/** Content of every defined block; a missing/empty value means "not set". */
+export type CoreBlocks = Record<CoreBlockName, string>;
+
+export function emptyCoreBlocks(): CoreBlocks {
+  return {
+    persona: "",
+    user: "",
+    "learnings-synopsis": "",
+    conventions: "",
+  };
+}
+
+export function isCoreBlockName(name: string): name is CoreBlockName {
+  return (CORE_BLOCK_NAMES as readonly string[]).includes(name);
+}
+
+function coreBlocksPath(memoryDir: string): string {
+  return join(memoryDir, "core-memory.json");
+}
+
+/** Load persisted blocks, defaulting any unset block to "" and ignoring
+ *  unknown keys so a hand-edited or future file stays forward-compatible. */
+export function loadCoreBlocks(memoryDir: string): CoreBlocks {
+  const blocks = emptyCoreBlocks();
+  const path = coreBlocksPath(memoryDir);
+  if (!existsSync(path)) return blocks;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    for (const name of CORE_BLOCK_NAMES) {
+      const v = parsed[name];
+      if (typeof v === "string") blocks[name] = v;
+    }
+  } catch {
+    // Corrupt file: fall back to empty rather than crashing the run.
+  }
+  return blocks;
+}
+
+/** Persist blocks (keys written in fixed order for diff-stability). */
+export function saveCoreBlocks(memoryDir: string, blocks: CoreBlocks): void {
+  mkdirSync(memoryDir, { recursive: true });
+  const ordered: Record<string, string> = {};
+  for (const name of CORE_BLOCK_NAMES) ordered[name] = blocks[name];
+  writeFileSync(coreBlocksPath(memoryDir), `${JSON.stringify(ordered, null, 2)}\n`, "utf8");
+}
+
+/** Render the blocks that have content, in fixed order, under a REFERENCE DATA
+ *  heading with a label per block. Returns null when no block is set. */
+export function renderCoreMemory(blocks: CoreBlocks): string | null {
+  const rendered: string[] = [];
+  for (const name of CORE_BLOCK_NAMES) {
+    const content = blocks[name].trim();
+    if (!content) continue;
+    rendered.push(`## ${CORE_BLOCK_LABELS[name]}\n${content}`);
+  }
+  if (rendered.length === 0) return null;
+  return `# Core memory (reference data)\n${rendered.join("\n\n")}`;
+}
+
+export interface EditCoreBlockResult {
+  block: CoreBlockName;
+  op: "add" | "replace" | "remove";
+  content: string;
+}
+
+/**
+ * The single block-scoped edit primitive. `op` is add/replace/remove per block
+ * name; any name outside the defined blocks is rejected. add/replace enforce a
+ * hard token budget and, on overflow, THROW an instructive error naming the
+ * block and budget — nothing is written, so the model must consolidate.
+ */
+export function editCoreBlock(
+  memoryDir: string,
+  name: string,
+  op: "add" | "replace" | "remove",
+  content = "",
+  budgetTokens = DEFAULT_CORE_BUDGET_TOKENS,
+): EditCoreBlockResult {
+  if (!isCoreBlockName(name)) {
+    throw new Error(
+      `Unknown core-memory block "${name}". Valid blocks: ${CORE_BLOCK_NAMES.join(", ")}.`,
+    );
+  }
+  if (op === "remove") {
+    const blocks = loadCoreBlocks(memoryDir);
+    blocks[name] = "";
+    saveCoreBlocks(memoryDir, blocks);
+    return { block: name, op, content: "" };
+  }
+  if (op !== "add" && op !== "replace") {
+    throw new Error(`Invalid core-memory op "${op}". Valid ops: add, replace, remove.`);
+  }
+  const text = String(content).trim();
+  if (!text) {
+    throw new Error(`Core-memory block "${name}" content must not be empty; use op "remove" to clear it.`);
+  }
+  const tokens = estimateTokens(text);
+  if (tokens > budgetTokens) {
+    throw new Error(
+      `Core-memory block "${name}" exceeds its budget of ${budgetTokens} tokens (est. ${tokens}). ` +
+        `Consolidate or shorten it; nothing was written.`,
+    );
+  }
+  const blocks = loadCoreBlocks(memoryDir);
+  blocks[name] = text;
+  saveCoreBlocks(memoryDir, blocks);
+  return { block: name, op, content: text };
 }
