@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   fetchWithRetry,
   normalizeRetry,
@@ -17,6 +17,16 @@ import {
  * backoff, Retry-After/x-should-retry honoring, timeout policy, mid-response
  * no-reissue rule, and a circuit breaker.
  */
+
+const originalFetch = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = originalFetch;
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
 
 function policy(over: Partial<ReturnType<typeof normalizeRetry>> = {}): ReturnType<typeof normalizeRetry> {
   return { ...normalizeRetry(), initialDelayMs: 0, maxDelayMs: 0, ...over };
