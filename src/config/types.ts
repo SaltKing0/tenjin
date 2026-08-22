@@ -80,6 +80,19 @@ export interface HarnessConfig {
   context?: ContextConfig;
   /** MCP stdio servers (default OFF — see tools/mcp.ts). */
   mcp?: McpConfig;
+  /** B12-3 (#424): execution-surface switch — local | docker | remote. */
+  workspace?: {
+    mode?: "local" | "docker" | "remote";
+    docker?: {
+      image?: string;
+      workdir?: string;
+      memoryMax?: string;
+      cpuQuota?: number;
+      user?: string;
+    };
+    /** Orphan-container TTL for docker workspaces (ms). */
+    ttlMs?: number;
+  };
 }
 
 /** `routing` in config.yaml — B10-1/B10-4 routing core (task→alias→deployment). */
