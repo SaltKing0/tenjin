@@ -33,6 +33,13 @@ export interface HarnessConfig {
     anthropic?: { apiKey?: string; baseUrl?: string; caching?: boolean };
   };
   models?: { default?: string; cheap?: string };
+  /** web_search tool (#345): default-OFF. Requires webSearch.apiKey or BRAVE_API_KEY. */
+  webSearch?: {
+    enabled?: boolean;
+    apiKey?: string;
+    /** Endpoint override (tests point this at a local fixture server). */
+    endpoint?: string;
+  };
   gateway?: unknown;
   security?: {
     blockedPatterns?: string[];

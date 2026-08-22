@@ -128,6 +128,15 @@ const SCHEMA: Record<string, FieldDef> = {
     types: ["mapping"],
     children: { default: { types: ["string"] }, cheap: { types: ["string"] } },
   },
+  // web_search is default-OFF: `webSearch.enabled: true` turns it on.
+  webSearch: {
+    types: ["mapping"],
+    children: {
+      enabled: { types: ["boolean"] },
+      apiKey: { types: ["string"] },
+      endpoint: { types: ["string"] },
+    },
+  },
   // `gateway` is deep-validated in gateway/config.ts with its own messages.
   gateway: { types: ["mapping"] },
   security: {
@@ -407,6 +416,11 @@ export function memoryDir(home = tenjinHome()): string {
 
 export function memoryEnabled(cfg: HarnessConfig): boolean {
   return cfg.memory?.enabled !== false;
+}
+
+/** web_search is default-OFF: it is only active when webSearch.enabled is true. */
+export function webSearchEnabled(cfg: { webSearch?: { enabled?: boolean } }): boolean {
+  return cfg.webSearch?.enabled === true;
 }
 
 export function vectorEnabled(cfg: HarnessConfig): boolean {
