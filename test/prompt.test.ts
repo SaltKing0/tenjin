@@ -77,7 +77,10 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("# Environment");
     expect(prompt).toContain("cwd: /some/cwd");
     expect(prompt).toContain(`platform: ${process.platform}`);
-    expect(prompt).toMatch(/date: \d{4}-\d{2}-\d{2}/);
+    // B2-1 (#353): the clock is volatile per-turn data and must NOT live in the
+    // stable system prefix (it would invalidate the provider prompt cache). It
+    // moves to the volatile tail via buildVolatileTail.
+    expect(prompt).not.toMatch(/date:/);
     expect(prompt).toContain("# Working style");
   });
 
