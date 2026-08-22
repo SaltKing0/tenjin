@@ -31,7 +31,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, dirname, basename, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
-import { gzipSync, gunzipSync } from "node:zlib";
+import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { ConfigError } from "../config/types";
