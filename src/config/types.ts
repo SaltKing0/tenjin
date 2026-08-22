@@ -72,6 +72,8 @@ export interface HarnessConfig {
    * across a parent run and every delegate); 0 = unlimited (default). */
   maxTreeIterations?: number;
   context?: ContextConfig;
+  /** MCP stdio servers (default OFF — see tools/mcp.ts). */
+  mcp?: McpConfig;
 }
 
 /** `globalBudget` in config.yaml — global spend caps across solo + all bots. */
@@ -112,4 +114,9 @@ export interface ContextConfig {
   defaultWindow?: number;
   /** Per-model context-window override (tokens). */
   windows?: Record<string, number>;
+}
+
+/** `mcp` in config.yaml — MCP stdio servers (WPs 3.1+3.2). Default OFF. */
+export interface McpConfig {
+  servers?: Array<Record<string, unknown>>;
 }

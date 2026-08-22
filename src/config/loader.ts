@@ -221,6 +221,15 @@ const SCHEMA: Record<string, FieldDef> = {
       windows: { types: ["mapping"], valueType: "number" },
     },
   },
+  // `mcp` from WPs 3.1+3.2 (MCP stdio servers, default off). Server entries are
+  // deep-normalized at runtime in tools/mcp.ts, so only the top-level shape is
+  // schema-checked here.
+  mcp: {
+    types: ["mapping"],
+    children: {
+      servers: { types: ["list"] },
+    },
+  },
 };
 
 function configTypeName(v: unknown): TypeName {
