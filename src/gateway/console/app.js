@@ -1702,7 +1702,7 @@ async function render() {
       ...panelGroups(PANELS.map(([name]) => name)).flatMap((g) => [
         g.label ? el("div", { class: "sidebar-group-label" }, g.label) : null,
         ...g.names.map((name) => {
-          const entry = PANELS.find(([p]) => p[0] === name);
+          const entry = PANELS.find(([p]) => p === name);
           return el(
             "a",
             { class: name === panel[0] ? "active" : "", href: `#${name}` },
