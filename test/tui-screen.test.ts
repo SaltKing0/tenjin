@@ -72,6 +72,18 @@ describe("decodeKey", () => {
     expect(decodeKey(new TextEncoder().encode("\x03")).map((k) => k.type)).toEqual(["ctrl-c"]);
     expect(decodeKey(new TextEncoder().encode("\x04")).map((k) => k.type)).toEqual(["ctrl-d"]);
   });
+  test("decodes SGR mouse reports to 0-based coords", () => {
+    // press at (col=10,row=5) 1-based → x=9, y=4
+    expect(decodeKey(new TextEncoder().encode("\x1b[<0;10;5M"))).toEqual([
+      { type: "mouse", button: 0, x: 9, y: 4, pressed: true },
+    ]);
+    expect(decodeKey(new TextEncoder().encode("\x1b[<0;10;5m"))).toEqual([
+      { type: "mouse", button: 0, x: 9, y: 4, pressed: false },
+    ]);
+    expect(decodeKey(new TextEncoder().encode("\x1b[<2;1;1M"))).toEqual([
+      { type: "mouse", button: 2, x: 0, y: 0, pressed: true },
+    ]);
+  });
   test("decodes printable ASCII and multibyte UTF-8 as chars", () => {
     expect(decodeKey(new TextEncoder().encode("hi"))).toEqual([
       { type: "char", ch: "h" },

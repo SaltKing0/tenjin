@@ -202,7 +202,8 @@ export type KeyEvent =
   | { type: "ctrl-d" }
   | { type: "ctrl-k" }
   | { type: "ctrl-l" }
-  | { type: "unknown"; bytes: string };
+  | { type: "unknown"; bytes: string }
+  | { type: "mouse"; x: number; y: number; button: number; pressed: boolean };
 
 /** Decode a single chunk of raw stdin bytes into key events (best effort). */
 export function decodeKey(buf: Uint8Array): KeyEvent[] {
@@ -232,6 +233,21 @@ export function decodeKey(buf: Uint8Array): KeyEvent[] {
       else if (final === "D") out.push({ type: "left" });
       else if (final === "H") out.push({ type: "home" });
       else if (final === "F") out.push({ type: "end" });
+      else if (final === "M" || final === "m") {
+        // SGR mouse report: ESC [ <b ; x ; y (M=press | m=release)
+        const m = /\x1b\[<(\d+);(\d+);(\d+)/.exec(seq);
+        if (m) {
+          out.push({
+            type: "mouse",
+            button: Number(m[1]),
+            x: Number(m[2]) - 1,
+            y: Number(m[3]) - 1,
+            pressed: final === "M",
+          });
+        } else {
+          out.push({ type: "unknown", bytes: seq });
+        }
+      }
       else if (final === "~") {
         const m = /\x1b\[(\d+)~$/.exec(seq);
         const num = m ? Number(m[1]) : 0;

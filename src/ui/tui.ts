@@ -470,6 +470,8 @@ export async function startTui(opts: ReplOptions): Promise<void> {
   process.stdout.on("resize", onResize);
   const wasRaw = stdin.isRaw;
   stdin.setRawMode(true);
+  // SGR mouse tracking (button events with absolute x;y coordinates).
+  stdout.write("\x1b[?1000h\x1b[?1006h");
   stdin.resume();
   stdin.setEncoding("utf8");
 
@@ -511,6 +513,29 @@ export async function startTui(opts: ReplOptions): Promise<void> {
           break;
         case "ctrl-k":
           editor.ctrlK();
+          break;
+        case "mouse":
+          if (k.pressed && k.button === 0) {
+            // Clicking a row in the side-panel sessions list opens that session.
+            const sw = Math.floor(scr.cols * 0.3);
+            const sideLeft = scr.cols - sw;
+            if (sideTab === "sessions" && k.x >= sideLeft && k.y >= 2 && k.y <= scr.rows - 4) {
+              const idx = k.y - 2;
+              const line = loadSessions()[idx];
+              if (line) {
+                const id = line.split(/\s+/)[0]!;
+                if (id) {
+                  void runCommand(`/resume ${id}`).then((r) => {
+                    if (r === "exit") {
+                      quitting = true;
+                      quit();
+                    }
+                  });
+                  render();
+                }
+              }
+            }
+          }
           break;
         case "tab": {
           const i = SIDE_TABS.indexOf(sideTab);
@@ -575,6 +600,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
     stdin.setRawMode(wasRaw);
     stdin.pause();
     process.stdout.removeListener("resize", onResize);
+    stdout.write("\x1b[?1000l\x1b[?1006l"); // disable mouse tracking
     stdout.write("\x1b[2J\x1b[H" + RESET + "\n");
     process.exit(0);
   }
