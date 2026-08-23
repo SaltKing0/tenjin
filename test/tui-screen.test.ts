@@ -9,6 +9,7 @@ import {
   SHOW_CURSOR,
   type Writer,
 } from "../src/ui/screen.js";
+import { extractSessionIdFromLine } from "../src/ui/tui";
 class Buf implements Writer {
   s = "";
   write(x: string) {
@@ -175,5 +176,23 @@ describe("Screen diff rendering (#467)", () => {
     scr.render(b);
     // all 5 rows (1..5) are freshly painted
     expect(rowMoves(b.s).sort()).toEqual(["1", "2", "3", "4", "5"]);
+  });
+});
+
+describe("extractSessionIdFromLine (sessions panel id parsing)", () => {
+  test("strips the ▶ marker from the active session so its id resolves", () => {
+    const line = "▶202608231924-1698 ●  08-23 19:24  preview text";
+    expect(extractSessionIdFromLine(line)).toBe("202608231924-1698");
+  });
+
+  test("parses a non-active (leading-space) session line", () => {
+    const line = " 202608230031-1f96  08-23 00:31  fix the parser";
+    expect(extractSessionIdFromLine(line)).toBe("202608230031-1f96");
+  });
+
+  test("returns undefined for an empty or marker-only line", () => {
+    expect(extractSessionIdFromLine("")).toBeUndefined();
+    expect(extractSessionIdFromLine("▶")).toBeUndefined();
+    expect(extractSessionIdFromLine("   ")).toBeUndefined();
   });
 });

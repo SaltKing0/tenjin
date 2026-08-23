@@ -69,6 +69,16 @@ const COLORS = {
 const SIDE_TABS = ["sessions", "bots", "spend", "approvals", "memory"] as const;
 type SideTab = (typeof SIDE_TABS)[number];
 
+/** Extract a session id from a sessions-panel list line. Each line is rendered
+ *  as `${marker}${id}${open}  ${when}  ${preview}` where `marker` is "▶" for
+ *  the active session (or a space otherwise). Strip that leading marker column
+ *  so the id is the first real token — otherwise the "▶" leaks into the lookup
+ *  and the active session can never be opened ("no session matching ▶<id>"). */
+export function extractSessionIdFromLine(line: string): string | undefined {
+  const id = line.trim().split(/\s+/)[0]?.replace(/^[▶▸]/, "");
+  return id && id.length > 0 ? id : undefined;
+}
+
 /** One open session tab. Own transcript, chat view, model, tokens and turn. */
 interface SessionTab {
   id: string;
@@ -738,7 +748,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
     if (sideTab !== "sessions" || !opts.sessionsDir) return;
     const line = sideData[index];
     if (!line) return;
-    const id = line.split(/\s+/)[0]!;
+    const id = extractSessionIdFromLine(line);
     if (!id) return;
     openSession(id);
   }
