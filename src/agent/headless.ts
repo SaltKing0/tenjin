@@ -111,6 +111,13 @@ export interface HeadlessOptions {
     helper?: { provider: Provider; model: string; maxTokens?: number };
     memoryDir?: string;
     projectPath?: string;
+    /** Opt-in contradiction check on newly-distilled learnings (see
+     *  memory/contradiction.ts). Off by default. */
+    contradictionCheck?: {
+      enabled?: boolean;
+      maxChecks?: number;
+      model?: string;
+    };
   };
   /** B13-6 checkpoints (#369): shadow-git snapshots at prompt/edit boundaries.
    *  When set (enabled !== false), a `checkpoint` tool is exposed for
@@ -227,12 +234,24 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
   // Tier-2 memory (#99): expose record_learning when a memory dir is in scope,
   // attributing the learning to the just-created session log id when present.
   if (opts.memoryDir) {
+    const cc = opts.consolidation?.contradictionCheck;
+    const helper = opts.consolidation?.helper;
     tools.push(
       createRecordLearningTool({
         memoryDirPath: opts.memoryDir,
         projectPath: opts.cwd,
         sessionId: logger?.id,
         maxEntries: opts.maxLearnings,
+        // Opt-in contradiction check: reuses the consolidation config gate and
+        // the helper/cheap model. Only active when both are present.
+        contradictionCheck: cc?.enabled
+          ? {
+              enabled: true,
+              provider: helper?.provider,
+              model: cc.model ?? helper?.model,
+              maxChecks: cc.maxChecks,
+            }
+          : undefined,
       }),
       createCoreMemoryTool({ memoryDirPath: opts.memoryDir }),
     );

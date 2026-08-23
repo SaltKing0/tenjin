@@ -194,6 +194,16 @@ export interface ContextConfig {
     threshold?: number;
     /** Min turns between passes without strictly-higher pressure. Default 5. */
     minTurnsBetween?: number;
+    /** Opt-in contradiction check on newly-distilled learnings (IdeaGraph
+     *  derived): judges each new learning against active facts and records any
+     *  contradiction. Off by default. */
+    contradictionCheck?: {
+      enabled?: boolean;
+      /** Cap on total judge calls (default 4). */
+      maxChecks?: number;
+      /** Dedicated judge model; defaults to the cheap/helper model. */
+      model?: string;
+    };
   };
 }
 

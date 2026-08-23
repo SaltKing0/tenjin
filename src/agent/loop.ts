@@ -146,6 +146,13 @@ export interface AgentTurnOptions {
     memoryDir?: string;
     projectPath?: string;
     sessionLog?: import("../session/log").SessionLog | null;
+    /** Opt-in contradiction check on newly-distilled learnings (see
+     *  memory/contradiction.ts). Off by default. */
+    contradictionCheck?: {
+      enabled?: boolean;
+      maxChecks?: number;
+      model?: string;
+    };
   };
   /** B13-6 checkpoints (#369): shadow-git snapshots at the prompt boundary and
    *  before each file-edit tool. Enabled iff `storeDir`+`sourceDir` are set and
@@ -576,6 +583,7 @@ async function maybeConsolidate(
     memoryDir,
     projectPath: cfg.projectPath ?? "",
     sessionLog: cfg.sessionLog ?? null,
+    contradictionCheck: cfg.contradictionCheck,
     audit: (kind, detail) =>
       (opts.audit as ((kind: string, detail: string, correlationId?: string) => void) | undefined)?.(
         kind,

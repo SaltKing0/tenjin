@@ -258,6 +258,14 @@ const SCHEMA: Record<string, FieldDef> = {
           enabled: { types: ["boolean"] },
           threshold: { types: ["number"] },
           minTurnsBetween: { types: ["number"] },
+          contradictionCheck: {
+            types: ["mapping"],
+            children: {
+              enabled: { types: ["boolean"] },
+              maxChecks: { types: ["number"] },
+              model: { types: ["string"] },
+            },
+          },
         },
       },
     },
