@@ -36,6 +36,8 @@ export interface DelegationContract {
   sidecarPath?: string;
   diffSummary?: string;
   treeIterations?: number;
+  /** Quality-gate review (B): a reviewer bot's verdict on the worker's output. */
+  review?: { verdict: "approved" | "needs_work"; reason?: string; attempts: number };
 }
 
 function sanitizeFilename(s: string): string {
@@ -80,6 +82,9 @@ export function renderDelegationContract(c: DelegationContract): string {
   if (c.treeIterations !== undefined) lines.push(`tree_iterations: ${c.treeIterations}`);
   if (c.sidecarPath) lines.push(`sidecar: ${c.sidecarPath}`);
   lines.push(`diff_summary: ${c.diffSummary ?? "n/a"}`);
+  if (c.review) {
+    lines.push(`review: ${c.review.verdict}${c.review.reason ? ` — ${c.review.reason}` : ""} (after ${c.review.attempts} attempt(s))`);
+  }
   lines.push(`summary: ${c.summary}`);
   if (c.sidecarPath) {
     lines.push(`(Full detail is in the sidecar — read_file ${c.sidecarPath} to load it on demand.)`);
@@ -103,6 +108,49 @@ export interface AskBotDeps {
 }
 
 const DEFAULT_DELEGATION_CAP_USD = 1.0;
+
+/** Quality-gate (B): max worker → review → retry rounds a handoff runs. */
+const MAX_HANDOFF_ATTEMPTS = 2;
+
+/** Run a strict reviewer (read-only) over a worker's output; parse APPROVED /
+ *  NEEDS_WORK. The reviewer is a quality gate the handoff result passes
+ *  through before it is accepted back into the parent transcript. */
+async function runReviewer(
+  deps: AskBotDeps,
+  profile: ReturnType<typeof resolveBot>,
+  task: string,
+  workerOutput: string,
+  correlationId: string,
+): Promise<{ verdict: "approved" | "needs_work"; reason?: string }> {
+  const ref = botModelRef(profile, deps.globalConfig);
+  const provider = deps.getProvider(ref.provider);
+  const result = await runHeadless({
+    provider,
+    model: ref.model,
+    soulText:
+      "You are a strict quality reviewer. Judge whether the worker's output satisfies the task. Reply with exactly one line starting VERDICT: APPROVED or VERDICT: NEEDS_WORK, then a brief reason.",
+    cwd: deps.cwd,
+    message: `TASK:\n${task}\n\nWORKER OUTPUT:\n${workerOutput.slice(0, 6000)}`,
+    maxTokens: deps.globalConfig.maxTokens,
+    capUSD: 0.1,
+    pricing: deps.globalConfig.pricing,
+    globalBudget: deps.globalConfig.globalBudget,
+    policy: capPolicy("read-only"),
+    home: deps.home,
+    memoryDir: profile.memoryDir,
+    guard: guardForBot(deps.globalConfig.security, profile.config.security, deps.guard?.onBlock),
+    paranoid: resolveParanoid(deps.globalConfig.security, profile.config.security),
+    correlationId,
+    audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
+    sessionLogDir: profile.sessionsDir,
+    sessionBot: profile.name,
+    context: deps.globalConfig.context,
+  });
+  const text = (result.text ?? "").trim();
+  const verdict: "approved" | "needs_work" = /NEEDS_WORK/i.test(text) ? "needs_work" : "approved";
+  const reason = text.replace(/^VERDICT:\s*(APPROVED|NEEDS_WORK)\s*/i, "").trim().slice(0, 200);
+  return { verdict, reason: reason || undefined };
+}
 
 export function createAskBotTool(deps: AskBotDeps): ToolDef {
   return {
@@ -255,7 +303,7 @@ export function createHandoffBotTool(deps: AskBotDeps): ToolDef {
     name: "handoff_bot",
     group: "write",
     description:
-      "Hand a task off to another named bot and block on its reply. The target runs headless with its own model and soul and is allowed to WRITE (edit files, run commands) to actually finish the work, then reports back with a bounded contract. Use handoff_bot when you want another bot to take over a task end-to-end; use ask_bot for a read-only question.",
+      "Hand a task off to another named bot and block on its reply. The target runs headless with its own model and soul, write-capable, and retries up to a quality-gate limit when a reviewer marks its output NEEDS_WORK; the final bounded contract reports the review verdict. Use for work you want another bot to take over end-to-end; use ask_bot for a read-only question.",
     inputSchema: {
       type: "object",
       properties: {
@@ -279,86 +327,92 @@ export function createHandoffBotTool(deps: AskBotDeps): ToolDef {
 
       const correlationId = randomUUID();
       deps.audit?.("delegation", `handoff_bot -> ${targetName}: ${message.slice(0, 120)}`, correlationId);
-
       const ref = botModelRef(profile, deps.globalConfig);
       const provider = deps.getProvider(ref.provider);
 
-      let cap = botBudgetUSD(profile, DEFAULT_DELEGATION_CAP_USD);
-      if (cap <= 0) cap = DEFAULT_DELEGATION_CAP_USD;
-      if (deps.sessionBudget && deps.sessionBudget.capUSD > 0) {
-        const remaining = deps.sessionBudget.capUSD - deps.sessionBudget.spentUSD;
-        cap = Math.min(cap, Math.max(0.01, remaining));
+      // Quality gate (B): worker → reviewer → retry, up to MAX_HANDOFF_ATTEMPTS.
+      let task = message;
+      let finalText = "";
+      let finalStatus: DelegationStatus = "success";
+      let totalCost = 0;
+      let attempts = 0;
+      let reviewVerdict: "approved" | "needs_work" = "needs_work";
+      let reviewReason: string | undefined;
+
+      for (let i = 0; i < MAX_HANDOFF_ATTEMPTS; i++) {
+        attempts = i + 1;
+        let cap = botBudgetUSD(profile, DEFAULT_DELEGATION_CAP_USD);
+        if (cap <= 0) cap = DEFAULT_DELEGATION_CAP_USD;
+        if (deps.sessionBudget && deps.sessionBudget.capUSD > 0) {
+          const remaining = deps.sessionBudget.capUSD - deps.sessionBudget.spentUSD;
+          cap = Math.min(cap, Math.max(0.01, remaining));
+        }
+        const result = await runHeadless({
+          provider,
+          model: ref.model,
+          soulText: profile.soulText,
+          cwd: deps.cwd,
+          message: task,
+          maxTokens: deps.globalConfig.maxTokens,
+          capUSD: cap,
+          pricing: deps.globalConfig.pricing,
+          globalBudget: deps.globalConfig.globalBudget,
+          policy: capPolicy("full", profile.config.security?.policy),
+          denyTools: profile.config.security?.denyTools,
+          home: deps.home,
+          memoryDir: profile.memoryDir,
+          guard: guardForBot(deps.globalConfig.security, profile.config.security, deps.guard?.onBlock),
+          paranoid: resolveParanoid(deps.globalConfig.security, profile.config.security),
+          effort: profile.config.effort,
+          correlationId,
+          audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
+          sessionLogDir: profile.sessionsDir,
+          sessionBot: profile.name,
+          context: deps.globalConfig.context,
+          treeBudget: ctx.treeBudget,
+        });
+        totalCost += result.costUSD;
+        finalText = result.text ?? "";
+        if (result.stopReason === "tree_budget_exceeded") {
+          finalStatus = "tree_budget_exceeded";
+          break;
+        }
+        if (result.stopReason === "budget_exhausted") {
+          finalStatus = "budget_exhausted";
+          break;
+        }
+        if (!finalText) break;
+        const review = await runReviewer(deps, profile, message, finalText, correlationId);
+        reviewVerdict = review.verdict;
+        reviewReason = review.reason;
+        if (review.verdict === "approved" || i === MAX_HANDOFF_ATTEMPTS - 1) break;
+        task = `${message}\n\nREVIEW FEEDBACK (attempt ${attempts} not approved): ${review.reason ?? "improve the result"}`;
       }
 
-      const result = await runHeadless({
-        provider,
-        model: ref.model,
-        soulText: profile.soulText,
-        cwd: deps.cwd,
-        message,
-        maxTokens: deps.globalConfig.maxTokens,
-        capUSD: cap,
-        pricing: deps.globalConfig.pricing,
-        globalBudget: deps.globalConfig.globalBudget,
-        // write-capable: the handoff target actually completes the work
-        policy: capPolicy("full", profile.config.security?.policy),
-        denyTools: profile.config.security?.denyTools,
-        home: deps.home,
-        memoryDir: profile.memoryDir,
-        guard: guardForBot(deps.globalConfig.security, profile.config.security, deps.guard?.onBlock),
-        paranoid: resolveParanoid(deps.globalConfig.security, profile.config.security),
-        effort: profile.config.effort,
-        correlationId,
-        audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
-        sessionLogDir: profile.sessionsDir,
-        sessionBot: profile.name,
-        context: deps.globalConfig.context,
-        treeBudget: ctx.treeBudget,
-      });
-
-      const text = result.text;
-      const framed = text
-        ? hardenUntrustedInput(text, {
+      const framed = finalText
+        ? hardenUntrustedInput(finalText, {
             paranoid: resolveParanoid(deps.globalConfig.security, profile.config.security),
             audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
             correlationId,
           })
-        : text;
-
-      if (result.stopReason === "tree_budget_exceeded") {
-        deps.audit?.("budget_exceeded", `delegation tree budget exhausted during ${profile.name} run`, correlationId);
-      }
+        : finalText;
 
       const sidecarPath = framed
         ? writeDelegationSidecar(deps.home, profile.name, framed, correlationId)
         : undefined;
 
-      const status: DelegationStatus =
-        result.stopReason === "tree_budget_exceeded"
-          ? "tree_budget_exceeded"
-          : result.stopReason === "budget_exhausted"
-            ? "budget_exhausted"
-            : !text
-              ? "no_text"
-              : "success";
-
-      const fallback =
-        result.stopReason === "tree_budget_exceeded"
-          ? `Handoff to ${profile.name} stopped: shared tree budget exhausted (${ctx.treeBudget?.usedIterations ?? 0} iteration(s) across the tree).`
-          : `The ${profile.name} bot returned no text (${result.stopReason}).`;
+      const status: DelegationStatus = finalText ? finalStatus : "no_text";
+      const fallback = `The ${profile.name} bot returned no text (${finalStatus}).`;
 
       return renderDelegationContract({
         target: profile.name,
         model: `${ref.provider}:${ref.model}`,
         status,
-        costUSD: result.costUSD,
+        costUSD: totalCost,
         summary: framed && framed.length > 0 ? boundedSummary(framed) : fallback,
         sidecarPath,
         diffSummary: "write handoff — full output in sidecar",
-        treeIterations:
-          result.stopReason === "tree_budget_exceeded"
-            ? ctx.treeBudget?.usedIterations
-            : undefined,
+        review: { verdict: reviewVerdict, reason: reviewReason, attempts },
       });
     },
   };

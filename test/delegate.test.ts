@@ -450,4 +450,20 @@ describe("handoff_bot (A: write-capable block-on-reply)", () => {
     expect(r.ok).toBe(false);
     expect(String(r.output)).toContain("message must not be empty");
   });
+
+  test("quality gate (B): NEEDS_WORK retries then approves, reporting attempts", async () => {
+    const provider = scriptProvider([
+      { stopReason: "end_turn", content: [{ type: "text", text: "DRAFT output" }], usage: { inputTokens: 100, outputTokens: 50 } },
+      { stopReason: "end_turn", content: [{ type: "text", text: "VERDICT: NEEDS_WORK add citations" }], usage: { inputTokens: 100, outputTokens: 50 } },
+      { stopReason: "end_turn", content: [{ type: "text", text: "FINAL output" }], usage: { inputTokens: 100, outputTokens: 50 } },
+      { stopReason: "end_turn", content: [{ type: "text", text: "VERDICT: APPROVED looks good" }], usage: { inputTokens: 100, outputTokens: 50 } },
+    ]);
+    const tool = makeHandoff({ provider });
+    const r = await handoff(tool, { bot: "researcher", message: "write a summary" });
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("review: approved");
+    expect(r.output).toContain("(after 2 attempt(s))");
+    // worker → review → worker(retry) → review
+    expect(provider.requests.length).toBe(4);
+  });
 });
