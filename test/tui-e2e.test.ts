@@ -89,8 +89,8 @@ describe("tui e2e (PTY, user-facing)", () => {
     home = mkdtempSync(join(tmpdir(), "tj-tui-e2e-"));
     makeConfig(home);
     tui = startTui(home);
-    // Wait for the initial paint: tab bar + header + status bar.
-    await waitFor(tui, ["Tabs:", "Tenjin TUI", "ready"]);
+    // Wait for the initial paint: status line + prompt + hint line.
+    await waitFor(tui, ["◆", "Enter:run", "❯"]);
   });
 
   afterEach(async () => {
@@ -109,25 +109,25 @@ describe("tui e2e (PTY, user-facing)", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  test("boot paints tab bar, header, sessions panel and status bar", async () => {
+  test("boot paints the GrokBuild-style status line, tabs, prompt and hints", async () => {
     const text = tui.out();
-    // Tab bar (row 0) — one open session.
-    expect(text).toContain("Tabs:");
-    expect(text).toContain("●"); // active mark
-    // Header shows the app, bot/identity and a session id.
-    expect(text).toContain("Tenjin TUI");
-    expect(text).toContain("#20"); // session id prefix (id like 20260823...)
-    // Status bar shows ready + budget.
-    expect(text).toContain("ready");
+    // Row 0 status: identity ◆, bot, session id, budget, ctx%.
+    expect(text).toContain("◆");
+    expect(text).toContain("solo");
+    expect(text).toMatch(/#[0-9a-f]{4}/); // session id short (#ffb0)
     expect(text).toContain("$0/$5.00");
-    // Sessions panel header.
-    expect(text).toContain("sessions");
+    expect(text).toContain("ctx");
+    // Tab bar bracket with the active ● mark.
+    expect(text).toContain("[●");
+    // Prompt ❯ and the hint line.
+    expect(text).toContain("❯");
+    expect(text).toContain("Enter:run");
   });
 
   test("editor accepts typed input (characters land in the input line)", async () => {
     tui.write("hello e2e");
     const text = await waitFor(tui, ["hello e2e"]);
-    expect(text).toContain("you> hello e2e");
+    expect(text).toContain("❯ hello e2e");
   });
 
   test("/help lists the compact slash-command set", async () => {
@@ -139,9 +139,9 @@ describe("tui e2e (PTY, user-facing)", () => {
 
   test("/new opens a second tab and the tab bar grows", async () => {
     tui.write("/new\r");
-    await waitFor(tui, ["Tabs:"]);
+    await waitFor(tui, ["[●"]);
     await Bun.sleep(300);
-    // Two tab ids in the latest tab-bar row, still exactly one active ●.
+    // Two tab ids in the latest tab-bar, still exactly one active ●.
     expect(tabBarIds(tui.out()).length).toBe(2);
     expect(activeTabCount(tui.out())).toBe(1);
   });
@@ -156,7 +156,7 @@ describe("tui e2e (PTY, user-facing)", () => {
   test("Ctrl-N / Ctrl-P cycle the active tab", async () => {
     // Open a second tab so there is something to switch to.
     tui.write("/new\r");
-    await waitFor(tui, ["Tabs:"]);
+    await waitFor(tui, ["[●"]);
     await Bun.sleep(300);
     const firstId = extractActiveTab(tui.out());
     expect(tabBarIds(tui.out()).length).toBe(2);
@@ -175,14 +175,14 @@ describe("tui e2e (PTY, user-facing)", () => {
   test("/exit closes a tab when >1 open, and quits the process on the last tab", async () => {
     // Open a second tab, then /exit should close it but keep the TUI alive.
     tui.write("/new\r");
-    await waitFor(tui, ["Tabs:"]);
+    await waitFor(tui, ["[●"]);
     await Bun.sleep(300);
     expect(tabBarIds(tui.out()).length).toBe(2);
     expect(activeTabCount(tui.out())).toBe(1);
 
     // Close it — process must stay alive (still one tab left).
     tui.write("/exit\r");
-    await waitFor(tui, ["Tabs:"]);
+    await waitFor(tui, ["[●"]);
     await Bun.sleep(300);
     expect(tui.proc.exitCode ?? null).toBe(null); // still running
     expect(tabBarIds(tui.out()).length).toBe(1);
@@ -194,24 +194,20 @@ describe("tui e2e (PTY, user-facing)", () => {
   });
 });
 
-/** Extract ONLY the tab-bar row from the LATEST frame (between the last
- * "Tabs:" marker and the following header "Tenjin TUI"). The raw buffer
- * uses cursor-positioning, so frames carry few newlines — slicing between
- * those two stable markers is the reliable way to isolate row 0. */
-function lastTabBar(text: string): string {
-  const idx = text.lastIndexOf("Tabs:");
-  if (idx < 0) return "";
-  const slice = text.slice(idx);
-  const end = slice.indexOf("Tenjin TUI");
-  return end >= 0 ? slice.slice(0, end) : slice.slice(0, 200);
+/** Extract the bracketed tab bar `[●abcd ·efgh]` from the LATEST frame. The tab
+ * bar is the only `[●/· …]` group the UI paints, so it is unambiguous. */
+function tabBarText(text: string): string {
+  const m = text.match(/\[(?:[●·][0-9a-f]{4})(?: (?:[●·][0-9a-f]{4}))*\]/g);
+  const last = m?.[m.length - 1];
+  return last ? last.slice(1, -1) : "";
 }
 function activeTabCount(text: string): number {
-  return (lastTabBar(text).match(/●/g) ?? []).length;
+  return (tabBarText(text).match(/●/g) ?? []).length;
 }
 function extractActiveTab(text: string): string {
-  const m = lastTabBar(text).match(/●([0-9a-f]{4})/);
+  const m = tabBarText(text).match(/●([0-9a-f]{4})/);
   return m ? m[1]! : "";
 }
 function tabBarIds(text: string): string[] {
-  return Array.from(lastTabBar(text).matchAll(/[● ]([0-9a-f]{4})/g)).map((m) => m[1]!);
+  return Array.from(tabBarText(text).matchAll(/([●·])([0-9a-f]{4})/g)).map((m) => m[2]!);
 }
