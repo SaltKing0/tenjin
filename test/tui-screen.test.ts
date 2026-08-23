@@ -71,6 +71,8 @@ describe("decodeKey", () => {
     expect(decodeKey(new TextEncoder().encode("\x7f")).map((k) => k.type)).toEqual(["backspace"]);
     expect(decodeKey(new TextEncoder().encode("\x03")).map((k) => k.type)).toEqual(["ctrl-c"]);
     expect(decodeKey(new TextEncoder().encode("\x04")).map((k) => k.type)).toEqual(["ctrl-d"]);
+    expect(decodeKey(new TextEncoder().encode("\x0e")).map((k) => k.type)).toEqual(["ctrl-n"]);
+    expect(decodeKey(new TextEncoder().encode("\x10")).map((k) => k.type)).toEqual(["ctrl-p"]);
   });
   test("decodes SGR mouse reports to 0-based coords", () => {
     // press at (col=10,row=5) 1-based → x=9, y=4

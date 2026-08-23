@@ -2,18 +2,30 @@
  * the line REPL uses (src/ui/repl.ts). Zero-dependency; paints with raw ANSI
  * via the Screen core (src/ui/screen.ts).
  *
+ * Multi-session design (tmux/herdr-style): several sessions can be OPEN at
+ * once, each as a "tab" with its own transcript, chat view, scroll, model and
+ * running turn. The shared process budget, pinned skills, audit trail and
+ * approval queue span all tabs. Switch tabs with Ctrl-N / Ctrl-P.
+ *
  * Layout (rows x cols):
- *   row 0        header
- *   rows 1..R-4  chat pane (left)  |  side panel (right, ~30% width)
+ *   row 0        tab bar (open sessions)
+ *   row 1        header (active session + model)
+ *   rows 2..R-3  chat pane (left)  |  side panel (right, ~30% width)
  *   row R-2      input line
  *   row R-1      status bar
  *
  * Keybindings:
  *   Tab               cycle the side panel (sessions / bots / spend / approvals)
+ *   ↑ / ↓             move the session cursor in the sessions panel
+ *   Enter (empty)     open the highlighted session
+ *   Ctrl-N / Ctrl-P   next / previous open session tab
  *   PgUp / PgDn       scroll the chat pane
  *   Ctrl-C            interrupt the active turn, else quit
  *   Ctrl-D (empty)    quit
  *   Enter             send the input line (message or /command)
+ *
+ * Slash commands (compact): /new /resume <id> /fork [n] /sessions /exit |
+ * /model /cost /mode | /whoami /bots /skills /tools /replay /audit | /help
  */
 
 import { stdin, stdout } from "node:process";
@@ -24,7 +36,7 @@ import { resolveModelRef, formatModelRef, type ModelRef } from "../config/models
 import type { ToolDef } from "../tools/registry";
 import type { HarnessConfig } from "../config/loader";
 import { Budget, createBudget, formatUSD, TreeBudget } from "../agent/budget";
-import { runAgentTurn, type ApproveDecision } from "../agent/loop";
+import { runAgentTurn, type TurnEvent, type ApproveDecision } from "../agent/loop";
 import { checkGlobalBudget } from "../audit/global-budget";
 import { SessionLog } from "../session/log";
 import { resolveContextGuard, contextWindowTokens, estimateTokens } from "../session/context";
@@ -36,10 +48,12 @@ import { AuditLog, auditPath, formatAudit } from "../audit/log";
 import { getSkill, scaffoldSkill, listSkills } from "../skills/loader";
 import { VERSION } from "../version";
 import { renderTrajectory } from "../session/trajectory";
-import { rebuildMessages } from "../session/events";
+import { rebuildMessages, sumUsage } from "../session/events";
+import type { SessionEvent } from "../session/events";
 import { validateMode, DEFAULT_MODE, type ModeLadder } from "../security/mode-ladder";
 import { Screen, decodeKey, LineEditor, type Style, RESET } from "./screen";
 import type { ReplOptions } from "./repl";
+import { forwardEvent, logEvent } from "./repl";
 
 const COLORS = {
   header: { bg: 4 } as Style,
@@ -55,45 +69,62 @@ const COLORS = {
 const SIDE_TABS = ["sessions", "bots", "spend", "approvals", "memory"] as const;
 type SideTab = (typeof SIDE_TABS)[number];
 
-interface TuiState {
+/** One open session tab. Own transcript, chat view, model, tokens and turn. */
+interface SessionTab {
+  id: string;
+  logger: SessionLog | undefined;
   messages: ChatMessage[];
-  budget: Budget;
-  treeBudget?: TreeBudget;
   active: ModelRef;
-  pinnedSkills: Set<string>;
-  audit: AuditLog;
-  sessionAllowed: Set<string>;
-  /** Running token usage across the session (for the spend + ctx indicator). */
   tokens: { in: number; out: number };
+  chat: Array<{ text: string; st: Style }>;
+  chatScroll: number;
+  turnActive: boolean;
+  controller: AbortController | null;
 }
 
 export async function startTui(opts: ReplOptions): Promise<void> {
   const audit = new AuditLog(auditPath(opts.home));
-  const state: TuiState = {
-    messages: [...(opts.initialMessages ?? [])],
-    budget: createBudget(opts.config.budgetUSD, opts.config.pricing),
-    treeBudget: opts.config.maxTreeIterations
-      ? new TreeBudget(opts.config.maxTreeIterations ?? 0, 0)
-      : undefined,
-    active: opts.defaultRef,
-    pinnedSkills: new Set<string>(),
-    audit,
-    sessionAllowed: new Set<string>(),
-    tokens: { in: 0, out: 0 },
-  };
-  state.budget.spentUSD = opts.initialSpentUSD ?? 0;
+  // Shared across all tabs: process budget, skills, audit, approvals.
+  const budget = createBudget(opts.config.budgetUSD, opts.config.pricing);
+  budget.spentUSD = opts.initialSpentUSD ?? 0;
+  const treeBudget = opts.config.maxTreeIterations
+    ? new TreeBudget(opts.config.maxTreeIterations ?? 0, 0)
+    : undefined;
+  const pinnedSkills = new Set<string>();
+  const sessionAllowed = new Set<string>();
   const sessionMode = { current: DEFAULT_MODE as ModeLadder };
+
+  // Open tabs — start with the initial session log.
+  const tabs: SessionTab[] = [];
+  let activeIdx = 0;
+  function tab(): SessionTab {
+    return tabs[activeIdx]!;
+  }
+  function buildTabFromLog(log: SessionLog, label: string): SessionTab {
+    const events = log.events();
+    const t: SessionTab = {
+      id: log.id,
+      logger: log,
+      messages: rebuildMessages(events),
+      active: { ...opts.defaultRef },
+      tokens: { in: 0, out: 0 },
+      chat: [],
+      chatScroll: 0,
+      turnActive: false,
+      controller: null,
+    };
+    for (const m of t.messages) {
+      appendChat(t, m.role === "user" ? `you> ${m.content}` : `tenjin> ${m.content}`, m.role === "user" ? COLORS.user : COLORS.bot);
+    }
+    appendChat(t, dim(label), COLORS.dim);
+    return t;
+  }
 
   // Side-panel data (refreshed each time a tab is shown).
   let sideTab: SideTab = "sessions";
   let sideData: string[] = [];
-
-  // Chat view: a list of already-wrapped display lines, styled per block.
-  const chat: Array<{ text: string; st: Style }> = [];
-  let chatScroll = 0;
-
-  let turnActive = false;
-  let controller: AbortController | null = null;
+  // Cursor row within the current side panel (↑/↓ navigation, Enter to open).
+  let sideCursor = 0;
 
   const editor = new LineEditor();
   const scr = new Screen(process.stdout.rows || 24, process.stdout.columns || 80);
@@ -116,11 +147,76 @@ export async function startTui(opts: ReplOptions): Promise<void> {
     }
     return lines.length ? lines : [""];
   }
-  function appendChat(text: string, st: Style): void {
-    for (const line of wrap(text, chatW())) chat.push({ text: line, st });
-    chatScroll = 0; // jump to newest
+  function appendChat(t: SessionTab, text: string, st: Style): void {
+    for (const line of wrap(text, chatW())) t.chat.push({ text: line, st });
+    t.chatScroll = 0; // jump to newest
   }
   function setStatus(field: string, value: string): void {}
+
+  // ---------- tab management ----------
+  function switchTab(delta: number): void {
+    if (tabs.length === 0) return;
+    activeIdx = (activeIdx + delta + tabs.length) % tabs.length;
+    sideCursor = 0;
+    render();
+  }
+  function addTab(t: SessionTab): void {
+    tabs.push(t);
+    activeIdx = tabs.length - 1;
+    sideCursor = 0;
+    render();
+  }
+  /** Start a fresh session as a new tab (used by /new). */
+  function newTab(): void {
+    if (!opts.sessionsDir) {
+      appendChat(tab(), "no sessions dir — sessions disabled", COLORS.err);
+      render();
+      return;
+    }
+    const log = SessionLog.create(opts.sessionsDir);
+    const t = buildTabFromLog(log, `new session ${log.id}`);
+    t.messages = [];
+    t.chat = [];
+    logEvent(t.logger, {
+      t: "session_start",
+      id: t.id,
+      ts: new Date().toISOString(),
+      provider: t.active.provider,
+      model: t.active.model,
+      ...(opts.bot ? { bot: opts.bot } : {}),
+    } as SessionEvent);
+    appendChat(t, dim(`new session ${t.id}`), COLORS.dim);
+    addTab(t);
+  }
+  /** Open a session by id — as a new tab, or switch to it if already open. */
+  function openSession(id: string): void {
+    if (!opts.sessionsDir) return;
+    const existing = tabs.findIndex((t) => t.id === id);
+    if (existing >= 0) {
+      activeIdx = existing;
+      sideCursor = 0;
+      render();
+      return;
+    }
+    try {
+      const log = SessionLog.resolve(opts.sessionsDir, id);
+      const t = buildTabFromLog(log, `resumed ${log.id} — ${log.events().length} events`);
+      addTab(t);
+    } catch (e) {
+      appendChat(tab(), `error: ${(e as Error).message}`, COLORS.err);
+      render();
+    }
+  }
+  /** Close the active tab; when it is the last one, return "exit" to leave. */
+  function closeActiveTab(): "exit" | void {
+    if (tabs.length <= 1) return "exit";
+    const t = tab();
+    if (t.controller) t.controller.abort();
+    tabs.splice(activeIdx, 1);
+    activeIdx = Math.min(activeIdx, tabs.length - 1);
+    sideCursor = 0;
+    render();
+  }
 
   // ---------- side panel loaders ----------
   function loadSessions(): string[] {
@@ -129,7 +225,9 @@ export async function startTui(opts: ReplOptions): Promise<void> {
     if (all.length === 0) return ["no sessions yet"];
     return all.slice(0, 20).map((s) => {
       const when = new Date(s.mtimeMs).toISOString().replace("T", " ").slice(5, 16);
-      return `${s.id}  ${when}  ${(s.preview ?? "").slice(0, 22)}`;
+      const open = tabs.some((t) => t.id === s.id) ? " ●" : "";
+      const active = s.id === tab().id ? "▶" : " ";
+      return `${active}${s.id}${open}  ${when}  ${(s.preview ?? "").slice(0, 20)}`;
     });
   }
   function loadBots(): string[] {
@@ -154,11 +252,11 @@ export async function startTui(opts: ReplOptions): Promise<void> {
   }
   function loadSpend(): string[] {
     const out: string[] = [
-      `spent ${formatUSD(state.budget.spentUSD)} of ${opts.config.budgetUSD > 0 ? formatUSD(opts.config.budgetUSD) : "∞"}`,
-      `tokens  in ${state.tokens.in} · out ${state.tokens.out}`,
+      `spent ${formatUSD(budget.spentUSD)} of ${opts.config.budgetUSD > 0 ? formatUSD(opts.config.budgetUSD) : "∞"}`,
+      `tokens  in ${tab().tokens.in} · out ${tab().tokens.out}`,
       ctxStatus(),
     ];
-    for (const entry of state.budget.breakdown()) {
+    for (const entry of budget.breakdown()) {
       out.push(`  ${entry.model}: ${formatUSD(entry.usd)}`);
     }
     return out;
@@ -169,8 +267,8 @@ export async function startTui(opts: ReplOptions): Promise<void> {
 
   /** Context-window occupancy for the active model (used + window, with a bar). */
   function ctxStatus(): string {
-    const window = contextWindowTokens(state.active.model, opts.config.context);
-    const used = estimateTokens(state.messages);
+    const window = contextWindowTokens(tab().active.model, opts.config.context);
+    const used = estimateTokens(tab().messages);
     const pct = window > 0 ? Math.min(100, Math.round((used / window) * 100)) : 0;
     const barLen = 8;
     const filled = Math.round((pct / 100) * barLen);
@@ -186,7 +284,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
     return new Promise((resolve) => {
       const summary = `${tool} (${group}) — approve?  [1] allow  [2] deny  [3] always`;
       pendingApprovals.push({ resolve, summary });
-      appendChat(summary, COLORS.dim);
+      appendChat(tab(), summary, COLORS.dim);
       render();
     });
   }
@@ -196,41 +294,42 @@ export async function startTui(opts: ReplOptions): Promise<void> {
   }
 
   // ---------- agent turn ----------
-  function activeProvider(): Provider {
-    return opts.registry.get(state.active.provider);
+  function activeProvider(t: SessionTab): Provider {
+    return opts.registry.get(t.active.provider);
   }
-  async function runTurn(text: string): Promise<void> {
-    state.messages.push({ role: "user", content: text });
-    appendChat(`you> ${text}`, COLORS.user);
-    appendChat("tenjin> ", COLORS.bot);
+  async function runTurn(t: SessionTab, text: string): Promise<void> {
+    t.messages.push({ role: "user", content: text });
+    logEvent(t.logger, { t: "message", role: "user", content: text, ts: new Date().toISOString() } as SessionEvent);
+    appendChat(t, `you> ${text}`, COLORS.user);
+    appendChat(t, "tenjin> ", COLORS.bot);
 
-    controller = new AbortController();
-    turnActive = true;
+    t.controller = new AbortController();
+    t.turnActive = true;
     // stream deltas straight into the chat view (batched)
     let buf = "";
     const flush = () => {
       if (buf) {
-        appendChat(buf, COLORS.bot);
+        appendChat(t, buf, COLORS.bot);
         buf = "";
         render();
       }
     };
     const ticker = setInterval(flush, 30);
-    const skillsSection = buildSkillsSection(opts.home, opts.cwd, state.pinnedSkills);
+    const skillsSection = buildSkillsSection(opts.home, opts.cwd, pinnedSkills);
     const volatileTail = buildVolatileTail({
       now: new Date().toISOString().slice(0, 10),
       statusLines: skillsSection ? [skillsSection] : [],
     });
     try {
       const result = await runAgentTurn({
-        provider: activeProvider(),
-        model: state.active.model,
+        provider: activeProvider(t),
+        model: t.active.model,
         system: opts.system,
         volatileTail,
         tools: opts.tools,
-        messages: state.messages,
-        budget: state.budget,
-        treeBudget: state.treeBudget,
+        messages: t.messages,
+        budget,
+        treeBudget,
         maxTokens: opts.config.maxTokens,
         cwd: opts.cwd,
         globalBudgetGate: opts.config.globalBudget
@@ -244,34 +343,35 @@ export async function startTui(opts: ReplOptions): Promise<void> {
         onTextDelta: (d) => {
           buf += d;
         },
-        onEvent: () => {},
-        signal: controller.signal,
-        contextGuard: resolveContextGuard(state.active.model, opts.config.context),
+        onEvent: (e) => forwardEvent(e, t.logger, budget),
+        signal: t.controller.signal,
+        contextGuard: resolveContextGuard(t.active.model, opts.config.context),
       });
       if (buf) {
-        appendChat(buf, COLORS.bot);
+        appendChat(t, buf, COLORS.bot);
         buf = "";
       }
-      state.tokens.in += result.usage.inputTokens ?? 0;
-      state.tokens.out += result.usage.outputTokens ?? 0;
+      t.tokens.in += result.usage.inputTokens ?? 0;
+      t.tokens.out += result.usage.outputTokens ?? 0;
       appendChat(
-        dim(`  [${result.model} · in ${result.usage.inputTokens} out ${result.usage.outputTokens} · ${formatUSD(result.costUSD)} turn · ${formatUSD(state.budget.spentUSD)} total]`),
+        t,
+        dim(`  [${result.model} · in ${result.usage.inputTokens} out ${result.usage.outputTokens} · ${formatUSD(result.costUSD)} turn · ${formatUSD(budget.spentUSD)} total]`),
         COLORS.dim,
       );
     } catch (e) {
       if (buf) {
-        appendChat(buf, COLORS.bot);
+        appendChat(t, buf, COLORS.bot);
         buf = "";
       }
       if ((e as Error)?.name === "AbortError") {
-        appendChat("(interrupted)", COLORS.dim);
+        appendChat(t, "(interrupted)", COLORS.dim);
       } else {
-        appendChat(`error: ${(e as Error)?.message ?? e}`, COLORS.err);
+        appendChat(t, `error: ${(e as Error)?.message ?? e}`, COLORS.err);
       }
     } finally {
       clearInterval(ticker);
-      turnActive = false;
-      controller = null;
+      t.turnActive = false;
+      t.controller = null;
       render();
     }
   }
@@ -282,84 +382,110 @@ export async function startTui(opts: ReplOptions): Promise<void> {
     switch (cmd) {
       case "/help":
         appendChat(
-          "/help /exit /quit | /cost /model [id] /mode [rung] | /whoami /bots /sessions | Tab: side panel | PgUp/PgDn: scroll",
+          tab(),
+          [
+            "sessions:  /new  /resume <id>  /fork [n]  /sessions  /exit",
+            "model:     /model [id]  /cost  /mode [rung]",
+            "info:      /whoami  /bots  /skills  /tools  /replay  /audit [n]",
+            "panel:     Tab cycle · ↑/↓ select · Enter open · Ctrl-N/P tabs · PgUp/PgDn scroll",
+          ].join("\n"),
           COLORS.dim,
         );
         return;
       case "/exit":
       case "/quit":
-        return "exit";
+        // Close the current tab; only leave the TUI when it is the last one.
+        return closeActiveTab();
+      case "/new":
+        newTab();
+        return;
       case "/cost":
-        appendChat(`spent ${formatUSD(state.budget.spentUSD)} of ${opts.config.budgetUSD > 0 ? formatUSD(opts.config.budgetUSD) : "no cap"}`, COLORS.dim);
+        appendChat(tab(), `spent ${formatUSD(budget.spentUSD)} of ${opts.config.budgetUSD > 0 ? formatUSD(opts.config.budgetUSD) : "no cap"}`, COLORS.dim);
         return;
       case "/model":
         if (!rest[0]) {
-          appendChat(dim(formatModelRef(state.active)), COLORS.dim);
+          appendChat(tab(), dim(formatModelRef(tab().active)), COLORS.dim);
           return;
         }
         try {
-          if (rest[0] === "default") state.active = opts.defaultRef;
-          else if (rest[0] === "cheap" && opts.cheapRef) state.active = opts.cheapRef;
-          else state.active = resolveModelRef(rest.join(" "), opts.config.provider);
-          appendChat(dim(`model → ${formatModelRef(state.active)}`), COLORS.dim);
+          if (rest[0] === "default") tab().active = opts.defaultRef;
+          else if (rest[0] === "cheap" && opts.cheapRef) tab().active = opts.cheapRef;
+          else tab().active = resolveModelRef(rest.join(" "), opts.config.provider);
+          appendChat(tab(), dim(`model → ${formatModelRef(tab().active)}`), COLORS.dim);
         } catch (e) {
-          appendChat(`error: ${(e as Error).message}`, COLORS.err);
+          appendChat(tab(), `error: ${(e as Error).message}`, COLORS.err);
         }
         return;
       case "/whoami":
-        appendChat(dim(`${opts.bot ?? "solo"} · ${state.active.provider}:${state.active.model} · cwd ${opts.cwd}`), COLORS.dim);
+        appendChat(tab(), dim(`${opts.bot ?? "solo"} · ${tab().active.provider}:${tab().active.model} · cwd ${opts.cwd}`), COLORS.dim);
         return;
       case "/bots":
-        appendChat(loadBots().join("\n"), COLORS.bot);
+        appendChat(tab(), loadBots().join("\n"), COLORS.bot);
         return;
       case "/sessions":
-        appendChat(loadSessions().join("\n"), COLORS.bot);
+        appendChat(tab(), loadSessions().join("\n"), COLORS.bot);
         return;
       case "/skills": {
         const all = listSkills(opts.home, opts.cwd);
-        appendChat(all.length ? all.map((s) => `${s.name}  ${s.description}`).join("\n") : "no skills", COLORS.bot);
+        appendChat(tab(), all.length ? all.map((s) => `${s.name}  ${s.description}`).join("\n") : "no skills", COLORS.bot);
         return;
       }
       case "/tools":
         appendChat(
+          tab(),
           opts.tools.length
-            ? opts.tools.map((t) => `${t.name.padEnd(14)} ${t.group}${state.sessionAllowed.has(t.name) ? " ✓" : ""}`).join("\n")
+            ? opts.tools.map((t) => `${t.name.padEnd(14)} ${t.group}${sessionAllowed.has(t.name) ? " ✓" : ""}`).join("\n")
             : "no tools",
           COLORS.bot,
         );
         return;
-      case "/replay":
-        if (!opts.logger) {
-          appendChat("no session log active", COLORS.err);
+      case "/replay": {
+        const lg = tab().logger;
+        if (!lg) {
+          appendChat(tab(), "no session log active", COLORS.err);
           return;
         }
-        appendChat(renderTrajectory(opts.logger.events()).join("\n"), COLORS.dim);
+        appendChat(tab(), renderTrajectory(lg.events()).join("\n"), COLORS.dim);
         return;
+      }
       case "/resume": {
         if (!opts.sessionsDir || !rest[0]) {
-          appendChat("usage: /resume <id>", COLORS.err);
+          appendChat(tab(), "usage: /resume <id>", COLORS.err);
           return;
         }
         try {
-          const log = SessionLog.resolve(opts.sessionsDir, rest[0]);
-          state.messages = rebuildMessages(log.events());
-          appendChat(dim(`resumed ${log.id} — ${state.messages.length} messages`), COLORS.dim);
+          openSession(rest[0]);
         } catch (e) {
-          appendChat(`error: ${(e as Error).message}`, COLORS.err);
+          appendChat(tab(), `error: ${(e as Error).message}`, COLORS.err);
+        }
+        return;
+      }
+      case "/fork": {
+        if (!opts.sessionsDir || !tab().logger) {
+          appendChat(tab(), "usage: /fork [n]  (no active session to fork)", COLORS.err);
+          return;
+        }
+        const n = rest[0] && /^\d+$/.test(rest[0]) ? Number(rest[0]) : undefined;
+        try {
+          const log = SessionLog.fork(opts.sessionsDir, tab().id, n);
+          const t = buildTabFromLog(log, `forked ${log.id} — ${log.events().length} events`);
+          addTab(t);
+        } catch (e) {
+          appendChat(tab(), `error: ${(e as Error).message}`, COLORS.err);
         }
         return;
       }
       case "/mode": {
         const rung = rest[0];
         if (!rung) {
-          appendChat(dim(`${sessionMode.current} (session; config default ${opts.config.mode?.ladder ?? DEFAULT_MODE})`), COLORS.dim);
+          appendChat(tab(), dim(`${sessionMode.current} (session; config default ${opts.config.mode?.ladder ?? DEFAULT_MODE})`), COLORS.dim);
           return;
         }
         try {
           sessionMode.current = validateMode(rung);
-          appendChat(dim(`mode → ${sessionMode.current}`), COLORS.dim);
+          appendChat(tab(), dim(`mode → ${sessionMode.current}`), COLORS.dim);
         } catch (e) {
-          appendChat(dim(`  ${(e as Error).message}`), COLORS.dim);
+          appendChat(tab(), dim(`  ${(e as Error).message}`), COLORS.dim);
         }
         return;
       }
@@ -367,59 +493,59 @@ export async function startTui(opts: ReplOptions): Promise<void> {
         const bot = rest[0];
         const text = rest.slice(1).join(" ");
         if (!bot || !text.trim()) {
-          appendChat("usage: /tell <bot> <text>", COLORS.err);
+          appendChat(tab(), "usage: /tell <bot> <text>", COLORS.err);
           return;
         }
         try {
           const profile = resolveBot(opts.home, bot);
           const msg = leaveUserMessage(profile.inboxDir, profile.name, text, inboxPolicyFromConfig(opts.config.inbox));
-          appendChat(dim(`left message for ${profile.name} (id ${msg.id})`), COLORS.dim);
+          appendChat(tab(), dim(`left message for ${profile.name} (id ${msg.id})`), COLORS.dim);
         } catch (e) {
-          appendChat(`error: ${(e as Error).message}`, COLORS.err);
+          appendChat(tab(), `error: ${(e as Error).message}`, COLORS.err);
         }
         return;
       }
       case "/audit": {
         const n = rest[0] && /^\d+$/.test(rest[0]) ? Number(rest[0]) : 20;
         const es = audit.query({ tail: n });
-        appendChat(es.length ? formatAudit(es) : "no audit events", COLORS.bot);
+        appendChat(tab(), es.length ? formatAudit(es) : "no audit events", COLORS.bot);
         return;
       }
       case "/skill": {
         const name = rest[0];
         if (!name) {
-          appendChat("usage: /skill <name> [off] | /skill new <name>", COLORS.err);
+          appendChat(tab(), "usage: /skill <name> [off] | /skill new <name>", COLORS.err);
           return;
         }
         if (name === "new") {
           if (!rest[1]) {
-            appendChat("usage: /skill new <name>", COLORS.err);
+            appendChat(tab(), "usage: /skill new <name>", COLORS.err);
             return;
           }
           try {
             const p = scaffoldSkill(opts.cwd, rest[1]);
-            appendChat(dim(`scaffolded ${p}`), COLORS.dim);
+            appendChat(tab(), dim(`scaffolded ${p}`), COLORS.dim);
           } catch (e) {
-            appendChat(`error: ${(e as Error).message}`, COLORS.err);
+            appendChat(tab(), `error: ${(e as Error).message}`, COLORS.err);
           }
           return;
         }
         if (rest[1] === "off") {
-          state.pinnedSkills.delete(name);
-          appendChat(dim(`unpinned ${name}`), COLORS.dim);
+          pinnedSkills.delete(name);
+          appendChat(tab(), dim(`unpinned ${name}`), COLORS.dim);
           return;
         }
         const skill = getSkill(opts.home, opts.cwd, name);
         if (!skill) {
-          appendChat(`unknown skill "${name}" — /skills`, COLORS.err);
+          appendChat(tab(), `unknown skill "${name}" — /skills`, COLORS.err);
           return;
         }
-        state.pinnedSkills.add(skill.name);
-        appendChat(dim(`pinned ${skill.name}`), COLORS.dim);
+        pinnedSkills.add(skill.name);
+        appendChat(tab(), dim(`pinned ${skill.name}`), COLORS.dim);
         return;
       }
       default:
-        appendChat(`unknown command ${cmd} — /help`, COLORS.err);
+        appendChat(tab(), `unknown command ${cmd} — /help`, COLORS.err);
     }
   }
   const dim = (s: string) => s;
@@ -427,36 +553,48 @@ export async function startTui(opts: ReplOptions): Promise<void> {
   // ---------- render ----------
   function render(): void {
     scr.clear();
-    // header
-    scr.write(0, 0, ` Tenjin TUI v${VERSION}  ·  ${opts.bot ?? "solo"}  ·  ${state.active.provider}:${state.active.model}`, COLORS.header);
+    const t = tab();
+    // tab bar (row 0): one entry per open session, active highlighted
+    const bar = tabs.map((tabItem, i) => {
+      const label = tabItem.id.slice(-4);
+      const activeMark = i === activeIdx ? "●" : " ";
+      return `${activeMark}${label}`;
+    }).join("  ");
+    scr.write(0, 0, ` Tabs: ${bar}  `, COLORS.header);
+    // header (row 1)
+    scr.write(1, 0, ` Tenjin TUI v${VERSION}  ·  ${opts.bot ?? "solo"}  ·  ${t.active.provider}:${t.active.model}  ·  #${t.id}`, COLORS.header);
     // side panel
     const sw = Math.floor(scr.cols * 0.3);
     const sideLeft = scr.cols - sw;
-    const sideLines =
+    sideData =
       sideTab === "sessions" ? loadSessions()
       : sideTab === "bots" ? loadBots()
       : sideTab === "spend" ? loadSpend()
       : sideTab === "memory" ? loadMemory()
       : loadApprovals();
-    scr.write(1, sideLeft, ` ${sideTab} `, COLORS.header);
-    sideLines.slice(0, scr.rows - 5).forEach((l, i) => {
-      scr.write(2 + i, sideLeft, l.slice(0, sw - 1), COLORS.dim);
+    scr.write(2, sideLeft, ` ${sideTab} `, COLORS.header);
+    const sideRows = scr.rows - 6;
+    if (sideCursor >= sideData.length) sideCursor = Math.max(0, sideData.length - 1);
+    sideData.slice(0, sideRows).forEach((l, i) => {
+      const selected = sideTab === "sessions" && i === sideCursor;
+      const st = selected ? { ...COLORS.bot, reverse: true } : COLORS.dim;
+      scr.write(3 + i, sideLeft, (selected ? "▸ " : "  ") + l.slice(0, sw - 3), st);
     });
-    // chat pane (rows 1..R-4)
-    const chatRows = scr.rows - 5;
+    // chat pane (rows 2..R-3)
+    const chatRows = scr.rows - 6;
     const cw = chatW();
-    const start = Math.max(0, chat.length - chatRows - chatScroll);
+    const start = Math.max(0, t.chat.length - chatRows - t.chatScroll);
     for (let i = 0; i < chatRows; i++) {
-      const line = chat[start + i];
-      if (line) scr.write(1 + i, 0, line.text.slice(0, cw), line.st);
+      const line = t.chat[start + i];
+      if (line) scr.write(2 + i, 0, line.text.slice(0, cw), line.st);
     }
     // input line
     scr.write(scr.rows - 2, 0, `you> ${editor.text}`, COLORS.input);
     // status bar
-    const win = contextWindowTokens(state.active.model, opts.config.context);
-    const used = estimateTokens(state.messages);
+    const win = contextWindowTokens(t.active.model, opts.config.context);
+    const used = estimateTokens(t.messages);
     const pct = win > 0 ? Math.min(100, Math.round((used / win) * 100)) : 0;
-    const status = ` ${turnActive ? "…thinking" : "ready"} · ${formatUSD(state.budget.spentUSD)}${opts.config.budgetUSD > 0 ? `/${formatUSD(opts.config.budgetUSD)}` : ""} · in ${ktok(state.tokens.in)} out ${ktok(state.tokens.out)} · ${pct}% ctx · ${pendingApprovals.length} appr · Tab:${sideTab}`;
+    const status = ` ${t.turnActive ? "…thinking" : "ready"} · ${formatUSD(budget.spentUSD)}${opts.config.budgetUSD > 0 ? `/${formatUSD(opts.config.budgetUSD)}` : ""} · in ${ktok(t.tokens.in)} out ${ktok(t.tokens.out)} · ${pct}% ctx · ${pendingApprovals.length} appr · Tab:${sideTab}`;
     scr.write(scr.rows - 1, 0, status.slice(0, scr.cols), COLORS.status);
     scr.render(stdout, { row: scr.rows - 2, col: Math.min(5 + editor.cursor, scr.cols - 1) });
   }
@@ -505,6 +643,16 @@ export async function startTui(opts: ReplOptions): Promise<void> {
         case "right":
           editor.right();
           break;
+        case "up":
+          if (sideTab === "sessions" && sideData.length > 0) {
+            sideCursor = Math.max(0, sideCursor - 1);
+          }
+          break;
+        case "down":
+          if (sideTab === "sessions" && sideData.length > 0) {
+            sideCursor = Math.min(sideData.length - 1, sideCursor + 1);
+          }
+          break;
         case "home":
           editor.home();
           break;
@@ -514,26 +662,22 @@ export async function startTui(opts: ReplOptions): Promise<void> {
         case "ctrl-k":
           editor.ctrlK();
           break;
+        case "ctrl-n":
+          switchTab(1);
+          continue;
+        case "ctrl-p":
+          switchTab(-1);
+          continue;
         case "mouse":
           if (k.pressed && k.button === 0) {
-            // Clicking a row in the side-panel sessions list opens that session.
+            // Clicking a row in the sessions side panel opens that session.
             const sw = Math.floor(scr.cols * 0.3);
             const sideLeft = scr.cols - sw;
-            if (sideTab === "sessions" && k.x >= sideLeft && k.y >= 2 && k.y <= scr.rows - 4) {
-              const idx = k.y - 2;
-              const line = loadSessions()[idx];
-              if (line) {
-                const id = line.split(/\s+/)[0]!;
-                if (id) {
-                  void runCommand(`/resume ${id}`).then((r) => {
-                    if (r === "exit") {
-                      quitting = true;
-                      quit();
-                    }
-                  });
-                  render();
-                }
-              }
+            if (sideTab === "sessions" && k.x >= sideLeft && k.y >= 3 && k.y <= scr.rows - 4) {
+              const idx = k.y - 3;
+              sideCursor = idx;
+              openSessionAt(idx);
+              render();
             }
           }
           break;
@@ -543,39 +687,44 @@ export async function startTui(opts: ReplOptions): Promise<void> {
           break;
         }
         case "pgup":
-          chatScroll = Math.min(chat.length, chatScroll + 5);
+          tab().chatScroll = Math.min(tab().chat.length, tab().chatScroll + 5);
           break;
         case "pgdown":
-          chatScroll = Math.max(0, chatScroll - 5);
+          tab().chatScroll = Math.max(0, tab().chatScroll - 5);
           break;
         case "enter": {
           const line = editor.submit();
+          // Empty input in the sessions panel → open the highlighted session.
+          if (line === "" && sideTab === "sessions" && sideData.length > 0) {
+            openSessionAt(sideCursor);
+            render();
+            break;
+          }
           render();
           if (line.startsWith("/")) {
             void (async () => {
               const r = await runCommand(line);
               if (r === "exit") {
-                quitting = true;
                 quit();
               }
               render();
             })();
           } else if (line.trim()) {
-            void runTurn(line.trim());
+            void runTurn(tab(), line.trim());
           }
           break;
         }
-        case "ctrl-c":
-          if (turnActive && controller) {
-            controller.abort();
+        case "ctrl-c": {
+          const t = tab();
+          if (t.turnActive && t.controller) {
+            t.controller.abort();
           } else {
-            quitting = true;
             quit();
           }
           break;
+        }
         case "ctrl-d":
           if (editor.text === "") {
-            quitting = true;
             quit();
           }
           break;
@@ -584,6 +733,14 @@ export async function startTui(opts: ReplOptions): Promise<void> {
       }
       render();
     }
+  }
+  function openSessionAt(index: number): void {
+    if (sideTab !== "sessions" || !opts.sessionsDir) return;
+    const line = sideData[index];
+    if (!line) return;
+    const id = line.split(/\s+/)[0]!;
+    if (!id) return;
+    openSession(id);
   }
   let inputBuf = "";
   stdin.on("data", (chunk: string) => {
@@ -605,6 +762,41 @@ export async function startTui(opts: ReplOptions): Promise<void> {
     process.exit(0);
   }
   process.on("SIGINT", () => quit());
+
+  // Seed the initial tab from the initial session log.
+  if (opts.logger) {
+    const init = buildTabFromLog(opts.logger, "");
+    init.messages = [...(opts.initialMessages ?? [])];
+    init.chat = [];
+    for (const m of init.messages) {
+      appendChat(init, m.role === "user" ? `you> ${m.content}` : `tenjin> ${m.content}`, m.role === "user" ? COLORS.user : COLORS.bot);
+    }
+    // Persist a fresh session_start for a brand-new log (not a resumed/forked one).
+    if (init.logger && init.logger.events().find((e) => e.t === "session_start") === undefined) {
+      logEvent(init.logger, {
+        t: "session_start",
+        id: init.id,
+        ts: new Date().toISOString(),
+        provider: init.active.provider,
+        model: init.active.model,
+        ...(opts.bot ? { bot: opts.bot } : {}),
+      } as SessionEvent);
+    }
+    tabs.push(init);
+  } else {
+    tabs.push({
+      id: opts.sessionId,
+      logger: undefined,
+      messages: [...(opts.initialMessages ?? [])],
+      active: opts.defaultRef,
+      tokens: { in: 0, out: 0 },
+      chat: [],
+      chatScroll: 0,
+      turnActive: false,
+      controller: null,
+    });
+  }
+  activeIdx = 0;
 
   render();
   await new Promise<void>((resolve) => {

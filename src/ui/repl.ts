@@ -737,7 +737,7 @@ function adoptLog(state: ReplState, log: SessionLog, sessionAllowed: Set<string>
   sessionAllowed.clear();
 }
 
-function forwardEvent(e: TurnEvent, logger?: EventLogger, budget?: Budget): void {
+export function forwardEvent(e: TurnEvent, logger?: EventLogger, budget?: Budget): void {
   if (!logger) return;
   switch (e.t) {
     case "assistant_message":
@@ -771,7 +771,7 @@ function forwardEvent(e: TurnEvent, logger?: EventLogger, budget?: Budget): void
   }
 }
 
-function logEvent(logger: EventLogger | undefined, event: SessionEvent): void {
+export function logEvent(logger: EventLogger | undefined, event: SessionEvent): void {
   logger?.append(event);
 }
 

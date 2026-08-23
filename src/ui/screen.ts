@@ -202,6 +202,8 @@ export type KeyEvent =
   | { type: "ctrl-d" }
   | { type: "ctrl-k" }
   | { type: "ctrl-l" }
+  | { type: "ctrl-n" }
+  | { type: "ctrl-p" }
   | { type: "unknown"; bytes: string }
   | { type: "mouse"; x: number; y: number; button: number; pressed: boolean };
 
@@ -275,6 +277,12 @@ export function decodeKey(buf: Uint8Array): KeyEvent[] {
       i++;
     } else if (b === 0x0c) {
       out.push({ type: "ctrl-l" });
+      i++;
+    } else if (b === 0x0e) {
+      out.push({ type: "ctrl-n" });
+      i++;
+    } else if (b === 0x10) {
+      out.push({ type: "ctrl-p" });
       i++;
     } else if (b >= 0x20) {
       // char — handle 1-4 byte UTF-8
