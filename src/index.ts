@@ -86,6 +86,7 @@ import { botCommand } from "./cli/bot";
 import { pluginCommand } from "./cli/plugin";
 import { runOnboard, usage as onboardUsage } from "./cli/onboard";
 import { mcpServeCommand } from "./cli/mcp-serve";
+import { initWorkspace, renderWorkspaceStatus, workspaceDir } from "./cli/workspace";
 import { PRODUCT, VERSION } from "./version";
 import { backupHome, restoreHome, buildExportTarArgs } from "./backup";
 
@@ -141,6 +142,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   keyring: (a) => keyringCommand(a),
   skills: (a) => skillsCommand(a),
   plugin: (a) => pluginCommand(a),
+  workspace: (a) => workspaceCommand(a),
 };
 
 async function main(): Promise<number> {
@@ -544,6 +546,25 @@ function keyringCommand(args: string[]): number {
   }
   stdout.write("usage: tenjin keyring init|status\n");
   return 2;
+}
+
+function workspaceCommand(args: string[]): number {
+  const home = tenjinHome();
+  if (args[0] === "init") {
+    const force = args.includes("--force");
+    const r = initWorkspace(home, { force });
+    stdout.write(`workspace: ${workspaceDir(home)}\n`);
+    stdout.write(`  created: ${r.created.join(", ") || "(none)"}\n`);
+    if (r.skipped.length) stdout.write(`  kept (already present): ${r.skipped.join(", ")}\n`);
+    stdout.write(`  daily log: ${r.daily}\n`);
+    return 0;
+  }
+  if (args[0] === "--help" || args[0] === "-h") {
+    stdout.write("usage: tenjin workspace [init [--force]]\n  init   scaffold SOUL.md/USER.md/AGENTS.md/MEMORY.md/HEARTBEAT.md + daily log\n  (no args)  show workspace status\n");
+    return 0;
+  }
+  stdout.write(`${renderWorkspaceStatus(home)}\n`);
+  return 0;
 }
 
 /** Skill self-improvement surface (#133): usage stats + refine analysis. */
