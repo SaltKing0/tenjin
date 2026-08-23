@@ -28,6 +28,7 @@ import { runHeadlessNdjson } from "./cli/headless-ndjson";
 import type { EffortLevel } from "./agent/effort";
 import { runArena, renderArena, type ArenaEntry } from "./arena";
 import { startRepl } from "./ui/repl";
+import { startTui } from "./ui/tui";
 import { SessionLog } from "./session/log";
 import { rebuildMessages, sumUsage } from "./session/events";
 import { generatePendingSummaries, listSummaries } from "./memory/summaries";
@@ -143,14 +144,18 @@ const COMMANDS: Record<string, CommandHandler> = {
 };
 
 async function main(): Promise<number> {
-  const handler = COMMANDS[process.argv[2] ?? ""];
-  if (handler) {
-    return handler(process.argv.slice(3));
+  // `tenjin tui` runs the split-pane TUI instead of the line REPL.
+  const raw = process.argv.slice(2);
+  const useTui = raw[0] === "tui";
+  const argv = useTui ? raw.slice(1) : raw;
+  const handler = COMMANDS[argv[0] ?? ""];
+  if (handler && !useTui) {
+    return handler(argv.slice(1));
   }
 
   let cli: CliArgs;
   try {
-    cli = parseArgs(process.argv.slice(2));
+    cli = parseArgs(argv);
   } catch (e) {
     stdout.write(`${(e as Error).message}\n`);
     return 2;
@@ -374,7 +379,7 @@ async function main(): Promise<number> {
     }
 
     const log = SessionLog.create(dir);
-    await startRepl({
+    const replOpts = {
       ...ctx,
       sessionId: log.id,
       logger: log,
@@ -382,7 +387,9 @@ async function main(): Promise<number> {
       memoryDir: memDir,
       home,
       bot: profile?.name,
-    });
+    };
+    if (useTui) await startTui(replOpts);
+    else await startRepl(replOpts);
     return 0;
   } catch (e) {
     if (e instanceof ConfigError) {
