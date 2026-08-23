@@ -283,7 +283,7 @@ async function main(): Promise<number> {
     const team = loadTeam(home);
     const system = buildSystemPrompt({
       soulText: soul.text,
-      agentsMd: loadAgentsMd(cwd),
+      agentsMd: loadAgentsMd(cwd, home),
       cwd,
       facts: readFacts(memDir),
       memorySection:
@@ -895,7 +895,7 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     globalBudget: ctx.config.globalBudget,
     policy: capPolicy("read-only", ctx.botSecurity?.policy),
     denyTools: ctx.botSecurity?.denyTools,
-    agentsMd: loadAgentsMd(ctx.cwd),
+    agentsMd: loadAgentsMd(ctx.cwd, ctx.home),
     home: ctx.home,
     memoryDir: ctx.memoryDir,
     guard: ctx.guard,
@@ -928,7 +928,7 @@ async function oneShotNdjson(ctx: AppContext, prompt: string): Promise<number> {
     globalBudget: ctx.config.globalBudget,
     policy: capPolicy("read-only", ctx.botSecurity?.policy),
     denyTools: ctx.botSecurity?.denyTools,
-    agentsMd: loadAgentsMd(ctx.cwd),
+    agentsMd: loadAgentsMd(ctx.cwd, ctx.home),
     home: ctx.home,
     memoryDir: ctx.memoryDir,
     guard: ctx.guard,

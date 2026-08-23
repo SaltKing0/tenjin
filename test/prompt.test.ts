@@ -46,6 +46,23 @@ describe("loadSoul precedence", () => {
     writeFileSync(join(project, ".tenjin", "SOUL.md"), "\n  padded  \n\n");
     expect(loadSoul(home, project).text).toBe("padded");
   });
+
+  test("workspace SOUL.md is used when no project override (beats legacy global)", () => {
+    writeFileSync(join(home, "SOUL.md"), "legacy global");
+    mkdirSync(join(home, "workspace"), { recursive: true });
+    writeFileSync(join(home, "workspace", "SOUL.md"), "workspace soul");
+    const soul = loadSoul(home, project);
+    expect(soul.source).toBe("workspace");
+    expect(soul.text).toBe("workspace soul");
+  });
+
+  test("project SOUL.md still wins over workspace", () => {
+    mkdirSync(join(home, "workspace"), { recursive: true });
+    writeFileSync(join(home, "workspace", "SOUL.md"), "workspace soul");
+    mkdirSync(join(project, ".tenjin"), { recursive: true });
+    writeFileSync(join(project, ".tenjin", "SOUL.md"), "project soul");
+    expect(loadSoul(home, project).source).toBe("project");
+  });
 });
 
 describe("loadAgentsMd", () => {
@@ -61,6 +78,21 @@ describe("loadAgentsMd", () => {
   test("null when empty file", () => {
     writeFileSync(join(project, "AGENTS.md"), "   \n");
     expect(loadAgentsMd(project)).toBeNull();
+  });
+
+  test("workspace AGENTS.md used as fallback when no project file", () => {
+    mkdirSync(join(home, "workspace"), { recursive: true });
+    writeFileSync(join(home, "workspace", "AGENTS.md"), "# Global rules\nuse bun");
+    expect(loadAgentsMd(project, home)).toBe("# Global rules\nuse bun");
+    // without home, no workspace is consulted
+    expect(loadAgentsMd(project)).toBeNull();
+  });
+
+  test("project AGENTS.md wins over workspace", () => {
+    writeFileSync(join(project, "AGENTS.md"), "project rules");
+    mkdirSync(join(home, "workspace"), { recursive: true });
+    writeFileSync(join(home, "workspace", "AGENTS.md"), "global rules");
+    expect(loadAgentsMd(project, home)).toBe("project rules");
   });
 });
 
