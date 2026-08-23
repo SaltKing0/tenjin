@@ -79,6 +79,9 @@ export function extractSessionIdFromLine(line: string): string | undefined {
   return id && id.length > 0 ? id : undefined;
 }
 
+/** GrokBuild-style user prompt marker (turns render as "❯ <text>"). */
+const PROMPT = "❯ ";
+
 /** One open session tab. Own transcript, chat view, model, tokens and turn. */
 interface SessionTab {
   id: string;
@@ -124,7 +127,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
       controller: null,
     };
     for (const m of t.messages) {
-      appendChat(t, m.role === "user" ? `you> ${m.content}` : `tenjin> ${m.content}`, m.role === "user" ? COLORS.user : COLORS.bot);
+      appendChat(t, m.role === "user" ? `${PROMPT}${m.content}` : `${m.content}`, m.role === "user" ? COLORS.user : COLORS.bot);
     }
     appendChat(t, dim(label), COLORS.dim);
     return t;
@@ -135,12 +138,15 @@ export async function startTui(opts: ReplOptions): Promise<void> {
   let sideData: string[] = [];
   // Cursor row within the current side panel (↑/↓ navigation, Enter to open).
   let sideCursor = 0;
+  // GrokBuild-style: the side panel is an overlay, hidden by default. Tab opens
+  // it (then cycles the panel), Esc closes it — the conversation stays fullscreen.
+  let sideOpen = false;
 
   const editor = new LineEditor();
   const scr = new Screen(process.stdout.rows || 24, process.stdout.columns || 80);
 
   // ---------- helpers ----------
-  const chatW = () => scr.cols - Math.floor(scr.cols * 0.3) - 1;
+  const chatW = () => (sideOpen ? scr.cols - Math.floor(scr.cols * 0.3) - 1 : scr.cols - 1);
   function wrap(text: string, width: number): string[] {
     const lines: string[] = [];
     for (const raw of text.split("\n")) {
@@ -286,7 +292,6 @@ export async function startTui(opts: ReplOptions): Promise<void> {
     const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
     return `ctx ${bar} ${pct}% ${k(used)}/${k(window)}`;
   }
-  const ktok = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
   // ---------- approval handling ----------
   const pendingApprovals: Array<{ resolve: (d: ApproveDecision) => void; summary: string }> = [];
@@ -310,8 +315,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
   async function runTurn(t: SessionTab, text: string): Promise<void> {
     t.messages.push({ role: "user", content: text });
     logEvent(t.logger, { t: "message", role: "user", content: text, ts: new Date().toISOString() } as SessionEvent);
-    appendChat(t, `you> ${text}`, COLORS.user);
-    appendChat(t, "tenjin> ", COLORS.bot);
+    appendChat(t, `${PROMPT}${text}`, COLORS.user);
 
     t.controller = new AbortController();
     t.turnActive = true;
@@ -353,7 +357,11 @@ export async function startTui(opts: ReplOptions): Promise<void> {
         onTextDelta: (d) => {
           buf += d;
         },
-        onEvent: (e) => forwardEvent(e, t.logger, budget),
+        onEvent: (e) => {
+          forwardEvent(e, t.logger, budget);
+          // GrokBuild-style tool hints: show a ◆ line for each tool call.
+          if (e.t === "tool_call") appendChat(t, dim(`  ◆ ${e.name}`), COLORS.dim);
+        },
         signal: t.controller.signal,
         contextGuard: resolveContextGuard(t.active.model, opts.config.context),
       });
@@ -365,7 +373,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
       t.tokens.out += result.usage.outputTokens ?? 0;
       appendChat(
         t,
-        dim(`  [${result.model} · in ${result.usage.inputTokens} out ${result.usage.outputTokens} · ${formatUSD(result.costUSD)} turn · ${formatUSD(budget.spentUSD)} total]`),
+        dim(`  ◆ [${result.model} · in ${result.usage.inputTokens} out ${result.usage.outputTokens} · ${formatUSD(result.costUSD)} turn · ${formatUSD(budget.spentUSD)} total]`),
         COLORS.dim,
       );
     } catch (e) {
@@ -564,49 +572,54 @@ export async function startTui(opts: ReplOptions): Promise<void> {
   function render(): void {
     scr.clear();
     const t = tab();
-    // tab bar (row 0): one entry per open session, active highlighted
-    const bar = tabs.map((tabItem, i) => {
-      const label = tabItem.id.slice(-4);
-      const activeMark = i === activeIdx ? "●" : " ";
-      return `${activeMark}${label}`;
-    }).join("  ");
-    scr.write(0, 0, ` Tabs: ${bar}  `, COLORS.header);
-    // header (row 1)
-    scr.write(1, 0, ` Tenjin TUI v${VERSION}  ·  ${opts.bot ?? "solo"}  ·  ${t.active.provider}:${t.active.model}  ·  #${t.id}`, COLORS.header);
-    // side panel
-    const sw = Math.floor(scr.cols * 0.3);
-    const sideLeft = scr.cols - sw;
-    sideData =
-      sideTab === "sessions" ? loadSessions()
-      : sideTab === "bots" ? loadBots()
-      : sideTab === "spend" ? loadSpend()
-      : sideTab === "memory" ? loadMemory()
-      : loadApprovals();
-    scr.write(2, sideLeft, ` ${sideTab} `, COLORS.header);
-    const sideRows = scr.rows - 6;
-    if (sideCursor >= sideData.length) sideCursor = Math.max(0, sideData.length - 1);
-    sideData.slice(0, sideRows).forEach((l, i) => {
-      const selected = sideTab === "sessions" && i === sideCursor;
-      const st = selected ? { ...COLORS.bot, reverse: true } : COLORS.dim;
-      scr.write(3 + i, sideLeft, (selected ? "▸ " : "  ") + l.slice(0, sw - 3), st);
-    });
-    // chat pane (rows 2..R-3)
-    const chatRows = scr.rows - 6;
-    const cw = chatW();
-    const start = Math.max(0, t.chat.length - chatRows - t.chatScroll);
-    for (let i = 0; i < chatRows; i++) {
-      const line = t.chat[start + i];
-      if (line) scr.write(2 + i, 0, line.text.slice(0, cw), line.st);
-    }
-    // input line
-    scr.write(scr.rows - 2, 0, `you> ${editor.text}`, COLORS.input);
-    // status bar
     const win = contextWindowTokens(t.active.model, opts.config.context);
     const used = estimateTokens(t.messages);
     const pct = win > 0 ? Math.min(100, Math.round((used / win) * 100)) : 0;
-    const status = ` ${t.turnActive ? "…thinking" : "ready"} · ${formatUSD(budget.spentUSD)}${opts.config.budgetUSD > 0 ? `/${formatUSD(opts.config.budgetUSD)}` : ""} · in ${ktok(t.tokens.in)} out ${ktok(t.tokens.out)} · ${pct}% ctx · ${pendingApprovals.length} appr · Tab:${sideTab}`;
-    scr.write(scr.rows - 1, 0, status.slice(0, scr.cols), COLORS.status);
-    scr.render(stdout, { row: scr.rows - 2, col: Math.min(5 + editor.cursor, scr.cols - 1) });
+    // Row 0 — GrokBuild-style thin status line: identity · tabs · budget.
+    const tabsBar = tabs.map((ti, i) => (i === activeIdx ? "●" : "·") + ti.id.slice(-4)).join(" ");
+    const left = ` ◆ ${opts.bot ?? "solo"} · ${t.active.provider}:${t.active.model} · #${t.id.slice(-4)}${t.turnActive ? " ◆thinking" : ""}`;
+    const right = `${pct}% ctx · ${formatUSD(budget.spentUSD)}${opts.config.budgetUSD > 0 ? `/${formatUSD(opts.config.budgetUSD)}` : ""}${pendingApprovals.length > 0 ? ` · ${pendingApprovals.length} appr` : ""}`;
+    scr.write(0, 0, ` ${left}   [${tabsBar}]   ${right}`.slice(0, scr.cols), COLORS.header);
+
+    // Side panel — GrokBuild-style overlay (right 30%), only when toggled open.
+    let sideLeft = scr.cols;
+    if (sideOpen) {
+      const sw = Math.floor(scr.cols * 0.3);
+      sideLeft = scr.cols - sw;
+      sideData =
+        sideTab === "sessions" ? loadSessions()
+        : sideTab === "bots" ? loadBots()
+        : sideTab === "spend" ? loadSpend()
+        : sideTab === "memory" ? loadMemory()
+        : loadApprovals();
+      scr.write(1, sideLeft, ` ${sideTab} `, COLORS.header);
+      const sideRows = scr.rows - 4;
+      if (sideCursor >= sideData.length) sideCursor = Math.max(0, sideData.length - 1);
+      sideData.slice(0, sideRows).forEach((l, i) => {
+        const selected = sideTab === "sessions" && i === sideCursor;
+        const st = selected ? { ...COLORS.bot, reverse: true } : COLORS.dim;
+        scr.write(2 + i, sideLeft, (selected ? "▸ " : "  ") + l.slice(0, sw - 3), st);
+      });
+    }
+
+    // Chat pane — full width, or left of the overlay when open.
+    const chatRows = scr.rows - 3;
+    const cw = sideOpen ? sideLeft - 1 : scr.cols - 1;
+    const start = Math.max(0, t.chat.length - chatRows - t.chatScroll);
+    for (let i = 0; i < chatRows; i++) {
+      const line = t.chat[start + i];
+      if (line) scr.write(1 + i, 0, line.text.slice(0, cw), line.st);
+    }
+
+    // Prompt + input (row R-2), hint line (row R-1) — GrokBuild-style.
+    scr.write(scr.rows - 2, 0, `${PROMPT}${editor.text}`, COLORS.input);
+    scr.write(
+      scr.rows - 1,
+      0,
+      ` Enter:run │ Ctrl-N/P:tabs │ Tab:panel │ Esc:clear │ /exit:quit │ Ctrl-C:interrupt`.slice(0, scr.cols),
+      COLORS.status,
+    );
+    scr.render(stdout, { row: scr.rows - 2, col: Math.min(2 + editor.cursor, scr.cols - 1) });
   }
 
   // ---------- input loop ----------
@@ -654,12 +667,12 @@ export async function startTui(opts: ReplOptions): Promise<void> {
           editor.right();
           break;
         case "up":
-          if (sideTab === "sessions" && sideData.length > 0) {
+          if (sideOpen && sideTab === "sessions" && sideData.length > 0) {
             sideCursor = Math.max(0, sideCursor - 1);
           }
           break;
         case "down":
-          if (sideTab === "sessions" && sideData.length > 0) {
+          if (sideOpen && sideTab === "sessions" && sideData.length > 0) {
             sideCursor = Math.min(sideData.length - 1, sideCursor + 1);
           }
           break;
@@ -679,23 +692,34 @@ export async function startTui(opts: ReplOptions): Promise<void> {
           switchTab(-1);
           continue;
         case "mouse":
-          if (k.pressed && k.button === 0) {
+          if (sideOpen && k.pressed && k.button === 0) {
             // Clicking a row in the sessions side panel opens that session.
             const sw = Math.floor(scr.cols * 0.3);
             const sideLeft = scr.cols - sw;
-            if (sideTab === "sessions" && k.x >= sideLeft && k.y >= 3 && k.y <= scr.rows - 4) {
-              const idx = k.y - 3;
+            if (sideTab === "sessions" && k.x >= sideLeft && k.y >= 2 && k.y <= scr.rows - 3) {
+              const idx = k.y - 2;
               sideCursor = idx;
               openSessionAt(idx);
               render();
             }
           }
           break;
-        case "tab": {
-          const i = SIDE_TABS.indexOf(sideTab);
-          sideTab = SIDE_TABS[(i + 1) % SIDE_TABS.length]!;
+        case "tab":
+          // GrokBuild-style: Tab opens the (hidden) side panel; when it is open,
+          // Tab cycles sessions→bots→spend→approvals→memory. Esc closes it.
+          if (sideOpen) {
+            const i = SIDE_TABS.indexOf(sideTab);
+            sideTab = SIDE_TABS[(i + 1) % SIDE_TABS.length]!;
+          } else {
+            sideOpen = true;
+          }
           break;
-        }
+        case "esc":
+          // Esc: close the side panel and clear the input (GrokBuild-style).
+          if (sideOpen) sideOpen = false;
+          editor.text = "";
+          editor.cursor = 0;
+          break;
         case "pgup":
           tab().chatScroll = Math.min(tab().chat.length, tab().chatScroll + 5);
           break;
@@ -704,8 +728,8 @@ export async function startTui(opts: ReplOptions): Promise<void> {
           break;
         case "enter": {
           const line = editor.submit();
-          // Empty input in the sessions panel → open the highlighted session.
-          if (line === "" && sideTab === "sessions" && sideData.length > 0) {
+          // Empty input in the (open) sessions panel → open the highlighted session.
+          if (line === "" && sideOpen && sideTab === "sessions" && sideData.length > 0) {
             openSessionAt(sideCursor);
             render();
             break;
@@ -779,7 +803,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
     init.messages = [...(opts.initialMessages ?? [])];
     init.chat = [];
     for (const m of init.messages) {
-      appendChat(init, m.role === "user" ? `you> ${m.content}` : `tenjin> ${m.content}`, m.role === "user" ? COLORS.user : COLORS.bot);
+      appendChat(init, m.role === "user" ? `${PROMPT}${m.content}` : `${m.content}`, m.role === "user" ? COLORS.user : COLORS.bot);
     }
     // Persist a fresh session_start for a brand-new log (not a resumed/forked one).
     if (init.logger && init.logger.events().find((e) => e.t === "session_start") === undefined) {

@@ -196,3 +196,12 @@ describe("extractSessionIdFromLine (sessions panel id parsing)", () => {
     expect(extractSessionIdFromLine("   ")).toBeUndefined();
   });
 });
+
+describe("decodeKey escape (GrokBuild-style Esc:clear)", () => {
+  test("bare ESC decodes to an esc event, not unknown", () => {
+    expect(decodeKey(new Uint8Array([0x1b]))).toEqual([{ type: "esc" }]);
+  });
+  test("CSI sequences are not conflated with bare ESC", () => {
+    expect(decodeKey(new Uint8Array([0x1b, 0x5b, 0x41]))).toEqual([{ type: "up" }]);
+  });
+});

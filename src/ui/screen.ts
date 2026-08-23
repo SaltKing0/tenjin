@@ -263,6 +263,10 @@ export function decodeKey(buf: Uint8Array): KeyEvent[] {
         out.push({ type: "unknown", bytes: seq });
       }
       i = j;
+    } else if (b === 0x1b) {
+      // Bare ESC (not a CSI/SS3 sequence) — e.g. GrokBuild-style "Esc:clear".
+      out.push({ type: "esc" });
+      i++;
     } else if (i + 1 < buf.length && buf[i + 1] === 0x4f) {
       out.push({ type: "home" }); // SS3 H / F
       i += 2;
