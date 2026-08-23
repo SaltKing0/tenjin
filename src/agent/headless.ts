@@ -18,6 +18,7 @@ import { editTool } from "../tools/edit";
 import { applyPatchTool } from "../tools/apply-patch";
 import { bashTool } from "../tools/bash";
 import { webFetchTool } from "../tools/web-fetch";
+import { browserTool } from "../tools/browser";
 import type { ToolDef } from "../tools/registry";
 import { Redactor } from "../security/redact";
 import { readFacts, createRecordLearningTool, createCoreMemoryTool } from "../tools/memory";
@@ -166,9 +167,9 @@ export function toolsForPolicy(policy: ToolPolicy, skill?: SkillDirs): ToolDef[]
   }
   switch (policy) {
     case "read-only":
-      return [readTool, globTool, grepTool, webFetchTool, ...skillTools];
+      return [readTool, globTool, grepTool, webFetchTool, browserTool, ...skillTools];
     case "full":
-      return [readTool, globTool, grepTool, writeTool, editTool, applyPatchTool, bashTool, webFetchTool, ...skillTools];
+      return [readTool, globTool, grepTool, writeTool, editTool, applyPatchTool, bashTool, webFetchTool, browserTool, ...skillTools];
     case "none":
       return [];
   }
