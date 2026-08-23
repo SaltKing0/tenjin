@@ -9,6 +9,8 @@ import {
   type VectorStore,
 } from "../memory/vector-store";
 import { recordLearning } from "../memory/learnings";
+import { checkForContradictions } from "../memory/contradiction";
+import type { Provider } from "../provider/types";
 import {
   CORE_BLOCK_NAMES,
   editCoreBlock,
@@ -60,6 +62,18 @@ export function createRecordLearningTool(deps: {
   sessionId?: string;
   /** Entries kept per learnings.md file (#204); defaults to DEFAULT_MAX_LEARNINGS. */
   maxEntries?: number;
+  /** Opt-in contradiction check (IdeaGraph-derived): when enabled and a
+   *  provider is present, judge the recorded learning against the ACTIVE facts
+   *  in `memoryDirPath` and append a warning to the tool output when it
+   *  contradicts one. Reuses the consolidation helper/cheap model. Off by
+   *  default; never blocks the write and never breaks on judge failure. */
+  contradictionCheck?: {
+    enabled?: boolean;
+    provider?: Provider;
+    model?: string;
+    maxChecks?: number;
+    audit?: (kind: string, detail: string) => void;
+  };
 }): ToolDef {
   return {
     name: "record_learning",
@@ -86,7 +100,31 @@ export function createRecordLearningTool(deps: {
         deps.sessionId ?? "manual",
         deps.maxEntries,
       );
-      return `Recorded learning${deduped ? " (replaced a duplicate)" : ""}: ${learning}`;
+
+      // Opt-in contradiction check: surface (not block) a conflict so the agent
+      // can correct or supersede it, rather than recording it silently.
+      let warning = "";
+      const cc = deps.contradictionCheck;
+      if (cc?.enabled && cc.provider && cc.model) {
+        try {
+          const records = await checkForContradictions({
+            provider: cc.provider,
+            model: cc.model,
+            memoryDir: deps.memoryDirPath,
+            candidates: [learning],
+            candidateIdPrefix: "tool:record_learning",
+            maxChecks: cc.maxChecks,
+            audit: cc.audit,
+          });
+          if (records.length > 0) {
+            const r = records[0]!;
+            warning = `\nWARNING: '${learning}' contradicts active fact '${r.targetFactText}' (${r.reason || "conflict"}) — consider superseding it.`;
+          }
+        } catch {
+          /* best-effort: a judge failure never breaks the tool */
+        }
+      }
+      return `Recorded learning${deduped ? " (replaced a duplicate)" : ""}: ${learning}${warning}`;
     },
   };
 }

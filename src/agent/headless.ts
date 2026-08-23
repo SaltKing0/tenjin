@@ -234,12 +234,24 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
   // Tier-2 memory (#99): expose record_learning when a memory dir is in scope,
   // attributing the learning to the just-created session log id when present.
   if (opts.memoryDir) {
+    const cc = opts.consolidation?.contradictionCheck;
+    const helper = opts.consolidation?.helper;
     tools.push(
       createRecordLearningTool({
         memoryDirPath: opts.memoryDir,
         projectPath: opts.cwd,
         sessionId: logger?.id,
         maxEntries: opts.maxLearnings,
+        // Opt-in contradiction check: reuses the consolidation config gate and
+        // the helper/cheap model. Only active when both are present.
+        contradictionCheck: cc?.enabled
+          ? {
+              enabled: true,
+              provider: helper?.provider,
+              model: cc.model ?? helper?.model,
+              maxChecks: cc.maxChecks,
+            }
+          : undefined,
       }),
       createCoreMemoryTool({ memoryDirPath: opts.memoryDir }),
     );

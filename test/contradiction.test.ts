@@ -12,6 +12,7 @@ import {
   type ContradictionRecord,
 } from "../src/memory/contradiction";
 import { writeFact, type FactInput } from "../src/memory/facts";
+import { createRecordLearningTool } from "../src/tools/memory";
 import { runConsolidation } from "../src/memory/consolidate";
 import { SessionLog } from "../src/session/log";
 import type { ChatRequest, ChatResponse, Provider } from "../src/provider/types";
@@ -245,8 +246,54 @@ describe("checkForContradictions", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Integration: runConsolidation contradiction step (opt-in)
+// Integration: record_learning tool (opt-in warning, never blocks)
 // ---------------------------------------------------------------------------
+describe("record_learning contradiction warning", () => {
+  test("appends a WARNING when the recorded learning contradicts an active fact", async () => {
+    writeFact(home, factBase({ sourceId: "doc-a", text: "the retry budget is 3" }));
+    const p = mockProvider('{"contradicts": true, "reason": "budget differs"}');
+    const tool = createRecordLearningTool({
+      memoryDirPath: home,
+      projectPath: "/proj",
+      contradictionCheck: { enabled: true, provider: p, model: "m" },
+    });
+    const out = await tool.handler({ learning: "the retry budget is 5" }, { cwd: home } as never);
+    expect(out).toContain("Recorded learning");
+    expect(out).toContain("WARNING");
+    expect(out).toContain("the retry budget is 3");
+    // the write still happened AND the contradiction was persisted
+    expect(readContradictions(home)).toHaveLength(1);
+  });
+
+  test("no warning when disabled or provider absent (normal output)", async () => {
+    writeFact(home, factBase({ sourceId: "doc-a", text: "the retry budget is 3" }));
+    const tool = createRecordLearningTool({ memoryDirPath: home, projectPath: "/proj" });
+    const out = await tool.handler({ learning: "the retry budget is 5" }, { cwd: home } as never);
+    expect(out).toContain("Recorded learning");
+    expect(out).not.toContain("WARNING");
+    expect(readContradictions(home)).toHaveLength(0);
+  });
+
+  test("never throws on judge failure (best-effort)", async () => {
+    writeFact(home, factBase({ sourceId: "doc-a", text: "the retry budget is 3" }));
+    const p = {
+      name: "mock",
+      requests: [] as ChatRequest[],
+      async chat(): Promise<ChatResponse> {
+        throw new Error("boom");
+      },
+    };
+    const tool = createRecordLearningTool({
+      memoryDirPath: home,
+      projectPath: "/proj",
+      contradictionCheck: { enabled: true, provider: p, model: "m" },
+    });
+    const out = await tool.handler({ learning: "the retry budget is 5" }, { cwd: home } as never);
+    expect(out).toContain("Recorded learning");
+    expect(out).not.toContain("WARNING");
+  });
+});
+
 describe("runConsolidation contradiction step", () => {
   function seedSession(text = "fix the parser"): SessionLog {
     const log = SessionLog.create(home);
