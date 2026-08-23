@@ -3,6 +3,7 @@ import type { SessionLog } from "../session/log";
 import { renderTrajectory } from "../session/trajectory";
 import { readSummary, writeSummary, summaryPath } from "./summaries";
 import { readLearnings, recordLearning } from "./learnings";
+import { checkForContradictions } from "./contradiction";
 
 /**
  * End-of-session consolidation pass (Roadmap §12 B9-3).
@@ -80,10 +81,29 @@ export interface ConsolidationInput {
   sessionLog?: SessionLog | null;
   /** Log the pass (and any graceful skips) to the audit trail. */
   audit?: (kind: string, detail: string) => void;
+  /** Opt-in contradiction check: after writing learnings, judge each NEWLY
+   *  added candidate against the ACTIVE facts in `memoryDir` and record any
+   *  contradiction (see memory/contradiction.ts). Off by default. */
+  contradictionCheck?: {
+    enabled?: boolean;
+    /** Cap on total judge calls (default 4). */
+    maxChecks?: number;
+    /** Dedicated judge model; defaults to `model` (the consolidation helper). */
+    model?: string;
+  };
 }
 
 export type ConsolidationResult =
-  | { ran: true; reason: "ran"; summaryWritten: boolean; learningsAdded: number; learningsDeduped: number; message: string }
+  | {
+      ran: true;
+      reason: "ran";
+      summaryWritten: boolean;
+      learningsAdded: number;
+      learningsDeduped: number;
+      /** Number of contradictions recorded by the (opt-in) check. */
+      contradictions: number;
+      message: string;
+    }
   | { ran: false; reason: "failed"; message: string };
 
 interface ConsolidationPayload {
@@ -176,14 +196,41 @@ export async function runConsolidation(input: ConsolidationInput): Promise<Conso
 
   let learningsAdded = 0;
   let learningsDeduped = 0;
+  const addedFacts: string[] = [];
   for (const fact of payload.learnings ?? []) {
     if (!fact || !fact.trim()) continue;
     const res = recordLearning(input.memoryDir, input.projectPath, fact, input.sessionKey);
     if (res.deduped) learningsDeduped++;
-    else learningsAdded++;
+    else {
+      learningsAdded++;
+      addedFacts.push(fact.trim());
+    }
   }
 
-  const message = `summary=${summaryWritten} learnings+${learningsAdded} deduped=${learningsDeduped}`;
+  // Opt-in contradiction check (IdeaGraph-derived): judge each newly-added
+  // learning against the ACTIVE facts and record any contradiction. Bounded
+  // by maxChecks and fully graceful — a judge/provider failure never aborts
+  // the pass and never blocks the session.
+  let contradictions = 0;
+  if (input.contradictionCheck?.enabled && addedFacts.length > 0) {
+    try {
+      const records = await checkForContradictions({
+        provider: input.provider,
+        model: input.contradictionCheck.model ?? input.model,
+        maxTokens: Math.min(input.maxTokens, 256),
+        memoryDir: input.memoryDir,
+        candidates: addedFacts,
+        candidateIdPrefix: `session:${input.sessionKey}`,
+        maxChecks: input.contradictionCheck.maxChecks,
+        audit: input.audit,
+      });
+      contradictions = records.length;
+    } catch {
+      /* swallow: contradiction checking is best-effort */
+    }
+  }
+
+  const message = `summary=${summaryWritten} learnings+${learningsAdded} deduped=${learningsDeduped} contradictions=${contradictions}`;
   input.audit?.("consolidation", `consolidation ran: ${message}`);
   return {
     ran: true,
@@ -191,6 +238,7 @@ export async function runConsolidation(input: ConsolidationInput): Promise<Conso
     summaryWritten,
     learningsAdded,
     learningsDeduped,
+    contradictions,
     message,
   };
 }

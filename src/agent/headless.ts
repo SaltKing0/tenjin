@@ -111,6 +111,13 @@ export interface HeadlessOptions {
     helper?: { provider: Provider; model: string; maxTokens?: number };
     memoryDir?: string;
     projectPath?: string;
+    /** Opt-in contradiction check on newly-distilled learnings (see
+     *  memory/contradiction.ts). Off by default. */
+    contradictionCheck?: {
+      enabled?: boolean;
+      maxChecks?: number;
+      model?: string;
+    };
   };
   /** B13-6 checkpoints (#369): shadow-git snapshots at prompt/edit boundaries.
    *  When set (enabled !== false), a `checkpoint` tool is exposed for
