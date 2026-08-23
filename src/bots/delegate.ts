@@ -38,6 +38,10 @@ export interface DelegationContract {
   treeIterations?: number;
   /** Quality-gate review (B): a reviewer bot's verdict on the worker's output. */
   review?: { verdict: "approved" | "needs_work"; reason?: string; attempts: number };
+  /** issue_bot (#450): isolated git worktree the worker operated in. */
+  worktreePath?: string;
+  /** issue_bot (#450): fresh branch created from `main` for the work. */
+  branch?: string;
 }
 
 function sanitizeFilename(s: string): string {
@@ -66,7 +70,7 @@ export function writeDelegationSidecar(
 
 /** Bound the inline summary: keep the full framed text when short, else a
  * truncated head with a pointer to the sidecar. */
-function boundedSummary(framed: string): string {
+export function boundedSummary(framed: string): string {
   if (framed.length <= CONTRACT_SUMMARY_MAX_CHARS) return framed;
   return `${framed.slice(0, CONTRACT_SUMMARY_MAX_CHARS)}\n…[truncated — full detail in sidecar]`;
 }
@@ -81,6 +85,8 @@ export function renderDelegationContract(c: DelegationContract): string {
   ];
   if (c.treeIterations !== undefined) lines.push(`tree_iterations: ${c.treeIterations}`);
   if (c.sidecarPath) lines.push(`sidecar: ${c.sidecarPath}`);
+  if (c.worktreePath) lines.push(`worktree: ${c.worktreePath}`);
+  if (c.branch) lines.push(`branch: ${c.branch}`);
   lines.push(`diff_summary: ${c.diffSummary ?? "n/a"}`);
   if (c.review) {
     lines.push(`review: ${c.review.verdict}${c.review.reason ? ` — ${c.review.reason}` : ""} (after ${c.review.attempts} attempt(s))`);
