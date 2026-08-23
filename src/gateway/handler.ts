@@ -213,7 +213,7 @@ export function createMessageHandler(deps: HandlerDeps) {
           profile.config.security?.policy,
         ),
         denyTools: profile.config.security?.denyTools,
-        agentsMd: loadAgentsMd(deps.cwd),
+        agentsMd: loadAgentsMd(deps.cwd, deps.home),
         home: deps.home,
         memoryDir: profile.memoryDir,
         sessionLogDir: profile.sessionsDir,

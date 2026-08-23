@@ -4,7 +4,7 @@ import type { ChatMessage } from "../provider/types";
 
 export interface SoulSource {
   text: string;
-  source: "project" | "global" | "default";
+  source: "project" | "workspace" | "global" | "default";
 }
 
 const DEFAULT_SOUL = `You are Tenjin — a precise, pragmatic coding agent.
@@ -19,6 +19,12 @@ export function loadSoul(home: string, projectDir: string): SoulSource {
   if (existsSync(projectPath)) {
     return { text: readFileSync(projectPath, "utf8").trim(), source: "project" };
   }
+  // OpenClaw-style workspace convention (#460): ~/.tenjin/workspace/SOUL.md is
+  // the canonical home-level soul, preferred over the legacy ~/SOUL.md.
+  const workspacePath = join(home, "workspace", "SOUL.md");
+  if (existsSync(workspacePath)) {
+    return { text: readFileSync(workspacePath, "utf8").trim(), source: "workspace" };
+  }
   const globalPath = join(home, "SOUL.md");
   if (existsSync(globalPath)) {
     return { text: readFileSync(globalPath, "utf8").trim(), source: "global" };
@@ -26,11 +32,21 @@ export function loadSoul(home: string, projectDir: string): SoulSource {
   return { text: DEFAULT_SOUL, source: "default" };
 }
 
-export function loadAgentsMd(projectDir: string): string | null {
-  const path = join(projectDir, "AGENTS.md");
-  if (!existsSync(path)) return null;
-  const text = readFileSync(path, "utf8").trim();
-  return text || null;
+export function loadAgentsMd(projectDir: string, home?: string): string | null {
+  const projectPath = join(projectDir, "AGENTS.md");
+  if (existsSync(projectPath)) {
+    const text = readFileSync(projectPath, "utf8").trim();
+    if (text) return text;
+  }
+  // Workspace fallback (#460): ~/.tenjin/workspace/AGENTS.md applies globally.
+  if (home) {
+    const wsPath = join(home, "workspace", "AGENTS.md");
+    if (existsSync(wsPath)) {
+      const text = readFileSync(wsPath, "utf8").trim();
+      if (text) return text;
+    }
+  }
+  return null;
 }
 
 export function buildSystemPrompt(inputs: {
