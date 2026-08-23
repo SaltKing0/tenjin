@@ -241,6 +241,22 @@ export class HeadlessBrowser {
     };
   }
 
+  /** Click the first element matching `selector`. No-op if none found. */
+  async click(selector: string): Promise<void> {
+    await this.evaluate(
+      `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) el.click(); return !!el; })()`,
+    );
+    await sleep(300);
+  }
+
+  /** Set a text field matching `selector` and dispatch input/change events. */
+  async type(selector: string, text: string): Promise<void> {
+    await this.evaluate(
+      `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.focus(); el.value = ${JSON.stringify(text)}; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); return true; })()`,
+    );
+    await sleep(200);
+  }
+
   /** Kill Chrome and remove the temp profile. Idempotent. */
   close(): void {
     try {
@@ -265,25 +281,41 @@ function wrapUntrusted(s: string): string {
   return `<untrusted_data>\n${s}\n</untrusted_data>\n\n${DATA_HINT}`;
 }
 
-/** `browser` tool: navigate to a URL and extract title/text/links. */
+/** `browser` tool: drive a real headless browser (navigate / click / type). */
 export const browserTool: ToolDef = {
   name: "browser",
   group: "read",
   description:
-    "Launch a real headless browser, navigate to an http(s) URL, and return the page title, readable text and links. Use when a page needs JavaScript or interaction that plain web_fetch cannot handle (SPAs, login-gated content, dynamic pages).",
+    "Drive a real headless browser. action=navigate opens a URL and returns title/text/links; action=click or action=type open the URL, interact with an element (CSS selector), then return the resulting page. Use when a page needs JavaScript or interaction that plain web_fetch cannot handle (SPAs, login-gated content, dynamic pages, forms).",
   inputSchema: {
     type: "object",
     properties: {
-      action: { type: "string", enum: ["navigate"], description: "Only action supported: navigate" },
+      action: {
+        type: "string",
+        enum: ["navigate", "click", "type"],
+        description: "navigate = open and extract; click = open, click a selector; type = open, fill a selector",
+      },
       url: { type: "string", description: "Absolute http(s) URL to open" },
+      selector: { type: "string", description: "CSS selector to click or fill (required for click/type)" },
+      text: { type: "string", description: "Text to type into the field (required for type)" },
     },
-    required: ["action"],
+    required: ["action", "url"],
   },
   async handler(input, ctx) {
     const action = String(input.action ?? "navigate");
     const raw = String(input.url ?? "").trim();
-    if (action !== "navigate") throw new Error(`browser: unsupported action "${action}"`);
+    const selector = String(input.selector ?? "").trim();
+    const text = String(input.text ?? "");
+    if (action !== "navigate" && action !== "click" && action !== "type") {
+      throw new Error(`browser: unsupported action "${action}"`);
+    }
     if (!raw) throw new Error("browser: url is required");
+    if ((action === "click" || action === "type") && !selector) {
+      throw new Error(`browser: selector is required for action "${action}"`);
+    }
+    if (action === "type" && !text) {
+      throw new Error("browser: text is required for action \"type\"");
+    }
     const parsed = new URL(raw);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       throw new Error(`browser: unsupported scheme "${parsed.protocol}" — only http(s)`);
@@ -296,8 +328,11 @@ export const browserTool: ToolDef = {
     const browser = await HeadlessBrowser.launch();
     try {
       await browser.navigate(raw);
+      if (action === "click") await browser.click(selector);
+      else if (action === "type") await browser.type(selector, text);
       const ex = await browser.extract();
       const parts = [`Title: ${ex.title}`, `URL: ${ex.url}`];
+      if (action !== "navigate") parts.push(`Action: ${action}${action === "click" ? ` ${selector}` : ""}${action === "type" ? ` ${selector} = "${text}"` : ""}`);
       if (ex.links.length) parts.push(`Links:\n${ex.links.join("\n")}`);
       parts.push(`Text:\n${ex.text || "(no readable text)"}`);
       return wrapUntrusted(parts.join("\n\n"));

@@ -38,14 +38,37 @@ describe("readActivePort (DevToolsActivePort parsing)", () => {
 });
 
 describe("browser tool", () => {
-  test("schema exposes action+url", () => {
+  test("schema exposes action+url and the interaction params", () => {
     expect(browserTool.name).toBe("browser");
     expect(browserTool.group).toBe("read");
     const props = browserTool.inputSchema.properties as Record<string, unknown>;
     expect(props.action).toBeTruthy();
     expect(props.url).toBeTruthy();
+    expect(props.selector).toBeTruthy();
+    expect(props.text).toBeTruthy();
+    const action = props.action as { enum?: string[] };
+    expect(action.enum).toEqual(["navigate", "click", "type"]);
   });
 });
+
+test.skipIf(!isBrowserAvailable())(
+  "integration: click navigates the page (gated)",
+  async () => {
+    const b = await HeadlessBrowser.launch();
+    try {
+      await b.navigate("https://example.com");
+      const before = await b.extract();
+      expect(before.title).toContain("Example");
+      await b.click("a");
+      const after = await b.extract();
+      expect(after.url).not.toBe(before.url);
+      expect(after.url).toContain("iana.org");
+    } finally {
+      b.close();
+    }
+  },
+  30_000,
+);
 
 test.skipIf(!isBrowserAvailable())(
   "integration: headless Chrome launches, navigates and extracts (gated)",
