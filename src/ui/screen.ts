@@ -67,6 +67,8 @@ export class Screen {
   rows: number;
   cols: number;
   private buf: Cell[][];
+  /** Last rendered frame — cells are only repainted when they differ (#467). */
+  private prev: Cell[][] | null = null;
 
   constructor(rows: number, cols: number) {
     this.rows = rows;
@@ -78,6 +80,7 @@ export class Screen {
 
   resize(rows: number, cols: number): void {
     if (rows === this.rows && cols === this.cols) return;
+    this.prev = null; // dimensions changed — force a full repaint
     this.rows = rows;
     this.cols = cols;
     const next: Cell[][] = Array.from({ length: rows }, () =>
@@ -128,27 +131,38 @@ export class Screen {
   }
 
   /**
-   * Repaint the whole buffer to the writer: hide the cursor, erase the screen,
-   * then write each line (per-cell styled) and return the cursor to a known
-   * position. Full repaint is simple + correct; a diff renderer can follow.
+   * Repaint the buffer to the writer, emitting only the rows whose cells
+   * changed since the last frame (no full-screen clear → no flicker). The
+   * first render and any resize repaint everything.
    */
   render(w: Writer, cursor?: { row: number; col: number }): void {
     w.write(HIDE_CURSOR);
-    w.write("\x1b[2J\x1b[H"); // clear screen, home cursor
+    const prev = this.prev ?? this.seedPrev();
     for (let r = 0; r < this.rows; r++) {
-      w.write(moveTo(r, 0));
       const row = this.buf[r]!;
+      const prow = prev[r]!;
+      let changed = false;
+      for (let c = 0; c < this.cols; c++) {
+        const a = row[c]!;
+        const b = prow[c]!;
+        if (a.ch !== b.ch || !sameStyle(a.st, b.st)) {
+          changed = true;
+          break;
+        }
+      }
+      if (!changed) continue;
+      w.write(moveTo(r, 0));
       let last: Style | null = null;
       for (let c = 0; c < this.cols; c++) {
         const cell = row[c]!;
-        const st = cell.st;
-        if (!last || !sameStyle(last, st)) {
-          w.write(RESET + styleAnsi(st));
-          last = st;
+        if (!last || !sameStyle(last, cell.st)) {
+          w.write(RESET + styleAnsi(cell.st));
+          last = cell.st;
         }
         w.write(cell.ch);
       }
       w.write(RESET + ERASE_LINE);
+      for (let c = 0; c < this.cols; c++) prow[c] = { ch: row[c]!.ch, st: { ...row[c]!.st } };
     }
     if (cursor) {
       w.write(moveTo(cursor.row, cursor.col));
@@ -156,6 +170,14 @@ export class Screen {
       w.write(moveTo(this.rows - 1, this.cols - 1));
     }
     w.write(SHOW_CURSOR);
+  }
+
+  /** Initialise the diff baseline to blank cells (forces a full first paint). */
+  private seedPrev(): Cell[][] {
+    this.prev = Array.from({ length: this.rows }, () =>
+      Array.from({ length: this.cols }, () => ({ ch: "", st: NO_STYLE })),
+    );
+    return this.prev;
   }
 }
 

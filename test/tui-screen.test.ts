@@ -9,7 +9,6 @@ import {
   SHOW_CURSOR,
   type Writer,
 } from "../src/ui/screen.js";
-
 class Buf implements Writer {
   s = "";
   write(x: string) {
@@ -41,14 +40,14 @@ describe("Screen", () => {
     expect(s.rowText(0).length).toBe(10);
   });
 
-  test("render emits clear + cursor show/hide + content", () => {
+  test("render emits cursor show/hide and paints content (no full clear)", () => {
     const s = new Screen(2, 5);
     s.write(0, 0, "ab");
     s.write(1, 0, "cd", { fg: 2 });
     const b = new Buf();
     s.render(b, { row: 1, col: 1 });
     expect(b.s).toContain(HIDE_CURSOR);
-    expect(b.s).toContain("\x1b[2J");
+    expect(b.s).not.toContain("\x1b[2J"); // diff renderer repaints rows, no clear
     expect(b.s).toContain(SHOW_CURSOR);
     expect(b.s).toContain("ab");
     expect(b.s).toContain("\x1b[32m"); // green "cd"
@@ -106,5 +105,61 @@ describe("LineEditor", () => {
     ed.end();
     ed.ctrlK();
     expect(ed.text).toBe("zabc");
+  });
+});
+
+describe("Screen diff rendering (#467)", () => {
+  function rowMoves(s: string): string[] {
+    // row-start moves look like \x1b[<r>;1H
+    const out: string[] = [];
+    for (const m of s.matchAll(/\x1b\[(\d+);1H/g)) out.push(m[1]!);
+    return out;
+  }
+
+  test("an identical second render repaints no rows", () => {
+    const scr = new Screen(5, 10);
+    scr.write(1, 0, "hello");
+    const b = new Buf();
+    scr.render(b); // first paint
+    b.s = "";
+    scr.render(b); // identical — no diff (only cursor escapes, no row paints)
+    expect(rowMoves(b.s)).toEqual([]);
+  });
+
+  test("changing one cell repaints only that row", () => {
+    const scr = new Screen(5, 10);
+    scr.write(0, 0, "abc");
+    scr.write(3, 0, "xyz");
+    const b = new Buf();
+    scr.render(b);
+    b.s = "";
+    scr.write(3, 2, "Q"); // change row 3 (0-based) only
+    scr.render(b);
+    const moves = rowMoves(b.s);
+    // row 3 (0-based → 4;1H) repainted, rows 0..2 untouched
+    expect(moves).toEqual(["4"]);
+  });
+
+  test("style change on a cell triggers a repaint", () => {
+    const scr = new Screen(3, 8);
+    scr.write(0, 0, "hi");
+    const b = new Buf();
+    scr.render(b);
+    b.s = "";
+    scr.write(0, 0, "hi", { fg: 1 }); // same text, new style
+    scr.render(b);
+    expect(rowMoves(b.s)).toEqual(["1"]);
+  });
+
+  test("resize forces a full repaint of the new rows", () => {
+    const scr = new Screen(3, 8);
+    scr.write(1, 0, "x");
+    const b = new Buf();
+    scr.render(b);
+    b.s = "";
+    scr.resize(5, 8); // grew — repaint
+    scr.render(b);
+    // all 5 rows (1..5) are freshly painted
+    expect(rowMoves(b.s).sort()).toEqual(["1", "2", "3", "4", "5"]);
   });
 });
