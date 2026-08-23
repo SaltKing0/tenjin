@@ -8,13 +8,14 @@
 
 export const STEPS = [
   { field: "hasModel", title: "Connect a provider & choose a model", hash: "#settings" },
-  { field: "hasBot", title: "Create your first bot", hash: "#status" },
   { field: "hasGatewayToken", title: "Set a gateway token", hash: "#settings" },
 ];
 
-/** Setup is complete once the model, a bot and the gateway token are set. */
+/** Setup is complete once the model and gateway token are set. The default
+ *  solo agent is the starting point — special bots are created by the user
+ *  later, not pushed by onboarding. */
 export function isSetupComplete(state = {}) {
-  return !!(state.hasModel && state.hasBot && state.hasGatewayToken);
+  return !!(state.hasModel && state.hasGatewayToken);
 }
 
 /** True when the first-run screen should show: setup incomplete + not skipped. */

@@ -622,22 +622,27 @@ function botCreateForm(main) {
 }
 
 async function panelSessions(main) {
-  // #277: default to the first bot that has sessions (else solo) and persist
-  // the choice per panel; keep currentBot in sync for replay/fork downstream.
-  currentBot = panelScope("sessions");
+  // "all" lists every concurrent agent's sessions (solo + each bot), each
+  // labeled with its agent; otherwise the panel scopes to a single bot.
+  const storedScope = localStorage.getItem(panelScopeKey("sessions"));
+  let scope = storedScope && storedScope !== "solo" ? storedScope : "all";
+  const sel = el("select", {
+    onchange: (e) => {
+      scope = e.target.value;
+      setPanelScope("sessions", scope);
+      panelSessions(main);
+    },
+  });
+  sel.append(el("option", { value: "all" }, "All agents"));
+  sel.append(el("option", { value: "solo" }, "solo"));
+  for (const b of bots) sel.append(el("option", { value: b.name }, b.name));
+  sel.value = scope;
   main.replaceChildren(
     el("h1", {}, "Sessions"),
     el(
       "div",
       { class: "toolbar" },
-      botSelector(
-        async (value) => {
-          currentBot = value;
-          setPanelScope("sessions", value);
-          await panelSessions(main);
-        },
-        currentBot,
-      ),
+      sel,
       el("input", { id: "session-q", placeholder: "search preview…" }),
       el("span", { class: "dim" }, "click a session to open its timeline"),
     ),
@@ -655,7 +660,7 @@ async function panelSessions(main) {
 
   async function load() {
     const q = encodeURIComponent(searchTerm());
-    const url = `/api/sessions?bot=${encodeURIComponent(currentBot)}&limit=${PER}&offset=${offset}${q ? `&q=${q}` : ""}`;
+    const url = `/api/sessions?bot=${encodeURIComponent(scope)}&limit=${PER}&offset=${offset}${q ? `&q=${q}` : ""}`;
     const data = await apiJson(url);
     total = data.total ?? 0;
     const count = data.sessions.length;
@@ -668,9 +673,10 @@ async function panelSessions(main) {
           ? emptyStateCard("sessions")
           : el("div", { class: "dim" }, "no sessions in this scope yet"),
       );
-      // #277: if this scope is empty but another bot has sessions, offer a switch.
-      if (!q && offset === 0) {
-        const hintCard = scopeHintCard("sessions", currentBot);
+      // #277: for a single-bot scope, if it is empty but another bot has
+      // sessions, offer a switch. The all-agents view is never "empty scope".
+      if (!q && offset === 0 && scope !== "all") {
+        const hintCard = scopeHintCard("sessions", scope);
         if (hintCard) list.append(hintCard);
       }
     }
@@ -681,9 +687,10 @@ async function panelSessions(main) {
         {
           class: "card",
           style: "cursor:pointer",
-          onclick: async () => openReplay(main, session.id),
+          onclick: async () => openReplay(main, session.id, session.bot),
         },
         el("strong", {}, session.id),
+        scope === "all" ? el("span", { class: "badge" }, session.bot) : null,
         session.parentId ? el("span", { class: "badge" }, `fork of ${session.parentId}`) : null,
         el("div", { class: "dim" }, `${when} — ${session.preview}`),
       );
@@ -710,7 +717,7 @@ async function panelSessions(main) {
   await load();
 }
 
-async function openReplay(main, id) {
+async function openReplay(main, id, bot = currentBot) {
   main.replaceChildren(
     el("h1", {}, "Session"),
     el(
@@ -718,7 +725,7 @@ async function openReplay(main, id) {
       { class: "toolbar" },
       el("button", { onclick: () => panelSessions(main) }, "< back"),
       el("span", { class: "dim" }, id),
-      el("button", { onclick: () => forkSession(main, id) }, "Fork"),
+      el("button", { onclick: () => forkSession(main, id, bot) }, "Fork"),
     ),
   );
   const box = el("div");
@@ -727,7 +734,7 @@ async function openReplay(main, id) {
   // #131: ancestry breadcrumb — which forks this session traces back to, and
   // where context-elision (compression) happened along the way.
   try {
-    const tree = await apiJson(`/api/sessions/${encodeURIComponent(id)}/tree?bot=${encodeURIComponent(currentBot)}`);
+    const tree = await apiJson(`/api/sessions/${encodeURIComponent(id)}/tree?bot=${encodeURIComponent(bot)}`);
     const lineage = tree && Array.isArray(tree.lineage) ? tree.lineage : [];
     if (lineage.length > 0) {
       box.append(el("h2", {}, "Lineage"));
@@ -758,7 +765,7 @@ async function openReplay(main, id) {
   // B13-8 (#432): history replay renders through the SAME event-sourced
   // transcript reducer the live view uses (server endpoint returns the cards
   // from renderTranscript). Lineage breadcrumb above is preserved.
-  const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/transcript?bot=${encodeURIComponent(currentBot)}`);
+  const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/transcript?bot=${encodeURIComponent(bot)}`);
   box.append(el("h2", {}, "Timeline"));
   if (!data.cards || data.cards.length === 0) {
     box.append(el("div", { class: "dim" }, "(empty session)"));
@@ -817,10 +824,10 @@ function transcriptCardEl(card) {
   }
 }
 
-async function forkSession(main, id) {
-  const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/fork?bot=${encodeURIComponent(currentBot)}`, { method: "POST" });
+async function forkSession(main, id, bot = currentBot) {
+  const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/fork?bot=${encodeURIComponent(bot)}`, { method: "POST" });
   if (data && data.ok) {
-    await openReplay(main, data.id);
+    await openReplay(main, data.id, bot);
   }
 }
 

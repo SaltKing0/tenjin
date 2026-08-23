@@ -1,15 +1,17 @@
+import { join } from "node:path";
 import { ConfigError, type HarnessConfig } from "../config/types";
 import type { ProviderRegistry } from "../provider/registry";
 import type { SecurityGuard } from "../security/guard";
 import { Redactor } from "../security/redact";
 import type { AuditLog } from "../audit/log";
-import { resolveBot, botModelRef, botBudgetUSD } from "../bots/profile";
+import { resolveBot, botModelRef, botBudgetUSD, type BotProfile } from "../bots/profile";
 import { formatModelRef, type ModelRef } from "../config/models";
 import { runHeadless, capPolicy } from "../agent/headless";
-import { loadAgentsMd } from "../agent/prompt";
+import { loadSoul, loadAgentsMd } from "../agent/prompt";
 import { formatUSD } from "../agent/budget";
 import { guardForBot } from "../security/guard";
 import { resolveParanoid } from "../security/injection";
+import { sessionsDir, memoryDir } from "../config/loader";
 import {
   routeText,
   botsAllowedForUser,
@@ -117,6 +119,22 @@ function routeInbound(
   return routeText(text, deps.defaultBot, deps.availableBots);
 }
 
+/** The default solo/main agent — used when no bot profiles exist yet, so a
+ *  clean install runs on the home's own SOUL, sessions and memory before any
+ *  special bots are created. */
+function mainAgentProfile(deps: HandlerDeps): BotProfile {
+  return {
+    name: "solo",
+    soulText: loadSoul(deps.home, deps.cwd).text,
+    config: {},
+    rootDir: deps.home,
+    sessionsDir: sessionsDir(deps.home),
+    memoryDir: memoryDir(deps.home),
+    inboxDir: join(deps.home, "inbox"),
+    tasksDir: join(deps.home, "tasks"),
+  };
+}
+
 export function createMessageHandler(deps: HandlerDeps) {
   return async function handle(
     text: string,
@@ -144,7 +162,9 @@ export function createMessageHandler(deps: HandlerDeps) {
     const routed = routeInbound(deps, text, ctx);
     if ("error" in routed) return routed.error;
     const { bot: botName, rest } = routed;
-    const profile = resolveBot(deps.home, botName);
+    // The gateway falls back to the default solo/main agent when no bot
+    // profiles exist yet (a clean install starts with just the default).
+    const profile = botName === "solo" ? mainAgentProfile(deps) : resolveBot(deps.home, botName);
     const ref = botModelRef(profile, deps.config);
     deps.audit.append("gateway_msg", ctx.actor, `${botName}: ${text.slice(0, 120)}`, botName);
 

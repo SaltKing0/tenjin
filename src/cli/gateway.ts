@@ -93,11 +93,11 @@ export async function gatewayCommand(args: string[]): Promise<number> {
       | null = null;
     if (tg?.enabled || gateway.settings.listen) {
       const available = listBots(home);
-      const defaultBot = tg?.defaultBot ?? available[0];
-      if (!defaultBot) {
-        throw new ConfigError("gateway needs at least one bot (tenjin bot new <name>)");
-      }
-      if (tg?.enabled && !available.includes(defaultBot)) {
+      // No bot profiles yet → fall back to the default solo agent (the
+      // "normal default" the console starts with; special bots are created
+      // later by the user).
+      const defaultBot = tg?.defaultBot ?? available[0] ?? "solo";
+      if (tg?.enabled && !available.includes(defaultBot) && defaultBot !== "solo") {
         throw new ConfigError(`telegram defaultBot "${defaultBot}" does not exist`);
       }
       const handleMessage = createMessageHandler({

@@ -9,7 +9,6 @@
 
 export const SETUP_ITEMS = [
   { key: "hasModel", label: "Model configured", hash: "#settings" },
-  { key: "hasBot", label: "At least one bot with a SOUL", hash: "#status" },
   { key: "hasGatewayToken", label: "Gateway token set", hash: "#settings" },
   { key: "hasBudgetLimit", label: "Budget limits set", hash: "#settings" },
   { key: "channelsEnabled", label: "A channel connected", hash: "#settings", optional: true },

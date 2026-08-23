@@ -399,8 +399,6 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
 
     if (path === "/api/sessions" && req.method === "GET") {
       const bot = url.searchParams.get("bot");
-      const dir = scopeSessionsDir(deps.home, bot);
-      if (!dir) return json({ error: "unknown bot" }, 400);
       const limitRaw = url.searchParams.get("limit");
       const offsetRaw = url.searchParams.get("offset");
       const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
@@ -412,23 +410,53 @@ export function createConsoleApi(deps: ConsoleApiDeps) {
       if (!Number.isInteger(offset) || offset < 0) {
         return json({ error: "offset must be a non-negative integer" }, 400);
       }
+      // bot=all merges every concurrent agent's sessions (solo + each bot),
+      // tagging each entry with its agent so the console can label them.
+      const all = bot === "all";
       const scope = bot ?? "solo";
-      let summaries = existsSync(dir)
-        ? SessionLog.list(dir).map((s) => ({
-            id: s.id,
-            mtimeMs: s.mtimeMs,
-            preview: s.preview,
-            parentId: s.parentId ?? null,
-          }))
-        : [];
+      const summaries = [];
+      if (all) {
+        for (const s of ["solo", ...listBots(deps.home)]) {
+          const dir = scopeSessionsDir(deps.home, s);
+          if (!dir || !existsSync(dir)) continue;
+          for (const sess of SessionLog.list(dir)) {
+            summaries.push({
+              id: sess.id,
+              mtimeMs: sess.mtimeMs,
+              preview: sess.preview,
+              parentId: sess.parentId ?? null,
+              bot: s,
+            });
+          }
+        }
+      } else {
+        const dir = scopeSessionsDir(deps.home, bot);
+        if (!dir) return json({ error: "unknown bot" }, 400);
+        if (existsSync(dir)) {
+          for (const sess of SessionLog.list(dir)) {
+            summaries.push({
+              id: sess.id,
+              mtimeMs: sess.mtimeMs,
+              preview: sess.preview,
+              parentId: sess.parentId ?? null,
+              bot: scope,
+            });
+          }
+        }
+      }
       summaries.sort((a, b) => b.mtimeMs - a.mtimeMs);
       if (q) {
-        summaries = summaries.filter(
-          (s) => s.preview.toLowerCase().includes(q) || scope.toLowerCase().includes(q),
+        const filtered = summaries.filter(
+          (s) => s.preview.toLowerCase().includes(q) || s.bot.toLowerCase().includes(q),
         );
+        return json({
+          scope: all ? "all" : scope,
+          total: filtered.length,
+          sessions: filtered.slice(offset, offset + limit),
+        });
       }
       return json({
-        scope,
+        scope: all ? "all" : scope,
         total: summaries.length,
         sessions: summaries.slice(offset, offset + limit),
       });

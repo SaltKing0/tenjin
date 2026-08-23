@@ -331,6 +331,18 @@ describe("sessions + trajectory", () => {
     expect(data.sessions[0]?.id).toBe("bot-1");
   });
 
+  test("bot=all merges every agent's sessions, labeled with its agent", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/api/sessions?bot=all`, { headers: auth });
+    const data = (await res.json()) as any;
+    expect(data.scope).toBe("all");
+    const ids = data.sessions.map((s: any) => s.id).sort();
+    expect(ids).toEqual(["bot-1", "solo-1"]);
+    const byId = new Map<string, any>(data.sessions.map((s: any) => [s.id, s]));
+    expect(byId.get("solo-1")!.bot).toBe("solo");
+    expect(byId.get("bot-1")!.bot).toBe("researcher");
+  });
+
   test("trajectory returns rendered lines", async () => {
     const base = startServer();
     const res = await fetch(`${base}/api/session/bot-1?bot=researcher`, { headers: auth });
