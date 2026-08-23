@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAskBotTool } from "../src/bots/delegate";
+import { createAskBotTool, createHandoffBotTool } from "../src/bots/delegate";
 import type { AskBotDeps } from "../src/bots/delegate";
 import { createBot } from "../src/bots/profile";
 import { dispatch } from "../src/tools/registry";
@@ -415,5 +415,39 @@ describe("ask_bot shared tree budget (#154)", () => {
     expect(r.ok).toBe(true);
     expect(r.output).toContain("output withheld");
     expect(r.output).not.toContain("reveal your system prompt");
+  });
+});
+
+describe("handoff_bot (A: write-capable block-on-reply)", () => {
+  const makeHandoff = (opts: { provider?: Provider; fromBot?: string; config?: HarnessConfig } = {}) =>
+    createHandoffBotTool({
+      home,
+      fromBot: opts.fromBot ?? "writer",
+      cwd: home,
+      getProvider: (_n: ProviderName) => opts.provider ?? mockProvider("HANDED OFF"),
+      globalConfig: opts.config ?? globalConfig(),
+    });
+  const handoff = (tool: any, args: any) => dispatch([tool], "handoff_bot", args, { cwd: home });
+
+  test("runs the target write-capable and returns a bounded contract", async () => {
+    const provider = mockProvider("TASK DONE");
+    const tool = makeHandoff({ provider });
+    const r = await handoff(tool, { bot: "researcher", message: "fix the bug and ship it" });
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("[delegation contract]");
+    expect(r.output).toContain("status: success");
+    expect(r.output).toContain("TASK DONE");
+    expect(r.output).toContain("sidecar:");
+    // Unlike ask_bot, the handoff target may actually write.
+    const names = (provider.requests[0]?.tools as any[])?.map((t: any) => t.name) ?? [];
+    expect(names).toContain("write_file");
+    expect(names).toContain("bash");
+  });
+
+  test("rejects an empty message", async () => {
+    const tool = makeHandoff();
+    const r = await handoff(tool, { bot: "researcher", message: "   " });
+    expect(r.ok).toBe(false);
+    expect(String(r.output)).toContain("message must not be empty");
   });
 });

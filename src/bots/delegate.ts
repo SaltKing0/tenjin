@@ -242,3 +242,124 @@ export function createAskBotTool(deps: AskBotDeps): ToolDef {
     },
   };
 }
+
+/**
+ * Handoff (A): run a target bot WRITE-capable so it can actually take over and
+ * complete a task, then block on its reply. Shares ask_bot's B11-2 context
+ * firewall (bounded contract + sidecar, never auto-loaded) and tree-budget
+ * accounting — the only difference is the write policy so the target may edit
+ * files / run commands. This is the "@-handoff + block-on-reply" primitive.
+ */
+export function createHandoffBotTool(deps: AskBotDeps): ToolDef {
+  return {
+    name: "handoff_bot",
+    group: "write",
+    description:
+      "Hand a task off to another named bot and block on its reply. The target runs headless with its own model and soul and is allowed to WRITE (edit files, run commands) to actually finish the work, then reports back with a bounded contract. Use handoff_bot when you want another bot to take over a task end-to-end; use ask_bot for a read-only question.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        bot: { type: "string", description: "Target bot name or team role" },
+        message: { type: "string", description: "The task to hand off" },
+      },
+      required: ["bot", "message"],
+    },
+    async handler(args, ctx) {
+      const rawTarget = String(args.bot ?? "").trim();
+      if (rawTarget === deps.fromBot) throw new Error("cannot hand off to yourself");
+      let targetName = rawTarget;
+      if (!listBots(deps.home).includes(rawTarget)) {
+        const team = loadTeam(deps.home);
+        const resolved = team ? resolveTeamTarget(team, rawTarget) : null;
+        if (resolved) targetName = resolved;
+      }
+      const profile = resolveBot(deps.home, targetName);
+      const message = String(args.message ?? "").trim();
+      if (!message) throw new Error("message must not be empty");
+
+      const correlationId = randomUUID();
+      deps.audit?.("delegation", `handoff_bot -> ${targetName}: ${message.slice(0, 120)}`, correlationId);
+
+      const ref = botModelRef(profile, deps.globalConfig);
+      const provider = deps.getProvider(ref.provider);
+
+      let cap = botBudgetUSD(profile, DEFAULT_DELEGATION_CAP_USD);
+      if (cap <= 0) cap = DEFAULT_DELEGATION_CAP_USD;
+      if (deps.sessionBudget && deps.sessionBudget.capUSD > 0) {
+        const remaining = deps.sessionBudget.capUSD - deps.sessionBudget.spentUSD;
+        cap = Math.min(cap, Math.max(0.01, remaining));
+      }
+
+      const result = await runHeadless({
+        provider,
+        model: ref.model,
+        soulText: profile.soulText,
+        cwd: deps.cwd,
+        message,
+        maxTokens: deps.globalConfig.maxTokens,
+        capUSD: cap,
+        pricing: deps.globalConfig.pricing,
+        globalBudget: deps.globalConfig.globalBudget,
+        // write-capable: the handoff target actually completes the work
+        policy: capPolicy("full", profile.config.security?.policy),
+        denyTools: profile.config.security?.denyTools,
+        home: deps.home,
+        memoryDir: profile.memoryDir,
+        guard: guardForBot(deps.globalConfig.security, profile.config.security, deps.guard?.onBlock),
+        paranoid: resolveParanoid(deps.globalConfig.security, profile.config.security),
+        effort: profile.config.effort,
+        correlationId,
+        audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
+        sessionLogDir: profile.sessionsDir,
+        sessionBot: profile.name,
+        context: deps.globalConfig.context,
+        treeBudget: ctx.treeBudget,
+      });
+
+      const text = result.text;
+      const framed = text
+        ? hardenUntrustedInput(text, {
+            paranoid: resolveParanoid(deps.globalConfig.security, profile.config.security),
+            audit: (kind, detail) => deps.audit?.(kind, detail, correlationId),
+            correlationId,
+          })
+        : text;
+
+      if (result.stopReason === "tree_budget_exceeded") {
+        deps.audit?.("budget_exceeded", `delegation tree budget exhausted during ${profile.name} run`, correlationId);
+      }
+
+      const sidecarPath = framed
+        ? writeDelegationSidecar(deps.home, profile.name, framed, correlationId)
+        : undefined;
+
+      const status: DelegationStatus =
+        result.stopReason === "tree_budget_exceeded"
+          ? "tree_budget_exceeded"
+          : result.stopReason === "budget_exhausted"
+            ? "budget_exhausted"
+            : !text
+              ? "no_text"
+              : "success";
+
+      const fallback =
+        result.stopReason === "tree_budget_exceeded"
+          ? `Handoff to ${profile.name} stopped: shared tree budget exhausted (${ctx.treeBudget?.usedIterations ?? 0} iteration(s) across the tree).`
+          : `The ${profile.name} bot returned no text (${result.stopReason}).`;
+
+      return renderDelegationContract({
+        target: profile.name,
+        model: `${ref.provider}:${ref.model}`,
+        status,
+        costUSD: result.costUSD,
+        summary: framed && framed.length > 0 ? boundedSummary(framed) : fallback,
+        sidecarPath,
+        diffSummary: "write handoff — full output in sidecar",
+        treeIterations:
+          result.stopReason === "tree_budget_exceeded"
+            ? ctx.treeBudget?.usedIterations
+            : undefined,
+      });
+    },
+  };
+}

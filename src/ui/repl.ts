@@ -17,7 +17,7 @@ import { renderTrajectory } from "../session/trajectory";
 import { resolveContextGuard } from "../session/context";
 import { buildSkillsSection, summarizeSkills } from "../skills/activate";
 import { buildVolatileTail } from "../agent/prompt";
-import { createAskBotTool } from "../bots/delegate";
+import { createAskBotTool, createHandoffBotTool } from "../bots/delegate";
 import { createAskBotAsyncTool, createBotTaskStatusTool, reconcileOrphanedTasks } from "../bots/tasks";
 import { listBots, resolveBot } from "../bots/profile";
 import { AuditLog, formatAudit, auditPath } from "../audit/log";
@@ -104,6 +104,17 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   if (opts.bot) {
     opts.tools.push(
       createAskBotTool({
+        home: opts.home,
+        fromBot: opts.bot,
+        cwd: opts.cwd,
+        getProvider: (name) => opts.registry.get(name),
+        globalConfig: opts.config,
+        sessionBudget: state.budget,
+        guard: opts.guard ?? null,
+        audit: (kind, detail, correlationId) =>
+          audit.append(kind, "user", detail, opts.bot, correlationId),
+      }),
+      createHandoffBotTool({
         home: opts.home,
         fromBot: opts.bot,
         cwd: opts.cwd,
@@ -359,6 +370,32 @@ async function handleCommand(
           inboxPolicyFromConfig(opts.config.inbox),
         );
         stdout.write(`left message for ${profile.name} (id ${msg.id})\n`);
+      } catch (e) {
+        stdout.write(`error: ${(e as Error).message}\n`);
+      }
+      return;
+    }
+    case "/handoff": {
+      const bot = rest[0];
+      const text = rest.slice(1).join(" ");
+      if (!bot || !text.trim()) {
+        stdout.write("usage: /handoff <bot> <message>\n");
+        return;
+      }
+      try {
+        const tool = createHandoffBotTool({
+          home: opts.home,
+          fromBot: opts.bot ?? "solo",
+          cwd: opts.cwd,
+          getProvider: (name) => opts.registry.get(name),
+          globalConfig: opts.config,
+          sessionBudget: state.budget,
+          guard: opts.guard ?? null,
+          audit: (kind, detail, correlationId) =>
+            state.audit.append(kind, "user", detail, opts.bot, correlationId),
+        });
+        const out = await tool.handler({ bot, message: text }, { treeBudget: state.treeBudget } as never);
+        stdout.write(`${out}\n`);
       } catch (e) {
         stdout.write(`error: ${(e as Error).message}\n`);
       }
