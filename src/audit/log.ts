@@ -17,7 +17,9 @@ export type AuditKind =
   | "prompt_injection"
   | "transcribe"
   | "consolidation"
-  | "recovery";
+  | "recovery"
+  | "issue_started"
+  | "issue_completed";
 
 export const AUDIT_KINDS: readonly AuditKind[] = [
   "tool_block",
@@ -35,6 +37,8 @@ export const AUDIT_KINDS: readonly AuditKind[] = [
   "transcribe",
   "consolidation",
   "recovery",
+  "issue_started",
+  "issue_completed",
 ];
 
 export interface AuditEvent {

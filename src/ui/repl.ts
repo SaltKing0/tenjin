@@ -18,6 +18,7 @@ import { resolveContextGuard } from "../session/context";
 import { buildSkillsSection, summarizeSkills } from "../skills/activate";
 import { buildVolatileTail } from "../agent/prompt";
 import { createAskBotTool, createHandoffBotTool } from "../bots/delegate";
+import { createIssueBotTool } from "../bots/issues";
 import { createAskBotAsyncTool, createBotTaskStatusTool, reconcileOrphanedTasks } from "../bots/tasks";
 import { listBots, resolveBot } from "../bots/profile";
 import { AuditLog, formatAudit, auditPath } from "../audit/log";
@@ -115,6 +116,17 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           audit.append(kind, "user", detail, opts.bot, correlationId),
       }),
       createHandoffBotTool({
+        home: opts.home,
+        fromBot: opts.bot,
+        cwd: opts.cwd,
+        getProvider: (name) => opts.registry.get(name),
+        globalConfig: opts.config,
+        sessionBudget: state.budget,
+        guard: opts.guard ?? null,
+        audit: (kind, detail, correlationId) =>
+          audit.append(kind, "user", detail, opts.bot, correlationId),
+      }),
+      createIssueBotTool({
         home: opts.home,
         fromBot: opts.bot,
         cwd: opts.cwd,
