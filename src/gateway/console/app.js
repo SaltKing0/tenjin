@@ -1595,6 +1595,18 @@ function toggleTheme() {
   localStorage.setItem(THEME_KEY, theme);
   const btn = document.querySelector(".topbar-theme");
   if (btn) btn.textContent = theme === "light" ? "☀" : "☾";
+  syncLogoImages();
+}
+
+// The Tenjin mark ships as a black glyph (reads on paper) and a light glyph
+// (reads on the night ledger). Swap the asset to match the active theme.
+function logoSrc() {
+  return theme === "dark" ? "/console/tenjinlogo-light.png" : "/console/tenjinlogo.png";
+}
+function syncLogoImages() {
+  document.querySelectorAll(".logo, .login-logo").forEach((img) => {
+    img.src = logoSrc();
+  });
 }
 
 const PANELS = [
@@ -1686,7 +1698,7 @@ async function render() {
   const sidebar = el(
     "div",
     { class: "sidebar" },
-    el("img", { class: "logo", src: "/console/tenjinlogo.png", alt: "Tenjin" }),
+    el("img", { class: "logo", src: logoSrc(), alt: "Tenjin" }),
     el(
       "nav",
       {},
@@ -1768,7 +1780,7 @@ function renderLogin() {
   const box = el(
     "div",
     { class: "login-box" },
-    el("img", { class: "login-logo", src: "/console/tenjinlogo.png", alt: "Tenjin" }),
+    el("img", { class: "login-logo", src: logoSrc(), alt: "Tenjin" }),
     el("h1", {}, "Tenjin Console"),
     el("div", { class: "dim" }, "enter the gateway.listen.token from your config"),
     input,

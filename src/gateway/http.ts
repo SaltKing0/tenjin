@@ -57,6 +57,7 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   "/console/chat-history.js": { file: "chat-history.js", type: "application/javascript; charset=utf-8" },
   "/console/theme.js": { file: "theme.js", type: "application/javascript; charset=utf-8" },
   "/console/tenjinlogo.png": { file: "tenjinlogo.png", type: "image/png" },
+  "/console/tenjinlogo-light.png": { file: "tenjinlogo-light.png", type: "image/png" },
   "/console/style.css": { file: "style.css", type: "text/css; charset=utf-8" },
 };
 
