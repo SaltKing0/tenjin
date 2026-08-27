@@ -10,6 +10,7 @@ import type {
   Usage,
 } from "./types";
 import { parseSse, type SseFrame } from "./sse";
+import { irToAnthropicToolResult } from "./ir";
 import { fetchWithRetry, normalizeRetry, type RetryPolicy } from "./retry";
 import type { RetryConfig } from "../config/types";
 
@@ -33,13 +34,11 @@ function blockToApi(b: ContentBlock): unknown {
     case "tool_use":
       return b;
     case "tool_result": {
-      const out: Record<string, unknown> = {
-        type: "tool_result",
-        tool_use_id: b.toolUseId,
+      return irToAnthropicToolResult({
+        providerCallId: b.toolUseId,
+        ok: !b.isError,
         content: b.content,
-      };
-      if (b.isError) out.is_error = true;
-      return out;
+      });
     }
   }
 }
