@@ -512,6 +512,11 @@ export function webSearchEnabled(cfg: { webSearch?: { enabled?: boolean } }): bo
   return cfg.webSearch?.enabled === true;
 }
 
+/** research_search is default-OFF: it is only active when research.enabled is true. */
+export function researchEnabled(cfg: { research?: { enabled?: boolean } }): boolean {
+  return cfg.research?.enabled === true;
+}
+
 export function vectorEnabled(cfg: HarnessConfig): boolean {
   return memoryEnabled(cfg) && cfg.memory?.vector?.enabled !== false;
 }

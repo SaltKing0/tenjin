@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { dispatch } from "../src/tools/registry";
+import { researchEnabled } from "../src/config/loader";
 import {
   arxivSearch,
   createResearchSearchTool,
@@ -172,5 +173,13 @@ describe("research_search tool", () => {
     expect(r.output).toContain("suspected prompt-injection");
     // The payload is explicitly marked as data, not instructions.
     expect(r.output).toMatch(/not instructions/i);
+  });
+});
+
+describe("researchEnabled (default-off flag)", () => {
+  test("research_search is off unless research.enabled is true", () => {
+    expect(researchEnabled({})).toBe(false);
+    expect(researchEnabled({ research: { enabled: false } })).toBe(false);
+    expect(researchEnabled({ research: { enabled: true } })).toBe(true);
   });
 });

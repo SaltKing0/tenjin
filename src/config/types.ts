@@ -55,6 +55,15 @@ export interface HarnessConfig {
     /** Endpoint override (tests point this at a local fixture server). */
     endpoint?: string;
   };
+  /** research_search tool (#451): default-OFF, no API key required (free arXiv
+   *  API). Exposed when research.enabled is true. */
+  research?: {
+    enabled?: boolean;
+    /** Endpoint override (tests point this at a local fixture server). */
+    endpoint?: string;
+    /** Max results per query (default 5, clamped 1..20). */
+    maxResults?: number;
+  };
   gateway?: unknown;
   security?: {
     blockedPatterns?: string[];
