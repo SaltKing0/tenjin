@@ -284,6 +284,7 @@ with a dotted path; **unknown fields** only warn and are ignored.
 | `providers.openai` | map | `baseUrl`/`apiKey` for OpenAI-compatible endpoints |
 | `providers.anthropic` | map | `apiKey` for Anthropic |
 | `models.default` / `models.cheap` | string | Provider-prefixed model tiers |
+| `routing` | map | B10-1/B10-4 routing core: `default` (alias for the default run), `aliases` (failover chains), `tasks`, `stickyTtlMs`, `retriesPerDeployment`. When set, the default model is selected through the Router instead of the static `provider`/`model` |
 | `memory.enabled` / `memory.vector` / `memory.learnings` | bool / map / map | Memory + vector recall; `memory.learnings.maxEntries` caps takeaways per file (#204) |
 | `security` | map | Blocked patterns, disabled flag, workspace, redaction — see [docs/security.md](security.md) |
 | `inbox` | map | `ttlDays` / `maxMessages` for bot inboxes |

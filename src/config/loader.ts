@@ -838,6 +838,17 @@ function validateRouting(routing: RouterConfig | undefined): void {
       }
     });
   }
+  if (routing.default !== undefined) {
+    if (typeof routing.default !== "string" || routing.default.length === 0) {
+      throw new ConfigError(`routing.default must be a non-empty alias name`);
+    }
+    const aliasNames = new Set(Object.keys(routing.aliases ?? {}));
+    if (!aliasNames.has(routing.default)) {
+      throw new ConfigError(
+        `routing.default "${routing.default}" must name an existing alias (aliases: ${[...aliasNames].join(", ") || "none"})`,
+      );
+    }
+  }
   for (const [task, alias] of Object.entries(routing.tasks ?? {})) {
     if (typeof alias !== "string" || alias.length === 0) {
       throw new ConfigError(`routing.tasks.${task} must be a non-empty alias string`);

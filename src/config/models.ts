@@ -1,5 +1,6 @@
 import type { HarnessConfig, ProviderName } from "./types";
 import { ConfigError } from "./types";
+import { Router } from "./router";
 
 export interface ModelRef {
   provider: ProviderName;
@@ -30,9 +31,30 @@ export function resolveModelRef(ref: string, fallbackProvider: ProviderName): Mo
 }
 
 export function defaultModelRef(cfg: HarnessConfig): ModelRef {
+  // B10-1/B10-4: when routing is configured, the default run selects its model
+  // through the Router (SINGLE-PATH LAW) instead of the static config.
+  const routed = routedModelRef(cfg);
+  if (routed) return routed;
   const ref = cfg.models?.default?.trim();
   if (ref) return resolveModelRef(ref, cfg.provider);
   return { provider: cfg.provider, model: cfg.model };
+}
+
+/**
+ * B10-1/B10-4 routing core wiring: resolve the default agent run's model via
+ * the Router when `routing` is configured. Returns null when routing is absent
+ * (callers fall back to the static config). The deployment's provider+model
+ * become the run's provider+model, so pricing / context-window / reporting all
+ * stay consistent with the model actually called.
+ */
+export function routedModelRef(cfg: HarnessConfig): ModelRef | null {
+  if (!cfg.routing) return null;
+  const names = Object.keys(cfg.routing.aliases ?? {});
+  if (names.length === 0) return null;
+  const alias = cfg.routing.default ?? names[0]!;
+  const router = new Router(cfg.routing);
+  const dep = router.select(alias);
+  return { provider: dep.provider_id as ProviderName, model: dep.model };
 }
 
 export function cheapModelRef(cfg: HarnessConfig): ModelRef | null {
