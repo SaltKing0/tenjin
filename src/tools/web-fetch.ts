@@ -164,6 +164,17 @@ export const webFetchTool: ToolDef = {
         );
       }
     }
+    // B12-5 (#431): egress allowlist — deny-by-default for web_fetch when the
+    // user configured an allowlist (non-empty). Empty/absent = deny-list only.
+    if (ctx.guard?.egress && ctx.guard.egress.allowlist.length > 0) {
+      const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+      const decision = ctx.guard.egress.decideConnect(url.hostname, port);
+      if (decision !== "allow") {
+        throw new Error(
+          `refusing web_fetch: ${url.hostname} is not on the egress allowlist`,
+        );
+      }
+    }
 
     await throttle();
     const res = await fetch(raw, {

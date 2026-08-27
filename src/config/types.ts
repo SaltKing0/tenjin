@@ -68,6 +68,9 @@ export interface HarnessConfig {
     denyDomains?: string[];
     /** #347: deny-list globs for MCP tool names (`mcp__server__tool`). */
     mcpDenyPatterns?: string[];
+    /** B12-5 (#431): outbound egress allowlist — deny-by-default for web_fetch
+     *  when set. Empty/absent keeps the current deny-list-only behaviour. */
+    egress?: { allowlist?: string[] };
   };
   memory?: {
     enabled?: boolean;
