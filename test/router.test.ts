@@ -240,5 +240,23 @@ describe("B10-1/B10-4 routing config validation", () => {
   test("a non-positive retriesPerDeployment is rejected", () => {
     expect(() => validateConfig({ ...base, routing: { retriesPerDeployment: 0 } })).toThrow(/>= 1/);
   });
+
+  test("routing.default naming an existing alias validates", () => {
+    expect(() =>
+      validateConfig({
+        ...base,
+        routing: { default: "a", aliases: { a: { deployments: [{ provider: "openai", model: "gpt-4o" }] } } },
+      }),
+    ).not.toThrow();
+  });
+
+  test("routing.default naming a missing alias is rejected", () => {
+    expect(() =>
+      validateConfig({
+        ...base,
+        routing: { default: "nope", aliases: { a: { deployments: [{ provider: "openai", model: "gpt-4o" }] } } },
+      }),
+    ).toThrow(/routing.default "nope" must name an existing alias/);
+  });
 });
 

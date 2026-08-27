@@ -4,6 +4,7 @@ import {
   defaultModelRef,
   cheapModelRef,
   formatModelRef,
+  routedModelRef,
 } from "../src/config/models";
 import { ProviderRegistry } from "../src/provider/registry";
 import { ConfigError } from "../src/config/types";
@@ -94,6 +95,48 @@ describe("tier resolution", () => {
   test("models.default overrides the legacy fields", () => {
     const c = cfg({ models: { default: "openai:gpt-4o" } });
     expect(defaultModelRef(c)).toEqual({ provider: "openai", model: "gpt-4o" });
+  });
+
+  test("routing config drives the default model via the Router (single-path law)", () => {
+    const c = cfg({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      routing: {
+        default: "main",
+        aliases: { main: { deployments: [{ provider: "openai", model: "gpt-4o" }] } },
+      },
+    });
+    expect(defaultModelRef(c)).toEqual({ provider: "openai", model: "gpt-4o" });
+  });
+
+  test("routing.default selects a specific alias chain", () => {
+    const c = cfg({
+      routing: {
+        default: "budget",
+        aliases: {
+          main: { deployments: [{ provider: "anthropic", model: "claude-sonnet-4-5" }] },
+          budget: { deployments: [{ provider: "openai", model: "gpt-4o-mini" }] },
+        },
+      },
+    });
+    expect(defaultModelRef(c)).toEqual({ provider: "openai", model: "gpt-4o-mini" });
+  });
+
+  test("routing.default absent → first alias wins", () => {
+    const c = cfg({
+      routing: {
+        aliases: {
+          main: { deployments: [{ provider: "anthropic", model: "claude-sonnet-4-5" }] },
+          budget: { deployments: [{ provider: "openai", model: "gpt-4o-mini" }] },
+        },
+      },
+    });
+    expect(defaultModelRef(c)).toEqual({ provider: "anthropic", model: "claude-sonnet-4-5" });
+  });
+
+  test("no routing → routedModelRef is null and default falls back", () => {
+    expect(routedModelRef(cfg())).toBeNull();
+    expect(defaultModelRef(cfg())).toEqual({ provider: "anthropic", model: "claude-sonnet-4-5" });
   });
 
   test("cheap returns null when unset or blank", () => {

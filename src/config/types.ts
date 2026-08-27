@@ -114,6 +114,9 @@ export interface HarnessConfig {
 
 /** `routing` in config.yaml — B10-1/B10-4 routing core (task→alias→deployment). */
 export interface RouterConfig {
+  /** Alias (or task) the DEFAULT agent run routes on when routing is enabled.
+   *  Absent → the first alias in `aliases`. */
+  default?: string;
   /** Named failover chains; the value an alias resolves to. */
   aliases?: Record<string, AliasConfig>;
   /** Deterministic task_id → alias-name table (debuggable, no magic). */
