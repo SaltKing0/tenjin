@@ -1,4 +1,5 @@
 import { ConfigError } from "../config/types";
+import { EgressProxy } from "../sandbox/egress";
 import { realpathSync } from "node:fs";
 import { resolve, normalize, isAbsolute, join, dirname, basename, sep } from "node:path";
 
@@ -31,6 +32,9 @@ export interface WorkspaceOptions {
   denyDomains?: string[];
   // #347: deny-list for MCP tool names (`mcp__<server>__<tool>`) — globs.
   mcpDenyPatterns?: string[];
+  // B12-5 (#431): outbound egress allowlist — deny-by-default for web_fetch
+  // when non-empty. Empty/absent keeps the deny-list-only behaviour.
+  egressAllowlist?: string[];
 }
 
 export const GUARD_DISABLED_WARNING =
@@ -149,6 +153,9 @@ export class SecurityGuard {
   private allowedPaths: string[];
   private domainEntries: Array<{ pattern: string; regex: RegExp }>;
   private mcpDenyEntries: Array<{ pattern: string; regex: RegExp }>;
+  /** B12-5 (#431): outbound egress decision engine (deny-by-default when an
+   *  allowlist is configured). Consulted by web_fetch before any network I/O. */
+  readonly egress: EgressProxy;
 
   constructor(
     readonly patterns: string[],
@@ -178,9 +185,10 @@ export class SecurityGuard {
       pattern,
       regex: new RegExp(globToSource(pattern), "i"),
     }));
+    this.egress = new EgressProxy(options.egressAllowlist ?? []);
   }
 
-  static fromConfig(security: { blockedPatterns?: string[]; disabled?: boolean; workspaceRoot?: string; allowedPaths?: string[]; denyDomains?: string[]; mcpDenyPatterns?: string[] } | undefined, onBlock?: (detail: string) => void): SecurityGuard | null {
+  static fromConfig(security: { blockedPatterns?: string[]; disabled?: boolean; workspaceRoot?: string; allowedPaths?: string[]; denyDomains?: string[]; mcpDenyPatterns?: string[]; egress?: { allowlist?: string[] } } | undefined, onBlock?: (detail: string) => void): SecurityGuard | null {
     if (security?.disabled) return null;
     const patterns = security?.blockedPatterns ?? [...DEFAULT_BLOCKED_PATTERNS];
     if (!Array.isArray(patterns)) {
@@ -198,11 +206,15 @@ export class SecurityGuard {
     if (security?.mcpDenyPatterns !== undefined && !Array.isArray(security.mcpDenyPatterns)) {
       throw new ConfigError("security.mcpDenyPatterns must be a list of globs");
     }
+    if (security?.egress?.allowlist !== undefined && !Array.isArray(security.egress.allowlist)) {
+      throw new ConfigError("security.egress.allowlist must be a list of domains");
+    }
     return new SecurityGuard(patterns, onBlock, {
       workspaceRoot: security?.workspaceRoot,
       allowedPaths: security?.allowedPaths,
       denyDomains: security?.denyDomains,
       mcpDenyPatterns: security?.mcpDenyPatterns,
+      egressAllowlist: security?.egress?.allowlist,
     });
   }
 

@@ -166,6 +166,21 @@ describe("fromConfig", () => {
     const g = SecurityGuard.fromConfig(undefined)!;
     expect(g.checkText(".env").blocked).toBe(true);
   });
+
+  test("egress allowlist is built from config and consulted via guard.egress", () => {
+    const g = SecurityGuard.fromConfig({ egress: { allowlist: ["example.com"] } })!;
+    expect(g.egress.decideConnect("example.com", 443)).toBe("allow");
+    expect(g.egress.decideConnect("other.net", 443)).toBe("deny");
+  });
+
+  test("absent egress config yields an empty (non-enforcing) allowlist", () => {
+    const g = SecurityGuard.fromConfig(undefined)!;
+    expect(g.egress.allowlist).toEqual([]);
+  });
+
+  test("egress allowlist must be an array", () => {
+    expect(() => SecurityGuard.fromConfig({ egress: { allowlist: "nope" as never } })).toThrow(/allowlist/);
+  });
 });
 
 describe("per-bot pattern union (#59)", () => {

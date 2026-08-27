@@ -74,6 +74,33 @@ test("deny-listed domain is blocked by the guard with a clean message", async ()
   expect(r.output).toMatch(/blocked/i);
 });
 
+test("egress allowlist blocks a host not on it (deny-by-default, no network)", async () => {
+  const url = startServer(200, PAGE);
+  // fixture host 127.0.0.1 is NOT on the allowlist -> refused before any fetch
+  const guard = new SecurityGuard([], undefined, { egressAllowlist: ["example.com"] });
+  const r = await dispatch(tools, "web_fetch", { url }, { cwd, guard });
+  expect(r.ok).toBe(false);
+  expect(r.output).toMatch(/egress allowlist/i);
+});
+
+test("egress allowlist allows a listed host to fetch", async () => {
+  const url = startServer(200, PAGE);
+  const guard = new SecurityGuard([], undefined, { egressAllowlist: ["127.0.0.1"] });
+  const r = await dispatch(tools, "web_fetch", { url }, { cwd, guard });
+  expect(r.ok).toBe(true);
+  expect(r.output).toContain("Main Heading");
+});
+
+test("egress allowlist records every outbound attempt on the guard", async () => {
+  const url = startServer(200, PAGE);
+  const guard = new SecurityGuard([], undefined, { egressAllowlist: ["127.0.0.1"] });
+  await dispatch(tools, "web_fetch", { url }, { cwd, guard });
+  const log = guard.egress.outboundLog();
+  expect(log.length).toBeGreaterThan(0);
+  expect(log[0]!.host).toBe("127.0.0.1");
+  expect(log[0]!.decision).toBe("allow");
+});
+
 test("oversize page spills to a temp file and returns its path", async () => {
   const big = "<p>" + "x".repeat(60_000) + "</p>";
   const url = startServer(200, big);

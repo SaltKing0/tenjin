@@ -186,6 +186,23 @@ on the new machine and re-save the encrypted keys (e.g. re-add each provider
 with its key), never by copying `.tenjin-keyring` (a backup would also bypass
 the 0600 protection and clobber a fresher machine-local secret).
 
+## 7. Outbound egress allowlist (web_fetch)
+
+`web_fetch` is deny-listed by default via `security.denyDomains`. For a stricter
+deny-by-default posture, set an allowlist — only hosts on it may be fetched,
+everything else is refused before any network I/O:
+
+```yaml
+security:
+  denyDomains: ["example.com"]   # deny-list (default)
+  egress:
+    allowlist: ["docs.python.org"]  # deny-by-default: only these hosts
+```
+
+When `security.egress.allowlist` is non-empty, `web_fetch` refuses any host not
+on it. Empty or absent keeps the deny-list-only behaviour. Every outbound
+decision is recorded on the guard's egress log.
+
 ## Summary
 
 | Control | Config key | Default | What it stops |
@@ -197,6 +214,7 @@ the 0600 protection and clobber a fresher machine-local secret).
 | Approvals | `approval` (per tool) | write/edit/bash `ask` | writes & shell without consent |
 | Redaction | `security.redaction` | on | secrets leaking into logs/audit |
 | Audit trail | — (always) | on | hidden history of security events |
+| Outbound egress | `security.egress.allowlist` | off | web_fetch to hosts not on the allowlist |
 
 Turning `security.disabled: true` removes the guard (patterns + confinement) and
 redaction; approvals remain governed by the `approval` map, and the audit trail
