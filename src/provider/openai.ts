@@ -10,6 +10,7 @@ import type {
   Usage,
 } from "./types";
 import { parseSse } from "./sse";
+import { openAiToolCallToIR, irToOpenAiToolResult } from "./ir";
 import { fetchWithRetry, normalizeRetry, type RetryPolicy } from "./retry";
 import type { RetryConfig } from "../config/types";
 
@@ -52,7 +53,7 @@ export function toOpenAiMessages(
     } else {
       for (const b of blocks) {
         if (b.type === "tool_result") {
-          out.push({ role: "tool", tool_call_id: b.toolUseId, content: b.content });
+          out.push({ ...irToOpenAiToolResult({ providerCallId: b.toolUseId, ok: !b.isError, content: b.content }) });
         }
       }
       const texts = blocks
@@ -175,19 +176,16 @@ export class OpenAiStreamAssembler {
     for (const i of indices) {
       const call = this.calls.get(i);
       if (!call) continue;
-      let input: unknown = {};
-      if (call.json.trim()) {
-        try {
-          input = JSON.parse(call.json);
-        } catch {
-          input = { _unparsed: call.json };
-        }
-      }
+      const ir = openAiToolCallToIR("openai", {
+        id: call.id || `call_${i}`,
+        type: "function",
+        function: { name: call.name, arguments: call.json },
+      });
       this.blocks.push({
         type: "tool_use",
-        id: call.id || `call_${i}`,
-        name: call.name,
-        input,
+        id: ir.providerCallId,
+        name: ir.name,
+        input: ir.arguments,
       });
     }
     return { stopReason: this.stopReason, content: this.blocks, usage: this.usage };
