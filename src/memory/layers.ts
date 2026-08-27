@@ -178,16 +178,23 @@ function joinEntries(entries: Map<string, string>): string {
 /** Build the per-turn memory injection from the two injected tiers. Daily
  *  notes are deliberately NOT included — they are retrieval-indexed only. */
 export function buildInjection(base: string): InjectionResult {
-  const profileEntries = readLayer(base, "managed");
-  const memoryEntries = readLayer(base, "user");
+  return composeInjection(readLayer(base, "managed"), readLayer(base, "user"));
+}
 
+/** Shared composition: apply the profile/memory caps and render the labeled
+ *  injection from two key→content maps. Used by both the native layered store
+ *  and the workspace-convention adapter below. */
+function composeInjection(
+  profileEntries: Map<string, string>,
+  memoryEntries: Map<string, string>,
+): InjectionResult {
   // Profile core: cap the whole layer at ~2k chars.
   let profile = joinEntries(profileEntries);
   if (profile.length > PROFILE_MAX_CHARS) {
     profile = profile.slice(0, PROFILE_MAX_CHARS);
   }
 
-  // Long-term MEMORY.md: first 200 lines, then cut at 25 KiB.
+  // Long-term MEMORY: first 200 lines, then cut at 25 KiB.
   let memory = joinEntries(memoryEntries);
   const lines = memory.split("\n");
   if (lines.length > MEMORY_MAX_LINES) {
@@ -207,6 +214,43 @@ export function buildInjection(base: string): InjectionResult {
     memory: memory || null,
     injectedKeys,
   };
+}
+
+/**
+ * B9-9 → #460 adapter: read the workspace convention's two human-editable
+ * aggregate files as the "user" tier. `USER.md` → key `user`, `MEMORY.md` →
+ * key `memory`. Returns an empty map when neither file has content.
+ */
+export function readWorkspaceUserLayer(wsDir: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const userPath = join(wsDir, "USER.md");
+  const memPath = join(wsDir, "MEMORY.md");
+  if (existsSync(userPath)) {
+    const c = readFileSync(userPath, "utf8").trim();
+    if (c) out.set("user", c);
+  }
+  if (existsSync(memPath)) {
+    const c = readFileSync(memPath, "utf8").trim();
+    if (c) out.set("memory", c);
+  }
+  return out;
+}
+
+/** Build the per-turn injection from the workspace convention: the managed
+ *  layer reads `wsDir/managed/*.md`, the user tier reads `USER.md`+`MEMORY.md`. */
+export function buildWorkspaceInjection(wsDir: string): InjectionResult {
+  return composeInjection(readLayer(wsDir, "managed"), readWorkspaceUserLayer(wsDir));
+}
+
+/** Convenience gate used by prompt builders: returns the layered injection
+ *  text when `memory.layers.enabled` is set and the workspace has content,
+ *  otherwise null. */
+export function buildLayeredMemory(
+  wsDir: string,
+  memoryConfig?: { layers?: { enabled?: boolean } },
+): string | null {
+  if (!memoryConfig?.layers?.enabled) return null;
+  return buildWorkspaceInjection(wsDir).text || null;
 }
 
 // ---------------------------------------------------------------------------

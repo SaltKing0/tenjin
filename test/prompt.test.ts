@@ -135,6 +135,20 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("a\n\n# Environment");
   });
 
+  test("layeredMemory renders as a section only when provided", () => {
+    const withLayered = buildSystemPrompt({
+      ...base,
+      soulText: "s",
+      cwd: "/",
+      layeredMemory: "# Memory (user)\nAlice prefers German.",
+    });
+    expect(withLayered).toContain("# Memory (user)");
+    expect(withLayered).toContain("Alice prefers German.");
+
+    const without = buildSystemPrompt({ ...base, soulText: "s", cwd: "/" });
+    expect(without).not.toContain("# Memory (user)");
+  });
+
   test("facts section renders right after soul", () => {
     const prompt = buildSystemPrompt({
       ...base,

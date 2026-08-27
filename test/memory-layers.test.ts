@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -8,6 +8,9 @@ import {
   readLayer,
   resolveEntry,
   buildInjection,
+  buildWorkspaceInjection,
+  readWorkspaceUserLayer,
+  buildLayeredMemory,
   PROFILE_MAX_CHARS,
   MEMORY_MAX_BYTES,
   MEMORY_MAX_LINES,
@@ -137,5 +140,54 @@ describe("learning toggle", () => {
     expect(resolveEntry(dir, "gone")).not.toBeNull();
     writeEntry(dir, "user", "gone", "");
     expect(resolveEntry(dir, "gone")).toBeNull();
+  });
+});
+
+describe("workspace-convention adapter (B9-9 → #460)", () => {
+  let ws: string;
+  beforeAll(() => {
+    ws = mkdtempSync(join(tmpdir(), "stealth-ws-layers-"));
+  });
+  afterAll(() => {
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  test("readWorkspaceUserLayer maps USER.md → user and MEMORY.md → memory", () => {
+    writeFileSync(join(ws, "USER.md"), "Alice prefers German.\n", "utf8");
+    writeFileSync(join(ws, "MEMORY.md"), "Long-term fact.\n", "utf8");
+    const layer = readWorkspaceUserLayer(ws);
+    expect(layer.get("user")).toContain("German");
+    expect(layer.get("memory")).toContain("Long-term fact");
+  });
+
+  test("buildWorkspaceInjection combines managed + USER/MEMORY with labels", () => {
+    mkdirSync(join(ws, "managed"), { recursive: true });
+    writeFileSync(join(ws, "managed", "tone.md"), "Be direct.\n", "utf8");
+    const inj = buildWorkspaceInjection(ws);
+    expect(inj.text).toContain("# Profile (managed)");
+    expect(inj.text).toContain("Be direct.");
+    expect(inj.text).toContain("# Memory (user)");
+    expect(inj.text).toContain("Long-term fact");
+    expect(inj.injectedKeys).toContain("user");
+    expect(inj.injectedKeys).toContain("memory");
+  });
+
+  test("buildLayeredMemory is gated on memory.layers.enabled", () => {
+    // disabled → null even with content present
+    expect(buildLayeredMemory(ws, {})).toBeNull();
+    expect(buildLayeredMemory(ws, { layers: { enabled: false } })).toBeNull();
+    // enabled + content → text
+    const t = buildLayeredMemory(ws, { layers: { enabled: true } });
+    expect(t).toContain("Long-term fact");
+  });
+
+  test("buildLayeredMemory returns null when enabled but files are empty", () => {
+    const empty = mkdtempSync(join(tmpdir(), "stealth-ws-empty-"));
+    try {
+      writeFileSync(join(empty, "USER.md"), "   \n", "utf8");
+      expect(buildLayeredMemory(empty, { layers: { enabled: true } })).toBeNull();
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
   });
 });

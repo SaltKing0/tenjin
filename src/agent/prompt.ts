@@ -57,6 +57,9 @@ export function buildSystemPrompt(inputs: {
   /** B9-1 (#363): named Tier-0 core-memory blocks (REFERENCE DATA). Rendered
    *  before the volatile recall section so it stays in the stable prefix. */
   coreMemory?: string | null;
+  /** B9-9 (#426): layered workspace memory (USER.md/MEMORY.md + managed/),
+   *  opt-in via memory.layers.enabled. Stable reference data. */
+  layeredMemory?: string | null;
   /** B5-3 (#378): optional byte-stable Level-1 tool/skill index (name + one-line
    *  description). Rendered when provided; full schemas come on demand. */
   disclosureIndex?: string | null;
@@ -97,6 +100,10 @@ export function buildSystemPrompt(inputs: {
 
   if (inputs.coreMemory) {
     parts.push(inputs.coreMemory);
+  }
+
+  if (inputs.layeredMemory) {
+    parts.push(inputs.layeredMemory);
   }
 
   if (inputs.memorySection) {

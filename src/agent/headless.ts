@@ -65,6 +65,9 @@ export interface HeadlessOptions {
   extraTools?: ToolDef[];
   home?: string;
   memoryDir?: string;
+  /** B9-9 (#426): pre-computed layered workspace memory (USER.md/MEMORY.md +
+   *  managed/), opt-in via memory.layers.enabled. Null/absent = not injected. */
+  layeredMemory?: string | null;
   /** Entries kept per learnings.md file (#204); defaults to DEFAULT_MAX_LEARNINGS. */
   maxLearnings?: number;
   sessionLogDir?: string;
@@ -200,6 +203,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         })
       : null,
     coreMemory: opts.memoryDir ? renderCoreMemory(loadCoreBlocks(opts.memoryDir)) : null,
+    layeredMemory: opts.layeredMemory ?? null,
     skillsSummary: skills.length > 0 ? summarizeSkills(skills) : null,
     teamSection: team ? buildTeamSection(team) : null,
   });

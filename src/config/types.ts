@@ -78,6 +78,9 @@ export interface HarnessConfig {
     summaries?: { onSessionEnd?: boolean };
     /** Cap on durable takeaways stored per learnings.md file (#204). */
     learnings?: { maxEntries?: number };
+    /** B9-9 (#426): inject the workspace layered memory (USER.md/MEMORY.md +
+     *  managed/) into the prompt. Default off. */
+    layers?: { enabled?: boolean };
   };
   /** Outbound event webhooks (#148): `events.webhooks` list; ntfy (#149): `events.ntfy`. */
   events?: {

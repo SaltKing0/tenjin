@@ -12,6 +12,8 @@ import { formatUSD } from "../agent/budget";
 import { guardForBot } from "../security/guard";
 import { resolveParanoid } from "../security/injection";
 import { sessionsDir, memoryDir } from "../config/loader";
+import { buildLayeredMemory } from "../memory/layers";
+import { workspaceDir } from "../cli/workspace";
 import {
   routeText,
   botsAllowedForUser,
@@ -204,6 +206,7 @@ export function createMessageHandler(deps: HandlerDeps) {
         cwd: deps.cwd,
         message: rest,
         maxTokens: deps.config.maxTokens,
+        layeredMemory: buildLayeredMemory(workspaceDir(deps.home), deps.config.memory),
         maxTreeIterations: deps.config.maxTreeIterations ?? 0,
         capUSD: botBudgetUSD(profile, deps.config.budgetUSD),
         pricing: deps.config.pricing,

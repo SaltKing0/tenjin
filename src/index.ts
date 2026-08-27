@@ -21,6 +21,7 @@ import { createProvider } from "./provider/factory";
 import { ProviderRegistry } from "./provider/registry";
 import { defaultModelRef, cheapModelRef, resolveModelRef, type ModelRef } from "./config/models";
 import { loadSoul, loadAgentsMd, buildSystemPrompt } from "./agent/prompt";
+import { buildLayeredMemory } from "./memory/layers";
 import { formatUSD } from "./agent/budget";
 import { runAgentTurn } from "./agent/loop";
 import { runHeadless, capPolicy, applyDenyTools } from "./agent/headless";
@@ -889,6 +890,7 @@ async function oneShot(ctx: AppContext, prompt: string): Promise<number> {
     cwd: ctx.cwd,
     message: prompt,
     maxTokens: ctx.config.maxTokens,
+    layeredMemory: buildLayeredMemory(workspaceDir(ctx.home), ctx.config.memory),
     maxTreeIterations: ctx.config.maxTreeIterations ?? 0,
     capUSD: ctx.config.budgetUSD,
     pricing: ctx.config.pricing,
