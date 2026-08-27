@@ -14,6 +14,7 @@ import {
   memoryDir,
   memoryEnabled,
   webSearchEnabled,
+  researchEnabled,
   ConfigError,
   type HarnessConfig,
 } from "./config/loader";
@@ -78,6 +79,7 @@ import { applyPatchTool } from "./tools/apply-patch";
 import { bashTool } from "./tools/bash";
 import { webFetchTool } from "./tools/web-fetch";
 import { createWebSearchTool } from "./tools/web-search";
+import { createResearchSearchTool } from "./tools/research";
 import { createMcpTools } from "./tools/mcp";
 import type { ToolDef } from "./tools/registry";
 import { parseArgs, HELP, type CliArgs } from "./cli/args";
@@ -309,6 +311,9 @@ async function main(): Promise<number> {
     ];
     if (webSearchEnabled(config)) {
       tools.push(createWebSearchTool(config.webSearch));
+    }
+    if (researchEnabled(config)) {
+      tools.push(createResearchSearchTool(config.research));
     }
     if (memoryEnabled(config)) {
       tools.push(createRememberTool({ memoryDirPath: memDir }));

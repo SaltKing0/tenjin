@@ -287,6 +287,7 @@ with a dotted path; **unknown fields** only warn and are ignored.
 | `routing` | map | B10-1/B10-4 routing core: `default` (alias for the default run), `aliases` (failover chains), `tasks`, `stickyTtlMs`, `retriesPerDeployment`. When set, the default model is selected through the Router instead of the static `provider`/`model` |
 | `memory.enabled` / `memory.vector` / `memory.learnings` | bool / map / map | Memory + vector recall; `memory.learnings.maxEntries` caps takeaways per file (#204) |
 | `memory.layers.enabled` | bool | Opt-in (default off): inject the workspace layered memory — `~/.tenjin/workspace/USER.md` + `MEMORY.md` + `managed/` — into the prompt (B9-9) |
+| `research.enabled` | bool | Opt-in (default off): expose the `research_search` tool (free arXiv API, no key required) |
 | `security` | map | Blocked patterns, disabled flag, workspace, redaction — see [docs/security.md](security.md) |
 | `inbox` | map | `ttlDays` / `maxMessages` for bot inboxes |
 | `globalBudget` | map | Global spend caps (USD) across solo + all bots: `dailyUSD` / `monthlyUSD`; `0` = unlimited — see [Audit & spend](#audit--spend) |
