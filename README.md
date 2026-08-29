@@ -54,25 +54,28 @@ Use `--dir=<path>` to choose another installation directory.
 # 1. Install dependencies
 bun install
 
-# 2. Run — the first run scaffolds your home config
-bun run src/index.ts
+# 2. Complete the guided setup
+bun run src/index.ts onboard
+
+# 3. Start the gateway and open the printed Console URL
+bun run src/index.ts gateway
 ```
 
-The first launch creates `~/.tenjin/` with a starter `config.yaml` and a
-`SOUL.md` personality file. It also shows a welcome banner:
+`tenjin onboard` validates the provider key before writing it, lets you choose
+the model, creates one bot from a role template, applies a trust level, secures
+the gateway with a generated or supplied token, and offers a daily read-only
+repository watch. Re-running the command keeps the existing bot and routine.
 
-```
-Welcome to Tenjin. Created ~/.tenjin — set your model in ~/.tenjin/config.yaml
-and add your SOUL.md to give it a personality.
-```
+The trust choices are `observe` (hard read-only), `supervised` (writes require
+approval, recommended), and `autonomous` (routine writes flow while
+irreversible actions still require approval).
 
-### Set your model
+### Non-interactive setup
 
-Edit `~/.tenjin/config.yaml` and set at least `model` (and `provider`):
-
-```yaml
-provider: anthropic        # anthropic | openai (any OpenAI-compatible endpoint)
-model: "claude-sonnet-4-5" # REQUIRED, e.g. claude-sonnet-4-5, gpt-4o, deepseek-chat
+```sh
+tenjin onboard --provider openai --key "$OPENAI_API_KEY" \
+  --model gpt-4o --bot-name researcher --role researcher \
+  --trust supervised --yes
 ```
 
 You can also pass a model on the command line for a single run:

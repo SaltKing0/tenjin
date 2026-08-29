@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { messageText, sessionMessages } from "../src/gateway/console/chat-history.js";
+import { messageText, sessionMessages, chatRequestBody } from "../src/gateway/console/chat-history.js";
 
 describe("console chat history from session events (#284)", () => {
   test("sessionMessages extracts the ordered user/assistant transcript", () => {
@@ -33,5 +33,13 @@ describe("console chat history from session events (#284)", () => {
     expect(sessionMessages(null)).toEqual([]);
     expect(sessionMessages([])).toEqual([]);
     expect(sessionMessages([{ t: "tool_call" }])).toEqual([]);
+  });
+
+  test("chatRequestBody keeps the selected bot in the request", () => {
+    expect(chatRequestBody("review this", "repo-guard")).toEqual({
+      text: "review this",
+      bot: "repo-guard",
+    });
+    expect(chatRequestBody("hello", "solo")).toEqual({ text: "hello", bot: "solo" });
   });
 });

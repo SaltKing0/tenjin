@@ -183,6 +183,14 @@ test("createMessageHandler forwards onDelta to the model stream", async () => {
   expect(deltas.join("")).toBe("Hello world");
 });
 
+test("authenticated Console routing can explicitly select the built-in solo agent", async () => {
+  const provider = streamingProvider();
+  const handle = makeHandler(provider);
+  const reply = await handle("@solo say hi", { actor: "console", source: "http" });
+  expect(reply).toBe("Hello world");
+  expect(provider.requests).toHaveLength(1);
+});
+
 function framesOf(raw: string): Array<{ type: string; [k: string]: unknown }> {
   return raw
     .split("\n\n")

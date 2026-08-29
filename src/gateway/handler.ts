@@ -118,7 +118,10 @@ function routeInbound(
     if (!routed.ok) return { error: routed.error };
     return { bot: routed.bot, rest: routed.rest };
   }
-  return routeText(text, deps.defaultBot, deps.availableBots);
+  // Browser/HTTP callers may explicitly select the built-in solo profile.
+  // Channel allowlists remain unchanged; only the authenticated Console/API
+  // route gains this virtual bot alongside the configured profiles.
+  return routeText(text, deps.defaultBot, ["solo", ...deps.availableBots]);
 }
 
 /** The default solo/main agent — used when no bot profiles exist yet, so a

@@ -34,7 +34,7 @@ describe("console empty-states (#254)", () => {
     const def = EMPTY_STATES.memory_nobots!;
     expect(def.title).toBeTruthy();
     expect(def.cta).toBe("Create a bot");
-    expect(def.hash).toBe("#status");
+    expect(def.hash).toBe("#setup/bots");
     expect(ROUTES).toContain(def.hash!);
   });
 });

@@ -946,7 +946,7 @@ describe("jobs API", () => {
       join(import.meta.dir, "..", "src", "gateway", "console", "app.js"),
       "utf8",
     );
-    expect(js).toContain('["jobs", "Jobs"');
+    expect(js).toContain('["routines", "Routines", panelJobs]');
     expect(js).toContain("/api/jobs");
     expect(js).toContain("/run");
     expect(js).toContain("Run now");
@@ -1022,7 +1022,8 @@ describe("memory endpoint", () => {
       join(import.meta.dir, "..", "src", "gateway", "console", "app.js"),
       "utf8",
     );
-    expect(js).toContain('["memory", "Memory", panelMemory]');
+    expect(js).toContain('active === "memory"');
+    expect(js).toContain("await panelMemory(host)");
     expect(js).toContain("/api/memory/");
     expect(js).toContain("read-only view of a bot's facts");
     expect(js).toContain("chunks:");

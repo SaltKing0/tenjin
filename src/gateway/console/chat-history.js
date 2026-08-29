@@ -22,3 +22,8 @@ export function sessionMessages(events) {
     .filter((e) => e && e.t === "message")
     .map((e) => ({ role: e.role, text: messageText(e) }));
 }
+
+/** Bind a Console send to the explicitly selected bot (including `solo`). */
+export function chatRequestBody(text, bot) {
+  return { text, bot };
+}

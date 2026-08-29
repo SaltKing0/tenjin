@@ -14,7 +14,7 @@ export const EMPTY_STATES = {
     caption:
       "Create a bot (role + SOUL) in the Bots panel, or just start typing — Solo mode uses the default model.",
     cta: "Create a bot",
-    hash: "#bots",
+    hash: "#setup/bots",
   },
   // chat_history — bots exist but this bot has no saved transcript yet (#284)
   chat_history: {
@@ -25,9 +25,7 @@ export const EMPTY_STATES = {
   // jobs — nothing scheduled yet
   jobs: {
     title: "No scheduled jobs yet",
-    caption: "Routines (every/cron) are configured under the `gateway:` block of your config.yaml.",
-    cta: "Open settings",
-    hash: "#settings",
+    caption: "Run `tenjin onboard` for the daily repo watch, or add one with `tenjin job add`.",
   },
   // sessions — no history in this scope
   sessions: {
@@ -50,7 +48,7 @@ export const EMPTY_STATES = {
     title: "No bot to remember yet",
     caption: "Memory is scoped per bot. Create a bot (role + SOUL) first, then come back here.",
     cta: "Create a bot",
-    hash: "#status",
+    hash: "#setup/bots",
   },
   // approvals — positively empty
   approvals: {
@@ -62,15 +60,17 @@ export const EMPTY_STATES = {
 /** Valid console routes that an empty-state CTA may target. */
 export const ROUTES = [
   "#chat",
-  "#settings",
   "#approvals",
-  "#jobs",
-  "#sessions",
-  "#memory",
-  "#spend",
-  "#audit",
-  "#status",
-  "#bots",
+  "#routines",
+  "#activity",
+  "#activity/sessions",
+  "#activity/memory",
+  "#activity/spend",
+  "#activity/audit",
+  "#activity/status",
+  "#setup/bots",
+  "#setup/provider",
+  "#setup/access",
 ];
 
 /** Resolve the empty-state descriptor for a panel, or null when unknown. */
