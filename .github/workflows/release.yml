@@ -36,15 +36,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - run: bun install
+      - run: bun install --frozen-lockfile
 
-      - name: Build + smoke test (native arch)
+      - name: Build + blackbox test (native arch)
         run: |
-          bun build --compile --target bun-${{ matrix.platform }}-${{ matrix.native_arch }} src/index.ts --outfile tenjin-${{ matrix.platform }}-${{ matrix.native_arch }}${{ matrix.platform == 'windows' && '.exe' || '' }}
-          ./tenjin-${{ matrix.platform }}-${{ matrix.native_arch }}${{ matrix.platform == 'windows' && '.exe' || '' }} -v
+          bun run scripts/build-release.ts --target bun-${{ matrix.platform }}-${{ matrix.native_arch }} --outfile tenjin-${{ matrix.platform }}-${{ matrix.native_arch }}${{ matrix.platform == 'windows' && '.exe' || '' }}
+          bun run scripts/release-blackbox.ts --artifact tenjin-${{ matrix.platform }}-${{ matrix.native_arch }}${{ matrix.platform == 'windows' && '.exe' || '' }}
 
       - name: Build (other arch)
-        run: bun build --compile --target bun-${{ matrix.platform }}-${{ matrix.other_arch }} src/index.ts --outfile tenjin-${{ matrix.platform }}-${{ matrix.other_arch }}${{ matrix.platform == 'windows' && '.exe' || '' }}
+        run: bun run scripts/build-release.ts --target bun-${{ matrix.platform }}-${{ matrix.other_arch }} --outfile tenjin-${{ matrix.platform }}-${{ matrix.other_arch }}${{ matrix.platform == 'windows' && '.exe' || '' }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -59,11 +59,15 @@ jobs:
         with:
           path: dist
 
-      - name: Generate checksums
+      - name: Stage flat release assets and checksums
         run: |
-          cd dist
-          find . -type f -name 'tenjin-*' -exec sha256sum {} \; > SHA256SUMS
+          mkdir release
+          find dist -type f -name 'tenjin-*' -exec cp {} release/ \;
+          test "$(find release -maxdepth 1 -type f -name 'tenjin-*' | wc -l)" -eq 6
+          cd release
+          sha256sum tenjin-* > SHA256SUMS
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/**
+          files: release/*
+          fail_on_unmatched_files: true

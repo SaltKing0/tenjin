@@ -152,15 +152,21 @@ async function main(): Promise<number> {
   // `tenjin tui` runs the split-pane TUI instead of the line REPL.
   const raw = process.argv.slice(2);
   const useTui = raw[0] === "tui";
-  const argv = useTui ? raw.slice(1) : raw;
+  // mcp-serve needs the fully constructed config/tool/guard context below, so
+  // it cannot live in the eager COMMANDS table. Strip the subcommand before
+  // generic flag parsing, then dispatch after the context exists.
+  const useMcpServe = raw[0] === "mcp-serve";
+  const argv = useTui || useMcpServe ? raw.slice(1) : raw;
   const handler = COMMANDS[argv[0] ?? ""];
-  if (handler && !useTui) {
+  if (handler && !useTui && !useMcpServe) {
     return handler(argv.slice(1));
   }
 
   let cli: CliArgs;
   try {
-    cli = parseArgs(argv);
+    cli = useMcpServe
+      ? { help: false, version: false }
+      : parseArgs(argv);
   } catch (e) {
     stdout.write(`${(e as Error).message}\n`);
     return 2;
@@ -366,8 +372,8 @@ async function main(): Promise<number> {
     // B15-7 (#439): serve our own tools/skills to external MCP clients.
     // Intercepted here (after tools + guard are built) so the server wires to
     // the real dispatch; deny-by-default via config.mcpServer.expose[].
-    if (process.argv[2] === "mcp-serve") {
-      return mcpServeCommand(process.argv.slice(3), { config, tools, ctx });
+    if (useMcpServe) {
+      return mcpServeCommand(argv, { config, tools, ctx });
     }
 
     if (cli.print !== undefined) {

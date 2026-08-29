@@ -9,7 +9,18 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+// `scripts/build-release.ts` replaces this identifier while compiling the
+// standalone executable. `typeof` keeps source/dev execution safe when no
+// build-time define is present.
+declare const __TENJIN_VERSION__: string | undefined;
+
 function loadVersion(): string {
+  if (
+    typeof __TENJIN_VERSION__ === "string" &&
+    __TENJIN_VERSION__.trim()
+  ) {
+    return __TENJIN_VERSION__.trim();
+  }
   try {
     const pkg = JSON.parse(
       readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"),

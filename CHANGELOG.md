@@ -10,16 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - CLI `-v` / `--version` flag prints the version banner and exits (works with
   no config or API keys).
+- A native release blackbox gate now verifies installer → binary → version →
+  onboarding → MCP → gateway → embedded console → authenticated healthcheck →
+  first agent run from a source-free temporary directory.
 
 ### Changed
 - `VERSION` is now derived from `package.json` (single source of truth) instead
   of being hardcoded in `src/version.ts`.
+- Standalone builds embed that package version and all web-console assets; the
+  installer exposes the stable `tenjin` command instead of an artifact name.
 - Repository hygiene: removed committed scratch files (`_d.txt`, `_f.txt`) and
   hardened `.gitignore` for `Start.md`, `LIN.txt`, `SEG.txt` and the scratch
   files so they cannot be re-added.
 
 ### Fixed
 - Removed a duplicated gateway-boot paragraph from the README.
+- Corrected release checksum paths and made `tenjin mcp-serve` reachable through
+  top-level command dispatch.
 
 ## [0.1.0]
 

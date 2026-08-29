@@ -35,6 +35,19 @@ It is the reference harness this repository documents. Repo codename: `stealth`.
   `/usr/bin/bwrap`; it fails closed on macOS and Windows because those platforms
   currently have no supported whole-process-lifecycle backend.
 
+## Install the standalone release
+
+Tagged releases ship a self-contained `tenjin` executable; Bun is not required
+on the target machine. The installer selects the matching platform artifact,
+verifies it against `SHA256SUMS`, and installs it as `~/.local/bin/tenjin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SaltKing0/Stealth/main/install.sh | sh
+~/.local/bin/tenjin --version
+```
+
+Use `--dir=<path>` to choose another installation directory.
+
 ## Quickstart
 
 ```sh
@@ -215,6 +228,7 @@ Run `tenjin --help` for the full reference.
 ```sh
 bun test          # full test suite
 bun run typecheck # tsc --noEmit
+bun run release:blackbox # build, install and exercise the native artifact
 ```
 
 There is also a CI workflow (`.github/workflows/ci.yml`) that runs typecheck and

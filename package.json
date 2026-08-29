@@ -17,6 +17,8 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "tenjin": "bun run src/index.ts",
+    "build:release": "bun run scripts/build-release.ts",
+    "release:blackbox": "bun run scripts/release-blackbox.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run typecheck"
