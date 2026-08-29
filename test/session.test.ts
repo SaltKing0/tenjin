@@ -40,6 +40,15 @@ test("create appends and reads back events", () => {
   expect(events[1]?.t).toBe("error");
 });
 
+test("session ids carry enough entropy for high-volume creation", () => {
+  const ids = Array.from({ length: 1_000 }, () => SessionLog.create(dir).id);
+
+  expect(new Set(ids).size).toBe(ids.length);
+  for (const id of ids) {
+    expect(id).toMatch(/^\d{12}-[0-9a-f]{16}$/);
+  }
+});
+
 test("meta sidecar is only written when preview/parent changes (#317)", () => {
   const log = SessionLog.create(dir);
   const metaPath = `${log.path.replace(/\.jsonl$/, "")}.meta.json`;
