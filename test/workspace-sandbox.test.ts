@@ -5,6 +5,7 @@ import {
   DockerWorkspace,
   RemoteWorkspace,
   createWorkspace,
+  validateWorkspaceConfig,
   ttlGC,
   trackContainer,
   untrackContainer,
@@ -168,6 +169,34 @@ describe("createWorkspace — config switch", () => {
   test("unknown mode is a clean ConfigError", () => {
     expect(() => createWorkspace({ mode: "bogus" as never })).toThrow(ConfigError);
     expect(() => createWorkspace({ mode: "bogus" as never })).toThrow(/Unknown workspace mode/);
+  });
+});
+
+describe("validateWorkspaceConfig — production runtime boundary", () => {
+  test("accepts the only connected production mode", () => {
+    expect(() => validateWorkspaceConfig(undefined)).not.toThrow();
+    expect(() => validateWorkspaceConfig({})).not.toThrow();
+    expect(() => validateWorkspaceConfig({ mode: "local" })).not.toThrow();
+  });
+
+  test("docker and remote fail closed instead of silently executing locally", () => {
+    expect(() => validateWorkspaceConfig({ mode: "docker" })).toThrow(/not connected.*production tool runtime/i);
+    expect(() => validateWorkspaceConfig({ mode: "remote" })).toThrow(/not connected.*production tool runtime/i);
+    expect(() => validateWorkspaceConfig({ mode: "docker" })).toThrow(/refusing to fall back/i);
+  });
+
+  test("docker-only settings cannot be inert under local mode", () => {
+    expect(() => validateWorkspaceConfig({ mode: "local", docker: { image: "alpine" } })).toThrow(
+      /require workspace\.mode: docker/i,
+    );
+    expect(() => validateWorkspaceConfig({ mode: "local", ttlMs: 60_000 })).toThrow(
+      /require workspace\.mode: docker/i,
+    );
+  });
+
+  test("rejects an unknown mode at the same boundary", () => {
+    expect(() => validateWorkspaceConfig({ mode: "bogus" as never })).toThrow(ConfigError);
+    expect(() => validateWorkspaceConfig({ mode: "bogus" as never })).toThrow(/Unknown workspace mode/);
   });
 });
 

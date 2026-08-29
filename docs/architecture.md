@@ -298,6 +298,7 @@ with a dotted path; **unknown fields** only warn and are ignored.
 | `globalBudget` | map | Global spend caps (USD) across solo + all bots: `dailyUSD` / `monthlyUSD`; `0` = unlimited — see [Audit & spend](#audit--spend) |
 | `maxTreeIterations` | number | Global safety-net: max iterations per delegation tree (a parent run + all its delegates share one counter); `0` = unlimited — see below |
 | `context` | map | Context-window guard: `enabled`, `thresholdRatio`, `defaultWindow`, `windows` — see below |
+| `workspace.mode` | `local` | Execution surface. `local` is the only production-connected mode and still requires native fail-closed Bash isolation. Reserved `docker`/`remote` values are rejected at config load rather than silently falling back to the host. |
 
 | `gateway` | map | Jobs, Telegram, heartbeat, listen — see below |
 

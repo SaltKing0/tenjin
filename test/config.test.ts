@@ -139,6 +139,32 @@ test("project config overrides global scalars", () => {
   expect(sources.project).toBe(join(project, ".tenjin", "config.yaml"));
 });
 
+describe("workspace execution mode", () => {
+  test("local is accepted as the connected production mode", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.yaml"), "model: m\nworkspace:\n  mode: local\n");
+    expect(loadConfig(project, home).config.workspace?.mode).toBe("local");
+  });
+
+  test("docker and remote fail before runtime instead of falling back to local", () => {
+    mkdirSync(home, { recursive: true });
+    for (const mode of ["docker", "remote"]) {
+      writeFileSync(join(home, "config.yaml"), `model: m\nworkspace:\n  mode: ${mode}\n`);
+      expect(() => loadConfig(project, home)).toThrow(/not connected.*production tool runtime/i);
+      expect(() => loadConfig(project, home)).toThrow(/refusing to fall back/i);
+    }
+  });
+
+  test("docker-only settings are rejected when local mode would ignore them", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "config.yaml"),
+      "model: m\nworkspace:\n  mode: local\n  docker:\n    image: alpine\n",
+    );
+    expect(() => loadConfig(project, home)).toThrow(/require workspace\.mode: docker/i);
+  });
+});
+
 test("approval maps merge per-key with project winning", () => {
   mkdirSync(home, { recursive: true });
   writeFileSync(
