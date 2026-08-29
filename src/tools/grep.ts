@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { Glob } from "bun";
 import type { ToolDef } from "./registry";
+import { Redactor } from "../security/redact";
 
 const SKIP_DIRS = new Set([
   "node_modules",
@@ -48,6 +49,7 @@ export const grepTool: ToolDef = {
     const fileFilter = a.include ? new Glob(a.include) : null;
     const max = Math.min(500, Math.max(1, a.maxResults ?? 100));
     const results: string[] = [];
+    const redactor = ctx.redactor ?? new Redactor();
 
     await walk(ctx.cwd, ctx.cwd, async (rel, abs) => {
       if (results.length >= max) return;
@@ -60,12 +62,16 @@ export const grepTool: ToolDef = {
       const buf = await readFile(abs).catch(() => null);
       if (!buf || buf.byteLength > MAX_FILE_BYTES) return;
       if (buf.subarray(0, 8192).includes(0)) return;
-      const text = buf.toString("utf8");
+      // Redact the complete file before matching or bounding results. A
+      // multiline credential cannot be recognized from an isolated body line.
+      const text = redactor.redact(buf.toString("utf8"));
       const lines = text.split("\n");
       for (let i = 0; i < lines.length; i++) {
         if (results.length >= max) break;
         const line = lines[i];
         if (line === undefined || !regex.test(line)) continue;
+        // Preserve the already-redacted value through matching, then apply the
+        // presentation bound so token prefixes cannot leak at the cut point.
         results.push(`${rel}:${i + 1}: ${line.trim().slice(0, MAX_LINE)}`);
       }
     });

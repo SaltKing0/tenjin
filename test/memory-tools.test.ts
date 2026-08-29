@@ -122,6 +122,16 @@ describe("recall", () => {
     expect(r.output.split("\n")).toHaveLength(3);
   });
 
+  test("redacts a complete memory secret before the snippet cap", async () => {
+    const secret = `AKIA${"D".repeat(16)}`;
+    seedVector("secret:0", `${"x".repeat(137)} ${secret} tail`, [1, 0]);
+    const r = await recall("auth");
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("[REDACTED]");
+    expect(r.output).not.toContain(secret);
+    expect(r.output).not.toContain("AKIA");
+  });
+
   test("searches the provided VectorStore including buffered-only chunks", async () => {
     seedVector("s1:0", "fixed the auth bug today", [1, 0]);
     const store = new VectorStore(vectorsFilePath(dir));

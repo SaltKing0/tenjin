@@ -170,7 +170,7 @@ export function toolsForPolicy(policy: ToolPolicy, skill?: SkillDirs): ToolDef[]
   }
   switch (policy) {
     case "read-only":
-      return [readTool, globTool, grepTool, webFetchTool, browserTool, ...skillTools];
+      return [readTool, globTool, grepTool, webFetchTool, ...skillTools];
     case "full":
       return [readTool, globTool, grepTool, writeTool, editTool, applyPatchTool, bashTool, webFetchTool, browserTool, ...skillTools];
     case "none":
@@ -220,7 +220,12 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       ...(opts.sessionBot ? { bot: opts.sessionBot } : {}),
       ...(opts.effort ? { effort: opts.effort } : {}),
     });
-    logger.append({ t: "message", role: "user", content: opts.message, ts: new Date().toISOString() });
+    logger.append({
+      t: "message",
+      role: "user",
+      content: redactor.redact(opts.message),
+      ts: new Date().toISOString(),
+    });
   }
   const budget = opts.budget ?? createBudget(opts.capUSD, opts.pricing);
 
@@ -290,6 +295,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       opts.approve ??
       (async (_name, group) => group === "read"),
     guard: opts.guard,
+    redactor,
     audit: opts.audit,
     paranoid: opts.paranoid,
     correlationId: opts.correlationId,
@@ -315,7 +321,12 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       if (!logger) return;
       const ts = new Date().toISOString();
       if (e.t === "assistant_message") {
-        logger?.append({ t: "message", role: "assistant", content: e.content, ts });
+        logger?.append({
+          t: "message",
+          role: "assistant",
+          content: redactor.redactValue(e.content) as typeof e.content,
+          ts,
+        });
       } else if (e.t === "tool_call") {
         logger?.append({
           t: "tool_call",

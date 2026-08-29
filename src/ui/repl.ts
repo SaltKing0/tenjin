@@ -1,7 +1,7 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { join } from "node:path";
-import type { ChatMessage, Provider } from "../provider/types";
+import type { ChatMessage, ContentBlock, Provider } from "../provider/types";
 import { ProviderRegistry } from "../provider/registry";
 import { resolveModelRef, formatModelRef, type ModelRef } from "../config/models";
 import { ConfigError } from "../config/types";
@@ -30,6 +30,8 @@ import { readFacts } from "../tools/memory";
 import { memoryEnabled } from "../config/loader";
 import { VERSION } from "../version";
 import { classifyRisk, isT2 } from "../security/guard";
+import { Redactor } from "../security/redact";
+import { sanitizeBrowserToolInput } from "../tools/browser";
 // B13-5 (#437): mode ladder — the higher-level approval default.
 import {
   decideModeAction,
@@ -87,6 +89,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   reconcileOrphanedTasks(opts.home);
   const rl = createInterface({ input: stdin, output: stdout });
   const audit = new AuditLog(auditPath(opts.home));
+  const redactor = Redactor.fromConfig(opts.config.security);
   const state = {
     messages: [...(opts.initialMessages ?? [])],
     budget: createBudget(opts.config.budgetUSD, opts.config.pricing),
@@ -177,7 +180,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     provider: state.active.provider,
     model: state.active.model,
     ...(opts.bot ? { bot: opts.bot } : {}),
-  });
+  }, redactor);
 
   printBanner(opts, state);
 
@@ -199,7 +202,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       }
 
       state.messages.push({ role: "user", content: line });
-      logEvent(state.logger, { t: "message", role: "user", content: line, ts: now() });
+      logEvent(state.logger, { t: "message", role: "user", content: line, ts: now() }, redactor);
 
       controller = new AbortController();
       turnActive = true;
@@ -241,10 +244,11 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           approve: (name, group, input) =>
             approve(name, group, input, opts.config, rl, sessionAllowed, audit, opts.bot, sessionMode),
           guard: opts.guard,
+          redactor,
           audit: (kind, detail, correlationId) =>
             audit.append(kind, "user", detail, opts.bot, correlationId),
           onTextDelta: (d) => stream.push(d),
-          onEvent: (e) => forwardEvent(e, state.logger, state.budget),
+          onEvent: (e) => forwardEvent(e, state.logger, state.budget, redactor),
           signal: controller.signal,
           contextGuard: resolveContextGuard(state.active.model, opts.config.context),
         });
@@ -266,7 +270,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         } else {
           const msg = (e as Error)?.message ?? String(e);
           stdout.write(red(`error: ${msg}\n`));
-          logEvent(state.logger, { t: "error", message: msg, ts: now() });
+          logEvent(state.logger, { t: "error", message: msg, ts: now() }, redactor);
         }
       } finally {
         clearInterval(ticker);
@@ -658,7 +662,10 @@ async function approve(
 
   // #406: one approval visible at a time — concurrent prompts serialize FIFO.
   return approvalQueue.run(async () => {
-    const what = formatApprovalWhat(name, input);
+    // Risk classification and the eventual dispatch used the raw input above.
+    // Only this human-visible copy is sanitized, avoiding both an opaque
+    // browser-type leak and a masked-approval/raw-execution TOCTOU gap.
+    const what = formatApprovalWhat(name, input, Redactor.fromConfig(config.security));
     stdout.write("\n" + renderApprovalBlock({ tool: name, tier, what }) + "\n");
     const answered = await askApproval(rl, DEFAULT_APPROVAL_TIMEOUT_MS);
     if (answered === null) {
@@ -695,18 +702,25 @@ async function approve(
   });
 }
 
-/** #406: derive the literal command/path shown as the approval WHAT. */
-function formatApprovalWhat(name: string, input: unknown): string {
-  if (typeof input === "object" && input !== null) {
-    const rec = input as Record<string, unknown>;
+/** #406: derive the sanitized command/path shown as the approval WHAT. */
+export function formatApprovalWhat(
+  name: string,
+  input: unknown,
+  redactor: Redactor = new Redactor(),
+): string {
+  const displayInput = name === "browser"
+    ? sanitizeBrowserToolInput(input, redactor)
+    : redactor.redactValue(input);
+  if (typeof displayInput === "object" && displayInput !== null) {
+    const rec = displayInput as Record<string, unknown>;
     if (typeof rec.command === "string") return rec.command;
     if (typeof rec.path === "string") return rec.path;
   }
   try {
-    const s = JSON.stringify(input);
-    return s ? s.slice(0, 300) : String(input);
+    const s = JSON.stringify(displayInput);
+    return s ? s.slice(0, 300) : String(displayInput);
   } catch {
-    return String(input);
+    return String(displayInput);
   }
 }
 
@@ -737,42 +751,79 @@ function adoptLog(state: ReplState, log: SessionLog, sessionAllowed: Set<string>
   sessionAllowed.clear();
 }
 
-export function forwardEvent(e: TurnEvent, logger?: EventLogger, budget?: Budget): void {
+export function forwardEvent(
+  e: TurnEvent,
+  logger?: EventLogger,
+  budget?: Budget,
+  redactor: Redactor = new Redactor(),
+): void {
   if (!logger) return;
   switch (e.t) {
     case "assistant_message":
-      logger.append({ t: "message", role: "assistant", content: e.content, ts: now() });
+      logEvent(logger, { t: "message", role: "assistant", content: e.content, ts: now() }, redactor);
       break;
     case "tool_call":
-      logger.append({ t: "tool_call", id: e.id, name: e.name, input: e.input, ts: now() });
+      logEvent(logger, { t: "tool_call", id: e.id, name: e.name, input: e.input, ts: now() }, redactor);
       break;
     case "tool_result":
-      logger.append({ t: "tool_result", id: e.id, name: e.name, ok: e.ok, output: e.output, ts: now() });
+      logEvent(
+        logger,
+        { t: "tool_result", id: e.id, name: e.name, ok: e.ok, output: e.output, ts: now() },
+        redactor,
+      );
       break;
     case "usage":
-      logger.append({
+      logEvent(logger, {
         t: "usage",
         inputTokens: e.usage.inputTokens,
         outputTokens: e.usage.outputTokens,
         costUSD: e.costUSD,
         spentUSD: budget?.spentUSD ?? -1,
         ts: now(),
-      });
+      }, redactor);
       break;
     case "compression":
-      logger.append({
+      logEvent(logger, {
         t: "compression",
         beforeTokens: e.beforeTokens,
         afterTokens: e.afterTokens,
         elidedTokens: e.elidedTokens,
         ts: now(),
-      });
+      }, redactor);
       break;
   }
 }
 
-export function logEvent(logger: EventLogger | undefined, event: SessionEvent): void {
-  logger?.append(event);
+/**
+ * Persist a redacted copy of a session event. The enabled redactor is the
+ * secure default; callers with `security.redaction: false` pass their disabled
+ * instance explicitly. This never mutates the provider's in-memory message.
+ */
+export function logEvent(
+  logger: EventLogger | undefined,
+  event: SessionEvent,
+  redactor: Redactor = new Redactor(),
+): void {
+  if (!logger) return;
+  switch (event.t) {
+    case "message":
+      logger.append({
+        ...event,
+        content: redactor.redactValue(event.content) as string | ContentBlock[],
+      });
+      return;
+    case "tool_call":
+      logger.append({ ...event, input: redactor.redactValue(event.input) });
+      return;
+    case "tool_result":
+      logger.append({ ...event, output: redactor.redact(event.output) });
+      return;
+    case "error":
+      logger.append({ ...event, message: redactor.redact(event.message) });
+      return;
+    default:
+      logger.append(event);
+  }
 }
 
 function printBanner(opts: ReplOptions, state: ReplState): void {

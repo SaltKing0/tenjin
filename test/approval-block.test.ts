@@ -9,6 +9,8 @@ import {
   truncateForPrompt,
   withTimeout,
 } from "../src/ui/approval";
+import { formatApprovalWhat } from "../src/ui/repl";
+import { Redactor } from "../src/security/redact";
 import { runAgentTurn } from "../src/agent/loop";
 import { Budget } from "../src/agent/budget";
 import type { ChatMessage, ChatResponse } from "../src/provider/types";
@@ -69,6 +71,22 @@ describe("approval request block", () => {
     expect(truncated).toContain("(view full command)");
     expect(truncated.length).toBeLessThan(long.length);
     expect(truncateForPrompt("short")).toBe("short");
+  });
+
+  test("REPL browser approval display masks raw URL credentials and a numeric PIN", () => {
+    const input = {
+      action: "type",
+      url: "https://alice:password@example.test/?code=oauth-code",
+      selector: "#pin",
+      text: 1234,
+    };
+    const safe = formatApprovalWhat("browser", input, new Redactor());
+    expect(safe).toContain("[REDACTED]");
+    expect(safe).not.toContain("1234");
+    expect(safe).not.toContain("alice");
+    expect(safe).not.toContain("password");
+    expect(safe).not.toContain("oauth-code");
+    expect(formatApprovalWhat("browser", input, new Redactor(false))).toContain("1234");
   });
 });
 

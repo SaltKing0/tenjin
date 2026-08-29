@@ -37,6 +37,7 @@ export const RISK_TIER_BY_TOOL: Readonly<Record<string, RiskTier>> = {
   edit_file: "T1",
   apply_patch: "T1",
   bash: "T1",
+  browser: "T1",
   web_fetch: "T1",
   web_search: "T1",
   remember: "T1",
@@ -62,6 +63,7 @@ export const KNOWN_TOOLS: readonly string[] = [
   "edit_file",
   "apply_patch",
   "bash",
+  "browser",
   "web_fetch",
   "web_search",
   "remember",
@@ -87,6 +89,13 @@ const T2_BASH_PATTERNS: readonly RegExp[] = [
   /\bdd\s+of=(\/dev\/|\.)/i,
   /\bmkfs\./i,
   /\bshutdown\b|\bpoweroff\b|\breboot\b|\binit\s+0\b/i,
+  // Environment enumeration is credential access even when the command does
+  // not name a specific secret. The child environment is minimized elsewhere;
+  // T2 remains a defense-in-depth human checkpoint for explicit inspection.
+  /(?:^|[\s;&|])(?:env|printenv)(?:\s|$)/i,
+  /\b(?:set|export|declare)\s+(?:-[a-z]*p|-x)(?:\s|$)/i,
+  /\/proc\/(?:self|\d+)\/environ\b/i,
+  /\b(?:process|Bun|Deno)\.env\b|\bos\.(?:environ|getenv)\b/i,
 ];
 
 const T2_CREDENTIAL_PATHS: readonly RegExp[] = [
@@ -109,7 +118,7 @@ export function isT2Input(tool: string, input: unknown): boolean {
   const obj = (input ?? {}) as Record<string, unknown>;
   if (tool === "bash") {
     const cmd = typeof obj.command === "string" ? obj.command : "";
-    return T2_BASH_PATTERNS.some((re) => re.test(cmd));
+    return obj.sandbox === "off" || T2_BASH_PATTERNS.some((re) => re.test(cmd));
   }
   for (const f of PATH_FIELDS) {
     const v = obj[f];

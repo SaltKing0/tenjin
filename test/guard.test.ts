@@ -245,11 +245,12 @@ describe("dispatch integration", () => {
     expect(r.output).toContain("fine");
   });
 
-  test("no guard behaves as before", async () => {
+  test("no guard disables path blocking but keeps the independent redaction boundary", async () => {
     mkdirSync(dir, { recursive: true });
     const r = await dispatch([readTool], "read_file", { path: ".env" }, { cwd: dir });
     expect(r.ok).toBe(true);
-    expect(r.output).toContain("SECRET=1");
+    expect(r.output).toContain("SECRET=[REDACTED]");
+    expect(r.output).not.toContain("SECRET=1");
   });
 
   test("glob tool not path-guarded", async () => {

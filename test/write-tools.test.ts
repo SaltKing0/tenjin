@@ -15,10 +15,12 @@ import { dispatch } from "../src/tools/registry";
 import { atomicWrite } from "../src/tools/atomic";
 import { writeTool } from "../src/tools/write";
 import { editTool } from "../src/tools/edit";
-import { bashTool } from "../src/tools/bash";
+import { createBashTool } from "../src/tools/bash";
 import { SecurityGuard, DEFAULT_BLOCKED_PATTERNS } from "../src/security/guard";
 
-const tools = [writeTool, editTool, bashTool];
+// Shell behavior is tested independently of native-sandbox availability. The
+// production singleton never grants this host-only escape hatch.
+const tools = [writeTool, editTool, createBashTool(process.env, { allowUnsandboxed: true })];
 
 let dir: string;
 
@@ -131,7 +133,7 @@ describe("edit_file", () => {
 
 describe("bash", () => {
   const run = (args: Record<string, unknown>) =>
-    dispatch(tools, "bash", args, { cwd: dir });
+    dispatch(tools, "bash", { sandbox: "off", ...args }, { cwd: dir });
 
   test("captures stdout and exit code", async () => {
     const r = await run({ command: "echo hello" });

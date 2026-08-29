@@ -37,8 +37,8 @@ Usage:
                              job run <id>        run a job immediately
                              (gateway picks up changes via SIGHUP or restart)
   tenjin plugin marketplace add <url>   add a git marketplace (marketplace.json at root)
-  tenjin plugin install <name>          install an @org/plugin (manifest-first, no scripts run)
-  tenjin plugin update <name> [--yes]   update to newest version (major bump needs --yes)
+  tenjin plugin install <name>          stage an inactive @org/plugin (no plugin code/scripts run)
+  tenjin plugin update <name> [--yes]   stage newest inactive version (major bump needs --yes)
   tenjin plugin list                    list installed plugins
 
 Options:

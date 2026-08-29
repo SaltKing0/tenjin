@@ -9,6 +9,7 @@ import {
   type QueryRoute,
 } from "../memory/hybrid";
 import type { VectorStore } from "../memory/vector-store";
+import { Redactor } from "../security/redact";
 
 /**
  * B9-14 (#394): retrieval exposed as an EXPLICIT tool, never auto-injected
@@ -62,13 +63,17 @@ async function defaultSearch(
 }
 
 /** Render retrieved hits with their chunk-ids so they can be cited back. */
-export function formatRetrieval(res: HybridResult): string {
+export function formatRetrieval(
+  res: HybridResult,
+  redactor: Redactor = new Redactor(),
+): string {
   const head = `retrieve (route: ${res.route}${res.vectorUsed ? ", vector + bm25" : ", bm25 only"}):`;
   if (res.hits.length === 0) {
     return `${head}\nNo relevant chunks found. Grounding: abstain unless other context was delivered.`;
   }
   const lines = res.hits.map((h) => {
-    const text = h.text.length > 160 ? `${h.text.slice(0, 160)}…` : h.text;
+    const safeText = redactor.redact(h.text);
+    const text = safeText.length > 160 ? `${safeText.slice(0, 160)}…` : safeText;
     return `[${h.score.toFixed(3)}] chunk-id "${h.id}": ${text}`;
   });
   return [head, ...lines].join("\n");
@@ -91,12 +96,12 @@ export function createRetrieveTool(deps: RetrieveDeps): ToolDef {
       },
       required: ["query"],
     },
-    async handler(args, _ctx) {
+    async handler(args, ctx) {
       const query = String(args.query).trim();
       if (!query) throw new Error("query must not be empty");
       const topK = Math.min(10, Math.max(1, Number(args.topK) || 5));
       const res = await search({ query, topK });
-      return formatRetrieval(res);
+      return formatRetrieval(res, ctx.redactor ?? new Redactor());
     },
   };
 }

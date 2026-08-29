@@ -39,6 +39,12 @@ import { emit } from "../gateway/events";
 import { snapshot as checkpointSnapshot } from "../checkpoints/store";
 import { runBoundary, type BoundaryMode } from "../recovery/boundary";
 import type { RecoverySession } from "../recovery/session";
+import { Redactor } from "../security/redact";
+import {
+  browserTypedText,
+  redactBrowserValue,
+  sanitizeBrowserToolInput,
+} from "../tools/browser";
 
 export const MAX_ITERATIONS = 25;
 
@@ -99,6 +105,13 @@ export interface AgentTurnOptions {
   approve: ApproveFn;
   cwd: string;
   guard?: SecurityGuard | null;
+  /**
+   * Redact tool output before it is appended to the transcript and sent back
+   * to the provider. Defaults to the enabled redactor so callers cannot
+   * accidentally protect only the durable logs while leaking into model
+   * context.
+   */
+  redactor?: Redactor | null;
   audit?: (kind: "write_exec" | "budget_halt" | "budget_exceeded" | "prompt_injection", detail: string, correlationId?: string) => void;
   /** Mask suspected prompt-injection tool output before it reaches the model. */
   paranoid?: boolean;
@@ -201,6 +214,11 @@ async function runTurns(
   opts: AgentTurnOptions,
   compactionTracker: CompactionTracker,
 ): Promise<{ result: TurnResult; iterations: number }> {
+  const redactor = opts.redactor ?? new Redactor();
+  // Resume boundary: old transcripts may predate model-boundary redaction.
+  // Sanitize only tool results (never ordinary user prose) before compaction,
+  // archival, summarization, checkpoints, or a provider can observe them.
+  redactHistoricalBoundaryContent(opts.messages, redactor);
   const totals: Usage = { inputTokens: 0, outputTokens: 0 };
   let costUSD = 0;
   let lastText = "";
@@ -248,7 +266,12 @@ async function runTurns(
       return { result: { stopReason: "budget_exhausted", usage: totals, costUSD, model: opts.model, text: lastText }, iterations: iteration };
     }
 
+    // Re-assert the boundary on every iteration. This covers tool results
+    // appended by this or another caller between provider invocations and,
+    // crucially, runs before compaction can persist an archive.
+    redactHistoricalBoundaryContent(opts.messages, redactor);
     await maybeCompress(opts, iteration, compactionTracker);
+    redactHistoricalBoundaryContent(opts.messages, redactor);
 
 
     let response: ChatResponse;
@@ -276,7 +299,6 @@ async function runTurns(
         {
           onTextDelta: (d) => {
             streamedPartial += d;
-            opts.onTextDelta?.(d);
           },
         },
         opts.signal,
@@ -303,9 +325,31 @@ async function runTurns(
       throw new Error("The model returned a malformed response.");
     }
 
-    opts.messages.push({ role: "assistant", content: response.content });
-    opts.onEvent?.({ t: "assistant_message", content: response.content });
-    lastText = response.content
+    // Provider tool calls are executable instructions, but their durable/model-
+    // visible copy is a separate trust boundary. In particular, browser type
+    // text is opaque and must not land in transcript/event consumers. Dispatch
+    // below still receives the original block.input.
+    const safeAssistantContent = sanitizeAssistantContent(response.content, redactor);
+    // A streamed text prefix arrives before the provider reveals later tool
+    // blocks. Buffer it until the response is complete so an accompanying
+    // browser `type` value can be treated as opaque before any UI/SSE callback
+    // observes it. Exact-value redaction runs over the joined stream so values
+    // split across provider deltas cannot bypass the boundary.
+    if (streamedPartial) {
+      const browserOpaqueValues = browserOpaqueTextValues(response.content);
+      opts.onTextDelta?.(
+        browserOpaqueValues.length > 0
+          ? redactBrowserValue(streamedPartial, redactor, browserOpaqueValues)
+          : streamedPartial,
+      );
+    }
+    opts.messages.push({ role: "assistant", content: safeAssistantContent });
+    opts.onEvent?.({ t: "assistant_message", content: safeAssistantContent });
+    // The public TurnResult is another visible boundary. Derive it from the
+    // sanitized copy as well, otherwise a text block accompanying a browser
+    // `type` call could reflect the opaque value even though transcript and
+    // events were already clean.
+    lastText = safeAssistantContent
       .map((b) => (b.type === "text" ? b.text : ""))
       .join("")
       .trim();
@@ -337,11 +381,15 @@ async function runTurns(
     const results: ToolResultBlock[] = [];
     for (const block of response.content) {
       if (block.type !== "tool_use") continue;
-      opts.onEvent?.({ t: "tool_call", id: block.id, name: block.name, input: block.input });
+      const safeInput = sanitizeToolCallInput(block.name, block.input, redactor);
+      opts.onEvent?.({ t: "tool_call", id: block.id, name: block.name, input: safeInput });
 
       let ok = false;
       let output: string;
       let injectionWarning: string | undefined;
+      // Authorization/policy checks must inspect exactly what will execute.
+      // Rendering/persistence of approval requests owns its own redaction; the
+      // loop must not create a masked-input/raw-execution TOCTOU gap.
       const decision = await opts.approve(block.name, groupOf(opts.tools, block.name), block.input);
       const denied =
         decision === false || (typeof decision === "object" && decision.allowed === false);
@@ -361,9 +409,9 @@ async function runTurns(
         // B3-3 (#372): record an ON_TOOL_CALL checkpoint before the external
         // interaction, then run the tool under the configured error boundary.
         opts.recovery?.session?.checkpoint(`tool:${block.name}:${block.id}`);
-        const dispatched = await runDispatchBoundary(opts, block.name, block.input);
+        const dispatched = await runDispatchBoundary(opts, block.name, block.input, redactor);
         ok = dispatched.ok;
-        output = cap(dispatched.output);
+        output = dispatched.output;
         if (ok) opts.recovery?.session?.complete(block.id);
         // #129: tool output is untrusted data. Flag suspicious content, audit
         // it, and (under security.paranoid) mask it before it reaches the model.
@@ -380,6 +428,11 @@ async function runTurns(
       if (ok && groupOf(opts.tools, block.name) === "write") {
         opts.audit?.("write_exec", `${block.name} succeeded`, opts.correlationId);
       }
+      // Trust boundary: a tool executes inside the host/workspace boundary,
+      // but its result is about to cross into the model provider boundary.
+      // Redact here, before both the transcript and TurnEvent consumers see it;
+      // logging-only redaction is too late to prevent model-context leakage.
+      output = cap(redactToolOutput(block.name, block.input, output, redactor));
       results.push({
         type: "tool_result",
         toolUseId: block.id,
@@ -439,6 +492,7 @@ async function runDispatchBoundary(
   opts: AgentTurnOptions,
   name: string,
   input: unknown,
+  redactor: Redactor,
 ): Promise<DispatchResult> {
   const base = () =>
     dispatch(opts.tools, name, input, {
@@ -447,6 +501,7 @@ async function runDispatchBoundary(
       treeBudget: opts.treeBudget,
       audit: opts.audit,
       correlationId: opts.correlationId,
+      redactor,
     });
   const mode = opts.recovery?.boundary;
   if (!mode) return base();
@@ -462,6 +517,82 @@ async function runDispatchBoundary(
     return { ok: false, output: "[recovery paused: awaiting human approval]" };
   }
   throw outcome.error;
+}
+
+/**
+ * Mutate only boundary-owned blocks in historical messages; normal user prose
+ * stays raw. This also upgrades resumed transcripts created before opaque
+ * browser type inputs were separated from the execution copy.
+ */
+function redactHistoricalBoundaryContent(messages: ChatMessage[], redactor: Redactor): void {
+  if (!redactor.enabled) return;
+  const browserOpaqueByToolUseId = new Map<string, string>();
+  // Legacy transcripts may contain a raw opaque browser type value whose
+  // corresponding result reflects it. Capture that correlation before the
+  // tool_use input itself is masked.
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (block.type !== "tool_use" || block.name !== "browser") continue;
+      const opaque = browserTypedText(block.input);
+      if (opaque) browserOpaqueByToolUseId.set(block.id, opaque);
+    }
+  }
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (block.type === "tool_result") {
+        const opaque = browserOpaqueByToolUseId.get(block.toolUseId);
+        block.content = opaque
+          ? redactBrowserValue(block.content, redactor, [opaque])
+          : redactor.redact(block.content);
+      }
+      else if (block.type === "tool_use") {
+        block.input = sanitizeToolCallInput(block.name, block.input, redactor);
+      }
+    }
+  }
+}
+
+/** Return the event/transcript copy of provider content without mutating raw input. */
+function sanitizeAssistantContent(content: ContentBlock[], redactor: Redactor): ContentBlock[] {
+  if (!redactor.enabled) return content;
+  const browserOpaqueValues = browserOpaqueTextValues(content);
+  return content.map((block) => {
+    if (block.type === "tool_use") {
+      return { ...block, input: sanitizeToolCallInput(block.name, block.input, redactor) };
+    }
+    if (block.type === "text" && browserOpaqueValues.length > 0) {
+      return { ...block, text: redactBrowserValue(block.text, redactor, browserOpaqueValues) };
+    }
+    return block;
+  });
+}
+
+function browserOpaqueTextValues(content: ContentBlock[]): string[] {
+  return content.flatMap((block) => {
+    if (block.type !== "tool_use" || block.name !== "browser") return [];
+    const opaque = browserTypedText(block.input);
+    return opaque ? [opaque] : [];
+  });
+}
+
+function sanitizeToolCallInput(name: string, input: unknown, redactor: Redactor): unknown {
+  if (!redactor.enabled) return input;
+  if (name === "browser") return sanitizeBrowserToolInput(input, redactor);
+  return redactor.redactValue(input);
+}
+
+/** Redact a complete result before the shared output cap can split a secret. */
+function redactToolOutput(
+  name: string,
+  input: unknown,
+  output: string,
+  redactor: Redactor,
+): string {
+  if (name !== "browser") return redactor.redact(output);
+  const typed = browserTypedText(input);
+  return redactBrowserValue(output, redactor, typed ? [typed] : []);
 }
 
 /**

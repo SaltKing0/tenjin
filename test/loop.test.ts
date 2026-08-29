@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -12,6 +12,8 @@ import { runAgentTurn } from "../src/agent/loop";
 import type { ChatMessage } from "../src/provider/types";
 import { Budget } from "../src/agent/budget";
 import { readTool } from "../src/tools/read";
+import type { ToolDef } from "../src/tools/registry";
+import { Redactor } from "../src/security/redact";
 
 function mockProvider(script: ChatResponse[]): Provider & { requests: ChatRequest[] } {
   let i = 0;
@@ -112,6 +114,321 @@ describe("runAgentTurn", () => {
     expect(events).toContain("tool_result");
   });
 
+  test("redacts tool secrets before model context, transcript, and events", async () => {
+    const secret = "sk-testsecret123456789";
+    const secretTool: ToolDef = {
+      name: "emit_secret",
+      group: "read",
+      description: "test-only secret emitter",
+      inputSchema: { type: "object", properties: {} },
+      async handler() {
+        return `OPENAI_API_KEY=${secret}`;
+      },
+    };
+    const provider = mockProvider([
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "secret-1", name: "emit_secret", input: {} }],
+        usage: { inputTokens: 1, outputTokens: 1 },
+      },
+      endTurn("done"),
+    ]);
+    const messages: ChatMessage[] = [{ role: "user", content: "read secret" }];
+    const eventOutputs: string[] = [];
+
+    await runAgentTurn({
+      ...base,
+      tools: [secretTool],
+      provider,
+      messages,
+      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      onEvent: (event) => {
+        if (event.t === "tool_result") eventOutputs.push(event.output);
+      },
+    });
+
+    const providerContext = JSON.stringify(provider.requests[1]?.messages);
+    expect(providerContext).not.toContain(secret);
+    expect(providerContext).toContain("[REDACTED]");
+    expect(JSON.stringify(messages)).not.toContain(secret);
+    expect(eventOutputs).toEqual(["OPENAI_API_KEY=[REDACTED]"]);
+  });
+
+  test("redacts resumed tool results in-place but leaves ordinary user text raw", async () => {
+    const secret = "sk-resumedSecret123456789";
+    const userText = `please discuss ${secret} exactly`;
+    const messages: ChatMessage[] = [
+      { role: "user", content: userText },
+      {
+        role: "user",
+        content: [{ type: "tool_result", toolUseId: "old", content: `legacy ${secret}` }],
+      },
+    ];
+    const provider = mockProvider([endTurn("done")]);
+
+    await runAgentTurn({
+      ...base,
+      provider,
+      messages,
+      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+    });
+
+    expect(provider.requests[0]?.messages[0]?.content).toBe(userText);
+    const sentToolMessage = provider.requests[0]?.messages[1];
+    if (!sentToolMessage || typeof sentToolMessage.content === "string") {
+      throw new Error("expected resumed tool-result message");
+    }
+    const sentBlock = sentToolMessage.content[0];
+    expect(sentBlock?.type).toBe("tool_result");
+    if (sentBlock?.type === "tool_result") {
+      expect(sentBlock.content).toBe("legacy [REDACTED]");
+    }
+    const storedToolMessage = messages[1];
+    expect(JSON.stringify(storedToolMessage)).not.toContain(secret);
+  });
+
+  test("redacts a short browser value reflected in a legacy resumed result", async () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: [{
+          type: "tool_use",
+          id: "legacy-browser",
+          name: "browser",
+          input: { action: "type", url: "https://example.test", selector: "#pin", text: "1234" },
+        }],
+      },
+      {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          toolUseId: "legacy-browser",
+          content: "page reflected PIN 1234",
+        }],
+      },
+    ];
+    const provider = mockProvider([endTurn("done")]);
+
+    await runAgentTurn({
+      ...base,
+      provider,
+      messages,
+      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+    });
+
+    const visible = JSON.stringify({ messages, request: provider.requests[0] });
+    expect(visible).toContain("[REDACTED]");
+    expect(visible).not.toContain("1234");
+  });
+
+  test("passes the active redactor into ToolContext", async () => {
+    const redactor = new Redactor(true, ["opaque-context-secret"]);
+    let seen = false;
+    const contextTool: ToolDef = {
+      name: "context_redactor",
+      group: "read",
+      description: "observes the tool context",
+      inputSchema: { type: "object", properties: {} },
+      async handler(_input, ctx) {
+        seen = ctx.redactor === redactor;
+        return "ok";
+      },
+    };
+    const provider = mockProvider([
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "ctx", name: "context_redactor", input: {} }],
+        usage: { inputTokens: 1, outputTokens: 1 },
+      },
+      endTurn("done"),
+    ]);
+
+    await runAgentTurn({
+      ...base,
+      tools: [contextTool],
+      provider,
+      redactor,
+      messages: [],
+      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+    });
+    expect(seen).toBe(true);
+  });
+
+  test("redacts exact secret literals before the central output cap", async () => {
+    const secret = "opaque-secret-crossing-the-output-cap-boundary";
+    const prefix = "x".repeat(29_980);
+    const longTool: ToolDef = {
+      name: "long_secret",
+      group: "read",
+      description: "emits a long test value",
+      inputSchema: { type: "object", properties: {} },
+      async handler() {
+        return `${prefix}${secret}${"y".repeat(100)}`;
+      },
+    };
+    const provider = mockProvider([
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "long", name: "long_secret", input: {} }],
+        usage: { inputTokens: 1, outputTokens: 1 },
+      },
+      endTurn("done"),
+    ]);
+    const events: string[] = [];
+
+    await runAgentTurn({
+      ...base,
+      tools: [longTool],
+      provider,
+      redactor: new Redactor(true, [secret]),
+      messages: [],
+      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      onEvent: (event) => {
+        if (event.t === "tool_result") events.push(event.output);
+      },
+    });
+
+    expect(events[0]).toContain("[REDACTED]");
+    expect(events[0]).not.toContain(secret.slice(0, 20));
+    expect(events[0]).toContain("[output truncated at 30000 chars]");
+  });
+
+  test("keeps browser type text raw only for dispatch and sanitizes every visible copy", async () => {
+    const typed = 1234; // coerced to a short string by validateToolArgs
+    const typedText = String(typed);
+    const rawUrl = "https://alice:password@example.test/form?api_token=opaque-query&city=Berlin";
+    let handlerInput: Record<string, unknown> | undefined;
+    let approvalInput: unknown;
+    const browser: ToolDef = {
+      name: "browser",
+      group: "write",
+      description: "test browser boundary",
+      inputSchema: {
+        type: "object",
+        properties: {
+          action: { type: "string" },
+          url: { type: "string" },
+          selector: { type: "string" },
+          text: { type: "string" },
+        },
+        required: ["action", "url"],
+      },
+      async handler(input) {
+        handlerInput = input;
+        return `${"x".repeat(29_980)}${String(input.text)} reflected`;
+      },
+    };
+    const provider = mockProvider([
+      {
+        stopReason: "tool_use",
+        content: [
+          { type: "text", text: `I will type ${typedText}` },
+          {
+            type: "tool_use",
+            id: "browser-type",
+            name: "browser",
+            input: { action: "type", url: rawUrl, selector: "#password", text: typed },
+          },
+        ],
+        usage: { inputTokens: 1, outputTokens: 1 },
+      },
+      endTurn("done"),
+    ]);
+    const scriptedChat = provider.chat.bind(provider);
+    let providerCall = 0;
+    provider.chat = async (request, callbacks, signal) => {
+      const response = await scriptedChat(request, undefined, signal);
+      if (providerCall++ === 0) callbacks?.onTextDelta?.(`I will type ${typedText}`);
+      return response;
+    };
+    const messages: ChatMessage[] = [];
+    const visibleEvents: unknown[] = [];
+    const visibleDeltas: string[] = [];
+
+    const turn = await runAgentTurn({
+      ...base,
+      tools: [browser],
+      provider,
+      messages,
+      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      approve: async (_name, _group, input) => {
+        approvalInput = input;
+        return true;
+      },
+      onEvent: (event) => {
+        if (event.t === "assistant_message" || event.t === "tool_call" || event.t === "tool_result") {
+          visibleEvents.push(event);
+        }
+      },
+      onTextDelta: (delta) => visibleDeltas.push(delta),
+    });
+
+    expect(handlerInput?.text).toBe(typedText);
+    expect(handlerInput?.url).toBe(rawUrl);
+    expect((approvalInput as Record<string, unknown>).text).toBe(typed);
+    expect((approvalInput as Record<string, unknown>).url).toBe(rawUrl);
+    const visible = JSON.stringify({
+      result: turn,
+      messages,
+      visibleEvents,
+      visibleDeltas,
+      request: provider.requests[1],
+    });
+    expect(visible).toContain("[REDACTED]");
+    expect(visible).not.toContain(typedText);
+    expect(visible).not.toContain("alice");
+    expect(visible).not.toContain(":password@");
+    expect(visible).not.toContain("opaque-query");
+    expect(visible).toContain("city=Berlin");
+  });
+
+  test("redaction:false preserves browser type input and reflected output", async () => {
+    const typed = "opaque typed value";
+    let handlerText = "";
+    const browser: ToolDef = {
+      name: "browser",
+      group: "write",
+      description: "test browser opt-out",
+      inputSchema: {
+        type: "object",
+        properties: { action: { type: "string" }, url: { type: "string" }, text: { type: "string" } },
+        required: ["action", "url"],
+      },
+      async handler(input) {
+        handlerText = String(input.text);
+        return `reflected ${input.text}`;
+      },
+    };
+    const provider = mockProvider([
+      {
+        stopReason: "tool_use",
+        content: [{
+          type: "tool_use",
+          id: "browser-unredacted",
+          name: "browser",
+          input: { action: "type", url: "https://example.test", text: typed },
+        }],
+        usage: { inputTokens: 1, outputTokens: 1 },
+      },
+      endTurn("done"),
+    ]);
+    const messages: ChatMessage[] = [];
+    const events: unknown[] = [];
+
+    await runAgentTurn({
+      ...base,
+      tools: [browser],
+      provider,
+      redactor: new Redactor(false),
+      messages,
+      budget: new Budget(0, { inputPerMTok: 0, outputPerMTok: 0 }),
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(handlerText).toBe(typed);
+    expect(JSON.stringify({ messages, events, request: provider.requests[1] })).toContain(typed);
+  });
+
   test("declined approval produces error tool_result", async () => {
     const provider = mockProvider([
       {
@@ -204,11 +521,18 @@ describe("runAgentTurn", () => {
 
   test("context guard compresses oversized tool results and emits compression event", async () => {
     const provider = mockProvider([endTurn("done")]);
+    const archivedSecret = "sk-archiveSecret123456789";
     const messages: ChatMessage[] = [
       { role: "user", content: "do it" },
       {
         role: "user",
-        content: [{ type: "tool_result", toolUseId: "x", content: "z".repeat(80_000) }],
+        content: [
+          {
+            type: "tool_result",
+            toolUseId: "x",
+            content: `${archivedSecret}\n${"z".repeat(80_000)}`,
+          },
+        ],
       },
     ];
     const events: string[] = [];
@@ -233,6 +557,9 @@ describe("runAgentTurn", () => {
       const block = (toolMsg?.content as { type: "tool_result"; content: string }[] | undefined)?.[0];
       expect(block?.type).toBe("tool_result");
       expect(block?.content).toMatch(/^\[tool result archived → .+\]$/);
+      const archive = readFileSync(join(archiveDir, "default.md"), "utf8");
+      expect(archive).toContain("[REDACTED]");
+      expect(archive).not.toContain(archivedSecret);
     } finally {
       rmSync(archiveDir, { recursive: true, force: true });
     }

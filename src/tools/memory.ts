@@ -16,6 +16,7 @@ import {
   editCoreBlock,
   DEFAULT_CORE_BUDGET_TOKENS,
 } from "../memory/inject";
+import { Redactor } from "../security/redact";
 
 export function factsPath(memoryDirPath: string): string {
   return join(memoryDirPath, "facts.md");
@@ -43,7 +44,7 @@ export function createRememberTool(deps: {
       },
       required: ["fact"],
     },
-    async handler(args, _ctx) {
+    async handler(args, ctx) {
       const fact = String(args.fact).trim();
       if (!fact) throw new Error("fact must not be empty");
       const path = factsPath(deps.memoryDirPath);
@@ -150,7 +151,7 @@ export function createRecallTool(deps: {
       },
       required: ["query"],
     },
-    async handler(args, _ctx) {
+    async handler(args, ctx) {
       if (!deps.embeddings) {
         return "Semantic recall unavailable: no embedding provider configured (set OPENAI_API_KEY).";
       }
@@ -176,12 +177,14 @@ export function createRecallTool(deps: {
       }
       const prefix = warnings.length > 0 ? `${warnings.join("; ")}\n` : "";
       if (hits.length === 0) return `${prefix}No relevant memories found.`;
+      const redactor = ctx.redactor ?? new Redactor();
       return (
         prefix +
         hits
           .map((h) => {
             const date = h.chunk.created.slice(0, 10);
-            const text = h.chunk.text.length > 150 ? `${h.chunk.text.slice(0, 150)}…` : h.chunk.text;
+            const safeText = redactor.redact(h.chunk.text);
+            const text = safeText.length > 150 ? `${safeText.slice(0, 150)}…` : safeText;
             return `[${h.score.toFixed(2)}] ${date} ${h.chunk.sessionId} ${h.chunk.role}: ${text}`;
           })
           .join("\n")
