@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -86,5 +86,28 @@ describe("installer script", () => {
   test("shell syntax is valid (shellcheck-clean baseline)", () => {
     // `sh -n` parses without executing — a syntax error would throw here.
     execFileSync("sh", ["-n", installer]);
+  });
+
+  test("installs under the stable tenjin command name", () => {
+    const destination = mkdtempSync(join(tmpdir(), "tenjin-installer-name-"));
+    try {
+      const result = execFileSync(
+        "sh",
+        [installer, "--platform=linux", "--arch=x64", `--dir=${destination}`],
+        {
+          env: { ...process.env, SKIP_DOWNLOAD: "1" },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      ).toString();
+      void result;
+    } catch (error: any) {
+      throw new Error(String(error.stderr ?? error));
+    } finally {
+      rmSync(destination, { recursive: true, force: true });
+    }
+
+    const script = readFileSync(installer, "utf8");
+    expect(script).toContain('INSTALL_NAME="tenjin${EXT}"');
+    expect(script).toContain('mv "$DOWNLOADED" "${DEST}/${INSTALL_NAME}"');
   });
 });

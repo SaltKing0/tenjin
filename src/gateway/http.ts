@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { timingSafeEqual, createHash } from "node:crypto";
 import { ConfigError } from "../config/types";
 import { subscribe, historySince, formatEvent, type GatewayEvent } from "./events";
+import type { ConsoleAsset } from "./console-assets";
 
 export interface HttpListenConfig {
   port: number;
@@ -25,6 +26,9 @@ export interface HttpDeps {
   health?: () => Promise<Record<string, unknown>> | Record<string, unknown>;
   /** GET /metrics Prometheus text output. */
   metrics?: () => string;
+  /** Console files embedded by the release build. Preferred over disk. */
+  consoleAssets?: Readonly<Record<string, ConsoleAsset>>;
+  /** Source-tree fallback used by development and focused HTTP tests. */
   consoleDir?: string;
 }
 
@@ -61,9 +65,22 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   "/console/style.css": { file: "style.css", type: "text/css; charset=utf-8" },
 };
 
-function serveStatic(consoleDir: string, pathname: string): Response | null {
+function serveStatic(
+  assets: Readonly<Record<string, ConsoleAsset>> | undefined,
+  consoleDir: string | undefined,
+  pathname: string,
+): Response | null {
+  const bundled = assets?.[pathname];
+  if (bundled) {
+    return new Response(bundled.body, {
+      headers: {
+        "content-type": bundled.type,
+        ...SECURITY_HEADERS,
+      },
+    });
+  }
   const entry = STATIC_FILES[pathname];
-  if (!entry) return null;
+  if (!entry || !consoleDir) return null;
   const path = join(consoleDir, entry.file);
   if (!existsSync(path)) return null;
   return new Response(readFileSync(path), {
@@ -145,8 +162,12 @@ export function startHttpServer(deps: HttpDeps): HttpServerHandle {
     fetch: async (req: Request): Promise<Response> => {
       const url = new URL(req.url);
 
-      if (deps.consoleDir && req.method === "GET") {
-        const staticResponse = serveStatic(deps.consoleDir, url.pathname);
+      if ((deps.consoleAssets || deps.consoleDir) && req.method === "GET") {
+        const staticResponse = serveStatic(
+          deps.consoleAssets,
+          deps.consoleDir,
+          url.pathname,
+        );
         if (staticResponse) return staticResponse;
       }
 

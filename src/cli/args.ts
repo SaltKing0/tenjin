@@ -28,6 +28,7 @@ Usage:
   tenjin gateway [--dry-run] always-on gateway (channels, jobs, heartbeats)
                              serves the web console at gateway.listen — no TUI:
                              Tenjin lives in your messaging and your browser.
+  tenjin mcp-serve           expose allowlisted Tenjin tools over MCP stdio
   tenjin audit [--tail n] [--bot x] [--kind k]   security event trail
   tenjin spend [--days n] [--bot x]              spend across all sessions
   tenjin job list|add|rm|run                     manage scheduled gateway jobs

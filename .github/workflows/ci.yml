@@ -32,6 +32,8 @@ jobs:
       # required run here.
       - name: Test (non-soak)
         run: bun test $(find test -maxdepth 1 -name '*.test.ts' -not -name 'soak.test.ts')
+      - name: Release blackbox
+        run: bun run release:blackbox
 
   soak:
     name: soak (non-required)

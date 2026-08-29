@@ -91,6 +91,11 @@ describe("CI workflow", () => {
     expect(list).toContain("main");
   });
 
+  test("runs the installed-binary release blackbox gate", () => {
+    const runs = runCommands(loadWorkflow());
+    expect(runs).toContain("bun run release:blackbox");
+  });
+
   test("soak is isolated in a non-required job and excluded from the fast test run (#188)", () => {
     const wf = loadWorkflow();
     const jobs = Object.entries(wf.jobs ?? {});

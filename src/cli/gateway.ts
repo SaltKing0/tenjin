@@ -20,6 +20,7 @@ import { startHttpServer } from "../gateway/http";
 import { createConsoleApi } from "../gateway/console-api";
 import { attachWebhooks, parseWebhooks } from "../gateway/webhooks";
 import { attachNtfy, parseNtfy } from "../gateway/ntfy";
+import { EMBEDDED_CONSOLE_ASSETS } from "../gateway/console-assets";
 
 export async function gatewayCommand(args: string[]): Promise<number> {
   const dryRun = args.includes("--dry-run");
@@ -465,6 +466,7 @@ export async function gatewayCommand(args: string[]): Promise<number> {
             ctx,
           );
         },
+        consoleAssets: EMBEDDED_CONSOLE_ASSETS,
         consoleDir: join(import.meta.dir, "..", "gateway", "console"),
         log,
       });

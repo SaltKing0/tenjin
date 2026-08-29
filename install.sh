@@ -12,7 +12,7 @@ set -eu
 
 REPO="${TENJIN_REPO:-SaltKing0/Stealth}"
 VERSION="${TENJIN_VERSION:-latest}"
-GITHUB="https://github.com/${REPO}/releases"
+RELEASES_URL="${TENJIN_RELEASES_URL:-https://github.com/${REPO}/releases}"
 
 # --- parse args (platform/arch overridable for tests + unusual hosts) ---
 PLATFORM=""
@@ -56,27 +56,34 @@ esac
 EXT=""
 [ "$PLATFORM" = "windows" ] && EXT=".exe"
 NAME="tenjin-${PLATFORM}-${ARCH}${EXT}"
+INSTALL_NAME="tenjin${EXT}"
 DEST="${INSTALL_DIR:-${TENJIN_INSTALL_DIR:-$HOME/.local/bin}}"
 mkdir -p "$DEST"
 
 if [ "$VERSION" = "latest" ]; then
-  DL_URL="${GITHUB}/latest/download/${NAME}"
-  SUM_URL="${GITHUB}/latest/download/SHA256SUMS"
+  DL_URL="${RELEASES_URL}/latest/download/${NAME}"
+  SUM_URL="${RELEASES_URL}/latest/download/SHA256SUMS"
 else
-  DL_URL="${GITHUB}/download/${VERSION}/${NAME}"
-  SUM_URL="${GITHUB}/download/${VERSION}/SHA256SUMS"
+  DL_URL="${RELEASES_URL}/download/${VERSION}/${NAME}"
+  SUM_URL="${RELEASES_URL}/download/${VERSION}/SHA256SUMS"
 fi
 
 # SKIP_DOWNLOAD=1 verifies the install logic (platform/arch/dest) without
 # fetching — used by CI/tests, never by end users.
 if [ -n "${SKIP_DOWNLOAD:-}" ]; then
-  echo "tenjin: install logic OK for ${PLATFORM}/${ARCH} -> ${DEST}/${NAME} (SKIP_DOWNLOAD)" >&2
+  echo "tenjin: install logic OK for ${PLATFORM}/${ARCH} -> ${DEST}/${INSTALL_NAME} (SKIP_DOWNLOAD)" >&2
   exit 0
 fi
 
-echo "tenjin: installing $PLATFORM/$ARCH ($VERSION) -> ${DEST}/${NAME}"
-curl -fsSL "$DL_URL" -o "${DEST}/${NAME}"
-curl -fsSL "$SUM_URL" -o "${DEST}/SHA256SUMS"
+TMP_ROOT="${TMPDIR:-/tmp}"
+TMP="$(mktemp -d "${TMP_ROOT%/}/tenjin-install.XXXXXX")"
+trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+DOWNLOADED="${TMP}/${NAME}"
+SUMS="${TMP}/SHA256SUMS"
+
+echo "tenjin: installing $PLATFORM/$ARCH ($VERSION) -> ${DEST}/${INSTALL_NAME}"
+curl -fsSL "$DL_URL" -o "$DOWNLOADED"
+curl -fsSL "$SUM_URL" -o "$SUMS"
 
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
@@ -85,15 +92,16 @@ sha256_of() {
   else echo ""; fi
 }
 
-EXPECTED="$(grep "  ${NAME}" "${DEST}/SHA256SUMS" | awk '{print $1}')"
-ACTUAL="$(sha256_of "${DEST}/${NAME}")"
+EXPECTED="$(awk -v name="$NAME" '$2 == name || $2 == "*" name { print $1; exit }' "$SUMS")"
+ACTUAL="$(sha256_of "$DOWNLOADED")"
 if [ -n "$EXPECTED" ] && [ -n "$ACTUAL" ] && [ "$ACTUAL" = "$EXPECTED" ]; then
   echo "tenjin: checksum ok"
 else
   echo "tenjin: checksum mismatch for ${NAME} (expected ${EXPECTED:-none}, got ${ACTUAL:-none})" >&2
-  rm -f "${DEST}/${NAME}"
   exit 1
 fi
 
-chmod +x "${DEST}/${NAME}"
-echo "tenjin: installed. Add to PATH: export PATH=\"${DEST}:\$PATH\""
+chmod +x "$DOWNLOADED"
+mv "$DOWNLOADED" "${DEST}/${INSTALL_NAME}"
+echo "tenjin: installed ${DEST}/${INSTALL_NAME}"
+echo "tenjin: add to PATH: export PATH=\"${DEST}:\$PATH\""
