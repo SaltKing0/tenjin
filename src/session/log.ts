@@ -219,7 +219,12 @@ export class SessionLog {
 
 function newId(): string {
   const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12);
-  return `${ts}-${randomUUID().slice(0, 4)}`;
+  // Four hex characters only provide 16 bits of entropy. At soak-test volume
+  // that made birthday collisions common enough for a later session to reuse
+  // an existing log path. Keep IDs readable while giving the random suffix a
+  // full 64 bits of entropy.
+  const suffix = randomUUID().replaceAll("-", "").slice(0, 16);
+  return `${ts}-${suffix}`;
 }
 
 export function idFromPath(filePath: string): string {
