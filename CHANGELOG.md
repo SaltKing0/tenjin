@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2] - 2026-08-29
+
+### Fixed
+- The installer now downloads private GitHub release assets through an
+  authenticated GitHub CLI, accepting existing `gh auth` credentials as well
+  as `GH_TOKEN` or `GITHUB_TOKEN`. Public and custom release URLs keep the
+  dependency-free `curl` path.
+
 ## [0.1.0-rc.1] - 2026-08-29
 
 ### Added
