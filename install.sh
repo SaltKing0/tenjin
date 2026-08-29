@@ -12,7 +12,9 @@ set -eu
 
 REPO="${TENJIN_REPO:-SaltKing0/Stealth}"
 VERSION="${TENJIN_VERSION:-latest}"
-RELEASES_URL="${TENJIN_RELEASES_URL:-https://github.com/${REPO}/releases}"
+RELEASES_URL_OVERRIDE="${TENJIN_RELEASES_URL:-}"
+RELEASES_URL="${RELEASES_URL_OVERRIDE:-https://github.com/${REPO}/releases}"
+AUTH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 
 # --- parse args (platform/arch overridable for tests + unusual hosts) ---
 PLATFORM=""
@@ -82,8 +84,31 @@ DOWNLOADED="${TMP}/${NAME}"
 SUMS="${TMP}/SHA256SUMS"
 
 echo "tenjin: installing $PLATFORM/$ARCH ($VERSION) -> ${DEST}/${INSTALL_NAME}"
-curl -fsSL "$DL_URL" -o "$DOWNLOADED"
-curl -fsSL "$SUM_URL" -o "$SUMS"
+USE_GH=0
+if [ -z "$RELEASES_URL_OVERRIDE" ] && command -v gh >/dev/null 2>&1; then
+  if [ -n "$AUTH_TOKEN" ] || gh auth status >/dev/null 2>&1; then
+    USE_GH=1
+  fi
+fi
+
+if [ "$USE_GH" = "1" ]; then
+  # Browser download URLs intentionally return 404 for private repositories.
+  # GitHub CLI resolves the private asset API while keeping credentials out of
+  # URLs and logs. GITHUB_TOKEN is normalized because gh reads GH_TOKEN.
+  if [ -n "$AUTH_TOKEN" ]; then
+    export GH_TOKEN="$AUTH_TOKEN"
+  fi
+  if [ "$VERSION" = "latest" ]; then
+    gh release download --repo "$REPO" --pattern "$NAME" --pattern SHA256SUMS --dir "$TMP"
+  else
+    gh release download "$VERSION" --repo "$REPO" --pattern "$NAME" --pattern SHA256SUMS --dir "$TMP"
+  fi
+else
+  if ! curl -fsSL "$DL_URL" -o "$DOWNLOADED" || ! curl -fsSL "$SUM_URL" -o "$SUMS"; then
+    echo "tenjin: download failed; private GitHub releases require an authenticated gh CLI or GH_TOKEN/GITHUB_TOKEN" >&2
+    exit 1
+  fi
+fi
 
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'

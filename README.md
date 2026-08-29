@@ -42,11 +42,18 @@ on the target machine. The installer selects the matching platform artifact,
 verifies it against `SHA256SUMS`, and installs it as `~/.local/bin/tenjin`:
 
 ```sh
+# From a checkout; authenticated `gh` also supports private releases.
+sh install.sh --version=v0.1.0-rc.2
+~/.local/bin/tenjin --version
+
+# Once the repository/release is public, this is the zero-checkout path:
 curl -fsSL https://raw.githubusercontent.com/SaltKing0/Stealth/main/install.sh | sh
 ~/.local/bin/tenjin --version
 ```
 
-Use `--dir=<path>` to choose another installation directory.
+For private releases, install and authenticate GitHub CLI with `gh auth login`,
+or provide `GH_TOKEN`/`GITHUB_TOKEN`. Use `--dir=<path>` to choose another
+installation directory.
 
 ## Quickstart
 

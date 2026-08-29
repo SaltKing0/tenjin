@@ -1,8 +1,9 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   DIST_TARGETS,
   resolveDistTarget,
@@ -109,5 +110,60 @@ describe("installer script", () => {
     const script = readFileSync(installer, "utf8");
     expect(script).toContain('INSTALL_NAME="tenjin${EXT}"');
     expect(script).toContain('mv "$DOWNLOADED" "${DEST}/${INSTALL_NAME}"');
+  });
+
+  test("uses authenticated gh downloads for a private release", () => {
+    const root = mkdtempSync(join(tmpdir(), "tenjin-private-installer-"));
+    const fakeBin = join(root, "fake-bin");
+    const destination = join(root, "install");
+    mkdirSync(fakeBin);
+    mkdirSync(destination);
+    const payload = "private release binary";
+    const hash = createHash("sha256").update(payload).digest("hex");
+    const fakeGh = join(fakeBin, "gh");
+    writeFileSync(
+      fakeGh,
+      `#!/bin/sh
+[ "\${GH_TOKEN:-}" = "test-private-token" ] || exit 42
+DEST=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--dir" ]; then
+    shift
+    DEST="$1"
+  fi
+  shift
+done
+[ -n "$DEST" ] || exit 43
+printf '%s' '${payload}' > "$DEST/tenjin-linux-x64"
+printf '%s  %s\n' '${hash}' 'tenjin-linux-x64' > "$DEST/SHA256SUMS"
+`,
+    );
+    chmodSync(fakeGh, 0o755);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+      GH_TOKEN: "test-private-token",
+      GITHUB_TOKEN: "",
+      SKIP_DOWNLOAD: "",
+    };
+    delete env.TENJIN_RELEASES_URL;
+
+    try {
+      const output = execFileSync(
+        "sh",
+        [
+          installer,
+          "--platform=linux",
+          "--arch=x64",
+          "--version=v0.1.0-rc.2",
+          `--dir=${destination}`,
+        ],
+        { env, stdio: ["ignore", "pipe", "pipe"] },
+      ).toString();
+      expect(output).toContain("checksum ok");
+      expect(readFileSync(join(destination, "tenjin"), "utf8")).toBe(payload);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
