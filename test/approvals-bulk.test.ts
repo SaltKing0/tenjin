@@ -213,6 +213,35 @@ describe("approval redaction (#177)", () => {
     expect(JSON.stringify(data)).not.toContain("ghp_abcdefghijklmnop");
     expect(JSON.stringify(data)).toContain("[REDACTED]");
   });
+
+  test("browser approvals mask opaque type text and sensitive URL fields", () => {
+    const typed = "short opaque value";
+    const r = createRequest(home, {
+      bot: "researcher",
+      tool: "browser",
+      inputSummary: `type ${typed}`,
+      input: {
+        action: "type",
+        url: "https://alice:password@example.test/?code=oauth-code&city=Berlin",
+        selector: "#password",
+        text: typed,
+      },
+    });
+    const serialized = JSON.stringify(r);
+    expect(serialized).toContain("[REDACTED]");
+    expect(serialized).not.toContain(typed);
+    expect(serialized).not.toContain("alice");
+    expect(serialized).not.toContain(":password@");
+    expect(serialized).not.toContain("oauth-code");
+    expect(serialized).toContain("city=Berlin");
+
+    const summaryOnly = createRequest(home, {
+      bot: "researcher",
+      tool: "browser",
+      inputSummary: "type 1234 into #pin",
+    });
+    expect(JSON.stringify(summaryOnly)).not.toContain("1234");
+  });
 });
 
 void mkdirSync;

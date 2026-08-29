@@ -28,6 +28,7 @@ describe("B13-3 tier classification (T0 auto / T1 ask / T2 strongest confirm)", 
   test("T1 write/exec always asks", () => {
     expect(classifyRisk("write_file", { path: "x.txt" })).toBe("T1");
     expect(classifyRisk("bash", { command: "ls -la" })).toBe("T1");
+    expect(classifyRisk("browser", { action: "navigate", url: "https://example.com" })).toBe("T1");
     expect(classifyRisk("web_fetch", { url: "https://example.com" })).toBe("T1");
     expect(tierToAction("T1")).toBe("ASK");
     expect(canAutoApprove("T1", "auto")).toBe(false);
@@ -38,6 +39,11 @@ describe("B13-3 tier classification (T0 auto / T1 ask / T2 strongest confirm)", 
     expect(classifyRisk("bash", { command: "rm -rf /tmp/x" })).toBe("T2");
     expect(classifyRisk("bash", { command: "git push --force origin main" })).toBe("T2");
     expect(classifyRisk("bash", { command: "DROP TABLE users" })).toBe("T2");
+    expect(classifyRisk("bash", { command: "env" })).toBe("T2");
+    expect(classifyRisk("bash", { command: "printenv OPENAI_API_KEY" })).toBe("T2");
+    expect(classifyRisk("bash", { command: "cat /proc/self/environ" })).toBe("T2");
+    expect(classifyRisk("bash", { command: "node -e 'console.log(process.env)'" })).toBe("T2");
+    expect(classifyRisk("bash", { command: "echo hi", sandbox: "off" })).toBe("T2");
     expect(classifyRisk("write_file", { path: "/home/u/.env" })).toBe("T2");
     // A read tool still escalates to T2 on credential access.
     expect(classifyRisk("read_file", { path: "/home/u/.env" })).toBe("T2");

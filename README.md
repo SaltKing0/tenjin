@@ -24,12 +24,16 @@ It is the reference harness this repository documents. Repo codename: `stealth`.
 - **Always-on gateway** — Telegram channel, scheduled jobs, heartbeats and a
   web console behind a single `gateway` process.
 - **Security-first defaults** — a path/command guard, per-tool approval modes,
-  workspace confinement and secret redaction, all audited to JSONL.
+  workspace confinement, fail-closed shell isolation and secret redaction
+  before tool output reaches the model, all audited to JSONL.
 
 ## Requirements
 
 - [Bun](https://bun.sh) (tested on recent releases; the repo's CI pins `latest`).
 - One API key: `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` (or any compatible base URL).
+- The agent-controlled `bash` tool additionally requires Linux with
+  `/usr/bin/bwrap`; it fails closed on macOS and Windows because those platforms
+  currently have no supported whole-process-lifecycle backend.
 
 ## Quickstart
 

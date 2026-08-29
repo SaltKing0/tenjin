@@ -54,7 +54,6 @@ test("toolsForPolicy returns expected sets", () => {
     "glob",
     "grep",
     "web_fetch",
-    "browser",
   ]);
   expect(toolsForPolicy("full").map((t) => t.name)).toEqual([
     "read_file",
@@ -92,7 +91,6 @@ test("toolsForPolicy adds use_skill/list_skills/save_skill by policy when skill 
     "glob",
     "grep",
     "web_fetch",
-    "browser",
     "use_skill",
     "list_skills",
   ]);

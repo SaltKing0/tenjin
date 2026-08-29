@@ -51,6 +51,7 @@ import { renderTrajectory } from "../session/trajectory";
 import { rebuildMessages, sumUsage } from "../session/events";
 import type { SessionEvent } from "../session/events";
 import { validateMode, DEFAULT_MODE, type ModeLadder } from "../security/mode-ladder";
+import { Redactor } from "../security/redact";
 import { Screen, decodeKey, LineEditor, type Style, RESET } from "./screen";
 import type { ReplOptions } from "./repl";
 import { forwardEvent, logEvent } from "./repl";
@@ -97,6 +98,7 @@ interface SessionTab {
 
 export async function startTui(opts: ReplOptions): Promise<void> {
   const audit = new AuditLog(auditPath(opts.home));
+  const redactor = Redactor.fromConfig(opts.config.security);
   // Shared across all tabs: process budget, skills, audit, approvals.
   const budget = createBudget(opts.config.budgetUSD, opts.config.pricing);
   budget.spentUSD = opts.initialSpentUSD ?? 0;
@@ -200,7 +202,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
       provider: t.active.provider,
       model: t.active.model,
       ...(opts.bot ? { bot: opts.bot } : {}),
-    } as SessionEvent);
+    } as SessionEvent, redactor);
     appendChat(t, dim(`new session ${t.id}`), COLORS.dim);
     addTab(t);
   }
@@ -314,7 +316,11 @@ export async function startTui(opts: ReplOptions): Promise<void> {
   }
   async function runTurn(t: SessionTab, text: string): Promise<void> {
     t.messages.push({ role: "user", content: text });
-    logEvent(t.logger, { t: "message", role: "user", content: text, ts: new Date().toISOString() } as SessionEvent);
+    logEvent(
+      t.logger,
+      { t: "message", role: "user", content: text, ts: new Date().toISOString() } as SessionEvent,
+      redactor,
+    );
     appendChat(t, `${PROMPT}${text}`, COLORS.user);
 
     t.controller = new AbortController();
@@ -352,13 +358,14 @@ export async function startTui(opts: ReplOptions): Promise<void> {
         approve: (name, group, input) =>
           requestApproval(name, group, input),
         guard: opts.guard,
+        redactor,
         audit: (kind, detail, correlationId) =>
           audit.append(kind, "user", detail, opts.bot, correlationId),
         onTextDelta: (d) => {
           buf += d;
         },
         onEvent: (e) => {
-          forwardEvent(e, t.logger, budget);
+          forwardEvent(e, t.logger, budget, redactor);
           // GrokBuild-style tool hints: show a ◆ line for each tool call.
           if (e.t === "tool_call") appendChat(t, dim(`  ◆ ${e.name}`), COLORS.dim);
         },
@@ -814,7 +821,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
         provider: init.active.provider,
         model: init.active.model,
         ...(opts.bot ? { bot: opts.bot } : {}),
-      } as SessionEvent);
+      } as SessionEvent, redactor);
     }
     tabs.push(init);
   } else {

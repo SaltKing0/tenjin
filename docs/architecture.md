@@ -329,7 +329,7 @@ The `gateway:` block is validated separately in
 
 ```yaml
 gateway:
-  allowWrites: false          # gate write/edit/bash behind approvals
+  allowWrites: false          # gate write/edit/bash/browser behind approvals
   catchUp:                    # re-run jobs missed while the gateway was down
     enabled: true             # default true
     max: 50                   # max runs caught up per boot

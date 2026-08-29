@@ -10,7 +10,8 @@ import {
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { emit } from "./events";
-import { Redactor } from "../security/redact";
+import { MASK, Redactor } from "../security/redact";
+import { sanitizeBrowserToolInput } from "../tools/browser";
 
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
 
@@ -57,8 +58,16 @@ export function createRequest(
   // on disk or in an outbound notice — matching session/audit redaction.
   const redactor = fields.redactor ?? new Redactor();
   const rawInput = fields.input !== undefined ? fields.input : fields.inputSummary ?? "";
-  const maskedInput = redactor.redactValue(rawInput);
-  const summarySource = fields.inputSummary ?? summarizeInput(maskedInput);
+  const maskedInput = fields.tool === "browser"
+    ? (fields.input === undefined && redactor.enabled
+      ? MASK
+      : sanitizeBrowserToolInput(rawInput, redactor))
+    : redactor.redactValue(rawInput);
+  // A caller-provided browser summary may repeat opaque type text. Derive the
+  // visible summary from the already-sanitized structured copy instead.
+  const summarySource = fields.tool === "browser"
+    ? summarizeInput(maskedInput)
+    : fields.inputSummary ?? summarizeInput(maskedInput);
   const maskedSummary = redactor.redact(summarySource);
   const req: ApprovalRequest = {
     id: randomUUID().slice(0, 8),

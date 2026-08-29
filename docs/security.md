@@ -1,10 +1,11 @@
 # Security model
 
 Tenjin layers several independent security mechanisms. They are **separate
-controls**: the **guard**, **approvals**, **redaction**, **workspace confinement**
-and the **audit trail**. Note that `security.disabled: true` turns off both the
-guard and redaction together; approvals and the audit trail are governed by
-their own settings elsewhere. Everything security-relevant is audited to
+controls**: the **guard**, **approvals**, **redaction**, **workspace confinement**,
+the **child-process boundary** and the **audit trail**. Note that
+`security.disabled: true` turns off both the guard and redaction together;
+approvals, native process isolation and the audit trail are governed separately.
+Everything security-relevant is audited to
 `~/.tenjin/audit.jsonl` and can be inspected with `tenjin audit` or the web
 console's `/api/audit`.
 
@@ -93,8 +94,10 @@ sit outside the workspace root.
 
 ## 3. Approvals
 
-Approvals gate **write/edit/bash** tools. The per-tool `approval` map sets the
-mode — `ask`, `allow` or `deny`:
+Approvals gate **write/edit/bash/browser** tools. Browser navigation and
+interaction are write-grade because pages can submit forms or trigger external
+side effects. The per-tool `approval` map sets the mode — `ask`, `allow` or
+`deny`:
 
 ```yaml
 approval:
@@ -104,12 +107,13 @@ approval:
   write: ask      # prompt before writing
   edit: ask
   bash: ask       # prompt before running shell
+  browser: ask    # prompt before navigation or interaction
 ```
 
 - **Interactive REPL** — `ask` prompts you before the tool runs, and records an
   `approval` audit event for approve/decline.
 - **Gateway** — approvals are driven by the `allowWrites` switch. When it is
-  on, read tools are auto-approved and write/edit/bash tools create an
+  on, read tools are auto-approved and write/edit/bash/browser tools create an
   out-of-band **approval request** (`~/.tenjin/approvals/<id>.json`). The
   request is announced (e.g. pushed to a Telegram admin chat) and resolved with
   `/approve <id>` / `/deny <id>` in Telegram or via the web console's
@@ -118,7 +122,8 @@ approval:
   scan (`GET /api/approvals`) so abandoned requests stop accumulating; resolving
   is atomic (rename-claimed), so a request is resolved exactly once even when
   Console and Telegram race to answer it.
-  A bot's own `security.policy` can still tighten this further.
+  A bot's own `security.policy` can still tighten this further. Because the
+  browser is write-grade, a `read-only` tool policy omits it entirely.
 
 ### Telegram channel bindings
 
@@ -138,10 +143,14 @@ Requests carry a truncated summary plus an id; resolution is audited as an
 ## 4. Redaction
 
 [`src/security/redact.ts`](../src/security/redact.ts) (`Redactor`) masks
-secrets — `sk-…`, `AKIA…`, key material and similar — before anything is written
-to session logs or the audit trail, so credentials don't leak into the durable
-record. It is **enabled by default**; turn it off explicitly if you want raw
-input preserved:
+recognized credential formats and explicitly registered secrets — provider
+keys, channel tokens, URL credentials, sensitive query parameters, `AKIA…`,
+private-key material and similar — at the tool/model boundary and before session
+or audit persistence. Matching credentials printed by a tool therefore do not
+enter the next provider request or durable record. Redaction is defense in
+depth, not proof that every opaque secret format can be inferred without its
+key or context. It is **enabled by default**; turn it off explicitly if you want
+raw input preserved:
 
 ```yaml
 security:
@@ -167,8 +176,10 @@ tenjin audit --tail 200 --kind tool_block
 tenjin audit --bot researcher
 ```
 
-or from the web console's `/api/audit`. Because audit strings pass through the
-redactor, the trail is both complete and free of plaintext secrets.
+or from the web console's `/api/audit`. Audit strings pass through the redactor,
+so recognized credential formats and explicitly registered secrets are masked
+before persistence. Heuristic redaction is defense in depth; it is not a proof
+that an unknown opaque plaintext secret can always be inferred.
 
 ## 6. Secrets at rest & backups
 
@@ -200,8 +211,60 @@ security:
 ```
 
 When `security.egress.allowlist` is non-empty, `web_fetch` refuses any host not
-on it. Empty or absent keeps the deny-list-only behaviour. Every outbound
-decision is recorded on the guard's egress log.
+on it, re-checks every redirect target, and stops streaming a response at its
+hard byte limit. Empty or absent keeps the deny-list-only behaviour. Every
+outbound decision is recorded on the guard's egress log. This control currently
+governs `web_fetch`; the real-browser transport does not yet share the same
+DNS/redirect/subresource egress broker.
+
+## 8. Agent-controlled child processes and plugins
+
+The `bash` tool does not inherit Tenjin's full environment. It receives a small
+runtime allowlist (for example `PATH`, locale and terminal settings), an
+isolated `HOME` inside the workspace, and no ambient provider keys, channel
+tokens or credential-loader variables.
+
+Shell execution also requires a usable native sandbox. The production backend
+is Linux bubblewrap: the command runs as PID 1 in a private PID namespace,
+`--die-with-parent` binds the established sandbox to its host monitor, and an
+outer process group covers early setup revocation. Its mount/network namespaces
+expose only the operating-system runtime plus the current workspace and keep
+host runtime sockets out of view. If sandbox creation is unavailable or fails,
+the command is refused instead of falling back to an unsandboxed process. macOS
+Seatbelt can constrain file/network capabilities but cannot reliably revoke a
+descendant that creates a detached session, so it is retained only as a policy
+inspection utility and is not accepted as a Bash lifecycle boundary. `bash` is
+therefore intentionally unavailable on macOS and Windows. A
+separately constructed, trusted host integration may grant unsandboxed shell
+execution for tests or an embedding application; tool input alone cannot do so.
+Runtime and system-wide toolchain paths are an explicit compatibility allowlist;
+Tenjin does not discover per-user toolchains or expose a user's home directory.
+`tenjin doctor` does not yet execute an end-to-end sandboxed toolchain probe, so
+a tool outside that documented boundary can still fail closed at execution time.
+
+Configured MCP servers have a narrower **environment** boundary: they inherit
+the same small ambient allowlist plus only values explicitly named in that
+server's `env` map. They are nevertheless trusted host integrations, not OS-
+sandboxed plugins: a configured MCP command can access files and networks with
+Tenjin's operating-system permissions. Only configure MCP servers whose code
+and update channel you trust.
+
+The real-browser tool is write-grade and therefore approval-gated; click,
+typing and even navigation can trigger remote side effects. Page text is
+delimiter-framed as untrusted data and obvious delimiter injection is
+neutralized, but that framing is guidance to the model rather than a security
+sandbox.
+
+`tenjin plugin install` and `tenjin plugin update` are file-only operations.
+They validate and stage the package, but never import its module, call
+`register()`, or run an install script. Installed marketplace plugins are
+recorded as **inactive / experimental** until an isolated plugin runtime exists.
+Tarball sources are local-file only and must match their pinned SHA-256 digest;
+generic `git:` plugin sources are local-only, while the explicit `github:` form
+is constrained to a literal `org/repo` slug on `github.com`. The installed tree
+and its index record are committed through a durable recovery journal, so the
+next state access rolls an interrupted pre-index commit back or finalizes a
+durable post-index commit before exposing either view.
 
 ## Summary
 
@@ -211,11 +274,14 @@ decision is recorded on the guard's egress log.
 | Per-bot guard/policy | bot `security.*` | off | extra globs, tighter tool policy, denyTools |
 | Telegram bindings | bot `telegram.allowedUsers` / `gateway.telegram.bindings` | off | sender reaching a bot they are not bound to |
 | Workspace confinement | `security.workspaceRoot` | on (tool cwd) | path escapes outside the workspace |
-| Approvals | `approval` (per tool) | write/edit/bash `ask` | writes & shell without consent |
-| Redaction | `security.redaction` | on | secrets leaking into logs/audit |
+| Approvals | `approval` (per tool) | write/edit/bash/browser `ask` | writes, browser side effects & shell without consent |
+| Redaction | `security.redaction` | on | tool secrets entering model context, logs or audit |
+| Bash process boundary | host policy (not tool input) | required; Linux bwrap only | ambient credentials, host-file reads, shell network/socket egress and detached descendants |
+| MCP environment boundary | server `env` map | minimal ambient env | accidental inheritance of unrelated host credentials |
+| Marketplace plugin activation | — | inactive | plugin/install code executing during install or update |
 | Audit trail | — (always) | on | hidden history of security events |
 | Outbound egress | `security.egress.allowlist` | off | web_fetch to hosts not on the allowlist |
 
 Turning `security.disabled: true` removes the guard (patterns + confinement) and
-redaction; approvals remain governed by the `approval` map, and the audit trail
-always runs.
+redaction; it does not grant the `bash` tool an unsandboxed process. Approvals
+remain governed by the `approval` map, and the audit trail always runs.

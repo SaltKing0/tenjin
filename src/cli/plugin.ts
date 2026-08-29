@@ -1,6 +1,5 @@
 import { stdout } from "node:process";
 import { tenjinHome, ConfigError } from "../config/loader";
-import { CapabilityRegistry } from "../plugins/registry";
 import {
   addMarketplace,
   installPlugin,
@@ -19,9 +18,9 @@ import {
  *   tenjin plugin update <name> [--yes]   update to the newest published version
  *   tenjin plugin list                    list installed plugins
  *
- * Installs are manifest-first validated and land in the capability registry
- * (#414). Install-scripts are NEVER executed; tarball sources are sha256
- * digest-verified before anything is written.
+ * Installs are manifest-first validated and remain inactive/experimental.
+ * Plugin modules and install-scripts are NEVER executed by this command;
+ * tarball sources are sha256 digest-verified before anything is written.
  */
 export async function pluginCommand(args: string[]): Promise<number> {
   const home = tenjinHome();
@@ -58,11 +57,10 @@ export async function pluginCommand(args: string[]): Promise<number> {
           stdout.write("usage: tenjin plugin install <name>\n");
           return 2;
         }
-        const registry = new CapabilityRegistry();
-        const res = await installPlugin(home, registry, name);
+        const res = await installPlugin(home, name);
         stdout.write(`installed "${res.name}" v${res.version} → ${res.dir}\n`);
-        stdout.write(`  entry plugin id: ${res.pluginId}\n`);
-        stdout.write(`  registered ${res.registrySize} capability(ies) into the registry\n`);
+        stdout.write(`  entry file: ${res.entryFile}\n`);
+        stdout.write("  status: inactive (experimental; plugin code was not executed)\n");
         if (res.installScriptIgnored !== undefined) {
           stdout.write("  note: declared install-script was NOT executed (supply-chain law)\n");
         }
@@ -75,11 +73,11 @@ export async function pluginCommand(args: string[]): Promise<number> {
           return 2;
         }
         const force = args.includes("--yes") || args.includes("-y");
-        const registry = new CapabilityRegistry();
-        const res = await updatePlugin(home, registry, name, { force });
+        const res = await updatePlugin(home, name, { force });
         stdout.write(
           `updated "${res.name}" ${res.from} -> ${res.to} (${res.breaking ? "BREAKING" : "minor/patch"}) → ${res.dir}\n`,
         );
+        stdout.write("  status: inactive (experimental; plugin code was not executed)\n");
         return 0;
       }
       case "list": {
@@ -88,7 +86,8 @@ export async function pluginCommand(args: string[]): Promise<number> {
           stdout.write("no plugins installed — tenjin plugin install <name>\n");
           return 0;
         }
-        for (const p of list) stdout.write(`${p.name}\tv${p.version}\t(${p.marketplace})\n`);
+        for (const p of list)
+          stdout.write(`${p.name}\tv${p.version}\t${p.status ?? "inactive"}\t(${p.marketplace})\n`);
         return 0;
       }
       default:

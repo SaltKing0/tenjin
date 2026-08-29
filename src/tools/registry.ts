@@ -1,10 +1,14 @@
 import type { ToolSchema } from "../provider/types";
 import type { SecurityGuard } from "../security/guard";
 import type { TreeBudget } from "../agent/budget";
+import type { Redactor } from "../security/redact";
 
 export interface ToolContext {
   cwd: string;
   guard?: SecurityGuard | null;
+  /** Shared trust-boundary redactor. Tools should apply it before any local
+   * truncation so a secret cannot be split into an unrecognizable fragment. */
+  redactor?: Redactor;
   /** #154: the shared delegation-tree budget, threaded to delegation tools so
    * a subagent run inherits the parent's counter. */
   treeBudget?: TreeBudget;

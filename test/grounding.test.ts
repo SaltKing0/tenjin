@@ -174,6 +174,19 @@ describe("B9-14 retrieve tool (explicit retrieval)", () => {
     expect(out).toContain("route: mixed");
   });
 
+  test("formatRetrieval redacts a complete secret before the snippet cap", () => {
+    const secret = `AKIA${"C".repeat(16)}`;
+    const result: HybridResult = {
+      hits: [{ id: "chunk_secret", text: `${"x".repeat(147)} ${secret} tail`, score: 1 }],
+      route: "bm25",
+      vectorUsed: false,
+    };
+    const out = formatRetrieval(result);
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain(secret);
+    expect(out).not.toContain("AKIA");
+  });
+
   test("createRetrieveTool handler uses the injected search and cites chunk-ids", async () => {
     const tool = createRetrieveTool({
       memoryDirPath: "/tmp/none",

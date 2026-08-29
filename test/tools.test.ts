@@ -109,6 +109,30 @@ describe("read_file", () => {
     expect((await dispatch(tools, "read_file", { path: "sub" }, { cwd: dir })).ok).toBe(false);
     expect((await dispatch(tools, "read_file", { path: "nope.ts" }, { cwd: dir })).ok).toBe(false);
   });
+
+  test("redacts a complete secret before the per-line cap can split it", async () => {
+    const secret = `AKIA${"A".repeat(16)}`;
+    writeFileSync(join(dir, "long-secret.txt"), `${"x".repeat(1987)} ${secret} tail\n`);
+    const r = await dispatch(tools, "read_file", { path: "long-secret.txt" }, { cwd: dir });
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("[REDACTED]");
+    expect(r.output).not.toContain(secret);
+    expect(r.output).not.toContain("AKIA");
+  });
+
+  test("redacts a multiline private key before selecting lines", async () => {
+    writeFileSync(
+      join(dir, "notes.txt"),
+      "before\n-----BEGIN PRIVATE KEY-----\nopaque-body-line-one\nopaque-body-line-two\n-----END PRIVATE KEY-----\nafter\n",
+    );
+    const r = await dispatch(tools, "read_file", { path: "notes.txt" }, { cwd: dir });
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("2: -----BEGIN PRIVATE KEY-----");
+    expect(r.output).toContain("3: [REDACTED]");
+    expect(r.output).toContain("5: -----END PRIVATE KEY-----");
+    expect(r.output).toContain("6: after");
+    expect(r.output).not.toContain("opaque-body");
+  });
 });
 
 describe("glob", () => {
@@ -173,5 +197,26 @@ describe("grep", () => {
     expect(r.output).toContain(join("sub", "c.ts") + ":1:");
     expect(r.output).not.toContain(".env");
     expect(r.output).not.toContain("SECRET");
+  });
+
+  test("redacts a complete matching line before its result cap", async () => {
+    const secret = `AKIA${"B".repeat(16)}`;
+    writeFileSync(join(dir, "long-match.txt"), `${"x".repeat(287)} ${secret} needle\n`);
+    const r = await dispatch(tools, "grep", { pattern: "needle" }, { cwd: dir });
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("[REDACTED]");
+    expect(r.output).not.toContain(secret);
+    expect(r.output).not.toContain("AKIA");
+  });
+
+  test("does not expose body lines from a multiline private key", async () => {
+    writeFileSync(
+      join(dir, "key-notes.txt"),
+      "-----BEGIN PRIVATE KEY-----\nopaque-needle-body\n-----END PRIVATE KEY-----\n",
+    );
+    const r = await dispatch(tools, "grep", { pattern: "opaque|REDACTED" }, { cwd: dir });
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("key-notes.txt:2: [REDACTED]");
+    expect(r.output).not.toContain("opaque-needle-body");
   });
 });

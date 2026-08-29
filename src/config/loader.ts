@@ -388,6 +388,7 @@ approval:                  # ask | allow | deny, per tool
   grep: allow
   write: ask
   edit: ask
+  browser: ask
 # mode:                     # B13-5 mode ladder (default: manual) — higher-level
 #   ladder: manual          #   higher-level than approval; never widens the T2 law.
 #                           #   manual | acceptEdits | auto | dontAsk | bypass
@@ -458,7 +459,7 @@ memory:
 #   #   memoryMax: 512m
 #   #   cpuQuota: 2
 # gateway:                     # uncomment to start the HTTP API + web console (see docs/architecture.md)
-#   allowWrites: false         # gate write/edit/bash tool calls behind approvals
+#   allowWrites: false         # gate write/edit/bash/browser tool calls behind approvals
 #   listen:
 #     host: 127.0.0.1          # bind address — use 0.0.0.0 only behind a proxy or VPN
 #     port: 3000               # console/HTTP API port
