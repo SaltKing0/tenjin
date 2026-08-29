@@ -1,10 +1,16 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runOnboard, type OnboardDeps, ONBOARD_ROLES } from "../src/cli/onboard";
+import {
+  runOnboard,
+  type OnboardDeps,
+  ONBOARD_ROLES,
+  TRUST_LEVELS,
+  EXAMPLE_ROUTINE_NAME,
+} from "../src/cli/onboard";
 import { loadConfig } from "../src/config/loader";
-import { listBots, botDir } from "../src/bots/profile";
+import { listBots, botDir, resolveBot } from "../src/bots/profile";
 import { configYamlPath } from "../src/cli/jobs";
 
 let home: string;
@@ -35,8 +41,13 @@ function makeDeps(overrides: Partial<OnboardDeps> = {}): OnboardDeps {
     // default: a reachable openai provider with a small model list
     testProvider: async () => ({ ok: true, provider: "openai", status: 200 }),
     detectModels: async () => ["gpt-4o", "gpt-4o-mini", "gpt-4.1"],
+    generateToken: () => "tj_test_gateway_token",
     ...overrides,
   };
+}
+
+function globalDoc(): Record<string, any> {
+  return Bun.YAML.parse(readFileSync(configYamlPath(home), "utf8")) as Record<string, any>;
 }
 
 describe("runOnboard — non-interactive flags", () => {
@@ -60,6 +71,21 @@ describe("runOnboard — non-interactive flags", () => {
 
     // config.yaml no longer has an empty model (validate passes without skip)
     expect(() => loadConfig(project, home)).not.toThrow();
+
+    // One coherent setup also produces a secured gateway and useful routine.
+    const doc = globalDoc();
+    expect(doc.gateway.listen.token).toBe("tj_test_gateway_token");
+    expect(statSync(configYamlPath(home)).mode & 0o777).toBe(0o600);
+    expect(doc.gateway.allowWrites).toBe(true);
+    expect(doc.mode.ladder).toBe("manual");
+    expect(doc.defaultBot).toBe("writer");
+    expect(doc.gateway.jobs[0]).toMatchObject({
+      name: EXAMPLE_ROUTINE_NAME,
+      bot: "writer",
+      cron: "0 9 * * *",
+      policy: "read-only",
+    });
+    expect(resolveBot(home, "writer").config.security?.policy).toBe("full");
   });
 
   test("idempotent: re-run with the same bot name does not duplicate", async () => {
@@ -75,6 +101,7 @@ describe("runOnboard — non-interactive flags", () => {
     );
     expect(second).toBe(0);
     expect(listBots(home).length).toBe(before);
+    expect(globalDoc().gateway.jobs.filter((j: any) => j.name === EXAMPLE_ROUTINE_NAME)).toHaveLength(1);
   });
 
   test("fails and writes nothing when the provider key is invalid", async () => {
@@ -130,6 +157,88 @@ describe("runOnboard — non-interactive flags", () => {
     expect(cfg.providers?.openai?.baseUrl).toContain("openrouter");
     expect(cfg.providers?.openai?.apiKey).toBe("sk-or");
   });
+
+  test("observe trust is a hard read-only cap and can skip the example routine", async () => {
+    const code = await runOnboard(
+      [
+        "--provider", "openai", "--key", "sk-test", "--model", "gpt-4o",
+        "--bot-name", "watcher", "--trust", "observe", "--gateway-token", "mobile-token",
+        "--no-example-routine",
+      ],
+      makeDeps(),
+    );
+    expect(code).toBe(0);
+    expect(resolveBot(home, "watcher").config.security?.policy).toBe("read-only");
+    const doc = globalDoc();
+    expect(doc.gateway.allowWrites).toBe(false);
+    expect(doc.gateway.listen.token).toBe("mobile-token");
+    expect(doc.gateway.jobs ?? []).toEqual([]);
+
+    // A script written before trust flags existed must not silently widen an
+    // already read-only bot on a later idempotent run.
+    const second = await runOnboard(
+      [
+        "--provider", "openai", "--key", "sk-test", "--model", "gpt-4o",
+        "--bot-name", "watcher", "--no-example-routine",
+      ],
+      makeDeps(),
+    );
+    expect(second).toBe(0);
+    expect(resolveBot(home, "watcher").config.security?.policy).toBe("read-only");
+    expect(globalDoc().gateway.allowWrites).toBe(false);
+  });
+
+  test("autonomous trust maps to full tools + auto while preserving the T2 veto", async () => {
+    await runOnboard(
+      [
+        "--provider", "openai", "--key", "sk-test", "--model", "gpt-4o",
+        "--bot-name", "operator", "--trust", "autonomous", "--yes",
+      ],
+      makeDeps(),
+    );
+    expect(resolveBot(home, "operator").config.security?.policy).toBe("full");
+    expect(globalDoc()).toMatchObject({
+      mode: { ladder: "auto" },
+      gateway: { allowWrites: true },
+    });
+  });
+});
+
+describe("runOnboard — interactive golden journey", () => {
+  test("collects provider, model, bot, role, trust, token and routine in one flow", async () => {
+    const answers = [
+      "2",                 // OpenAI-compatible
+      "sk-interactive",    // key
+      "2",                 // gpt-4o-mini
+      "repo-guard",        // bot
+      "2",                 // coder
+      "2",                 // supervised
+      "phone-token",       // gateway token
+      "y",                 // example routine
+    ];
+    const questions: string[] = [];
+    const code = await runOnboard([], makeDeps({
+      ask: async (question) => {
+        questions.push(question);
+        return answers.shift() ?? "";
+      },
+    }));
+    expect(code).toBe(0);
+    expect(answers).toHaveLength(0);
+    expect(questions).toHaveLength(8);
+    expect(loadConfig(project, home).config.model).toBe("gpt-4o-mini");
+    expect(resolveBot(home, "repo-guard").config.security?.policy).toBe("full");
+    expect(readFileSync(join(botDir(home, "repo-guard"), "SOUL.md"), "utf8").toLowerCase()).toContain("engineer");
+    expect(globalDoc()).toMatchObject({
+      defaultBot: "repo-guard",
+      mode: { ladder: "manual" },
+      gateway: {
+        allowWrites: true,
+        listen: { token: "phone-token" },
+        jobs: [{ name: EXAMPLE_ROUTINE_NAME, bot: "repo-guard", policy: "read-only" }],
+      },
+    });
+  });
 });
 
 describe("ONBOARD_ROLES", () => {
@@ -138,5 +247,13 @@ describe("ONBOARD_ROLES", () => {
       expect(ONBOARD_ROLES).toHaveProperty(r);
     }
     expect(ONBOARD_ROLES.writer!.soul.length).toBeGreaterThan(0);
+  });
+});
+
+describe("TRUST_LEVELS", () => {
+  test("offers one read-only and two write-capable choices", () => {
+    expect(TRUST_LEVELS.observe).toMatchObject({ botPolicy: "read-only", allowWrites: false });
+    expect(TRUST_LEVELS.supervised).toMatchObject({ botPolicy: "full", mode: "manual", allowWrites: true });
+    expect(TRUST_LEVELS.autonomous).toMatchObject({ botPolicy: "full", mode: "auto", allowWrites: true });
   });
 });

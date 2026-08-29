@@ -52,9 +52,11 @@ CLI, loads config, builds an `AppContext`, and dispatches to one of:
 - **Interactive / one-shot / resume / fork** — the agent turn loop.
 - **`bot`** — bot lifecycle: `new`, `list`, `export`, `import`, `init-examples`.
 - **`onboard`** — guided first start: validates a provider key, picks a default
-  model (with model detection and OpenRouter `:free` support), and creates a
-  first bot from a role template. Non-interactive via `--provider --key --model
-  --bot-name` flags; idempotent on re-run. Writes `providers.yaml`.
+  model (with model detection and OpenRouter `:free` support), creates a first
+  bot from a role template, maps a trust level to the existing policy/mode
+  controls, creates gateway access and optionally installs the read-only daily
+  repo watch. Non-interactive via flags; idempotent on re-run. Writes
+  `providers.yaml`, bot security, and the relevant `config.yaml` gateway fields.
 - **`gateway`** — the always-on process (below).
 - **`audit` / `spend`** — CLI views over the event trail and spend records.
 - **`job`** — manage scheduled gateway jobs from the headless CLI: `list`,
@@ -170,6 +172,9 @@ serves the static console (`src/gateway/console/`) and
 | `GET /metrics` | Prometheus text metrics (`tenjin_spend_usd_total`, `tenjin_jobs_pending`, `tenjin_sessions_total`, `tenjin_provider_errors_total`) |
 
 The console is token-gated and per-IP rate-limited (see [`src/gateway/http.ts`](../src/gateway/http.ts)).
+Its five primary areas are Chat, Activity, Approvals, Routines and Setup.
+Activity combines the latest outcome, seven-day cost and recent audit trail;
+legacy panel hashes remain valid and open the matching Activity/Setup sub-view.
 
 **Observability.** `/api/health` and `/metrics` are powered by
 [`src/gateway/observability.ts`](../src/gateway/observability.ts). They read

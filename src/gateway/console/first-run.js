@@ -7,15 +7,14 @@
 "use strict";
 
 export const STEPS = [
-  { field: "hasModel", title: "Connect a provider & choose a model", hash: "#settings" },
-  { field: "hasGatewayToken", title: "Set a gateway token", hash: "#settings" },
+  { field: "hasModel", title: "Connect a provider & choose a model", hash: "#setup/provider" },
+  { field: "hasBot", title: "Create your first bot", hash: "#setup/bots" },
+  { field: "hasGatewayToken", title: "Secure Console access", hash: "#setup/access" },
 ];
 
-/** Setup is complete once the model and gateway token are set. The default
- *  solo agent is the starting point — special bots are created by the user
- *  later, not pushed by onboarding. */
+/** The golden journey is complete once model, bot and Console access exist. */
 export function isSetupComplete(state = {}) {
-  return !!(state.hasModel && state.hasGatewayToken);
+  return !!(state.hasModel && state.hasBot && state.hasGatewayToken);
 }
 
 /** True when the first-run screen should show: setup incomplete + not skipped. */

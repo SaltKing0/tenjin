@@ -9,10 +9,9 @@ import { headerLabels, stackLabels, isHeaderRow } from "./tables.js";
 import { firstRunView, shouldShowFirstRun } from "./first-run.js";
 import { botSectionItems } from "./sidebar-bots.js";
 import { lastRunStatus, runStatusView, historyTones } from "./job-status.js";
-import { messageText, sessionMessages } from "./chat-history.js";
+import { messageText, sessionMessages, chatRequestBody } from "./chat-history.js";
 import { THEME_KEY, resolveTheme, nextTheme } from "./theme.js";
-
-import { panelGroups } from "./sidebar-groups.js";
+import { PRIMARY_NAV, ACTIVITY_VIEWS, SETUP_VIEWS, resolveConsoleRoute } from "./routes.js";
 
 import { connectionView } from "./topbar-state.js";
 import {
@@ -1021,7 +1020,10 @@ async function panelChat(main) {
     try {
       const res = await api("/api/chat/stream", {
         method: "POST",
-        body: JSON.stringify({ text }),
+        // Route the message through the bot selected in the Console. Previously
+        // the selector changed history/UI state but every send still hit the
+        // gateway default bot.
+        body: JSON.stringify(chatRequestBody(text, currentBot)),
       });
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -1078,7 +1080,7 @@ function formatApprovalInput(input) {
 function approvalActionButtons(req, onDone) {
   return el(
     "div",
-    { style: "margin-top:8px; display:flex; gap:8px" },
+    { class: "approval-actions" },
     el(
       "button",
       {
@@ -1156,7 +1158,7 @@ function buildApprovalDropdown(host, pending) {
       el("div", {}, approvalLine(req), el("span", { class: "dim" }, ` · ${approvalAge(req.ts, now)}`)),
       el(
         "div",
-        { style: "display:flex; gap:6px; margin-top:6px" },
+        { class: "approval-actions compact" },
         el(
           "button",
           {
@@ -1558,7 +1560,7 @@ function buildTopBar() {
   const budget = el("span", { class: "topbar-budget", title: "spend today" }, "…");
   apiJson("/api/health")
     .then((h) => {
-      budget.textContent = `$${fmtUsd(h.budgetSpentTodayUSD ?? 0)} today`;
+      budget.textContent = `${fmtUsd(h.budgetSpentTodayUSD ?? 0)} today`;
     })
     .catch(() => {
       budget.textContent = "budget n/a";
@@ -1616,17 +1618,149 @@ function syncLogoImages() {
   });
 }
 
+const ACTIVITY_LABELS = {
+  overview: "Overview",
+  sessions: "Runs",
+  spend: "Cost",
+  audit: "Audit",
+  memory: "Memory",
+  status: "Status",
+};
+const SETUP_LABELS = { bots: "Bots", provider: "Provider", access: "Access" };
+
+function sectionTabs(base, views, labels, active) {
+  return el(
+    "nav",
+    { class: "section-tabs", "aria-label": `${base} views` },
+    ...views.map((view) =>
+      el(
+        "a",
+        { class: view === active ? "active" : "", href: `#${base}/${view}` },
+        labels[view] ?? view,
+      ),
+    ),
+  );
+}
+
+async function activityOverview(host) {
+  const [sessions, spend, audit, jobs] = await Promise.all([
+    apiJson("/api/sessions?bot=all&limit=5"),
+    apiJson("/api/spend?days=7"),
+    apiJson("/api/audit?tail=8"),
+    apiJson("/api/jobs"),
+  ]);
+  const latest = sessions.sessions?.[0] ?? null;
+  const latestJob = (jobs.jobs ?? [])
+    .filter((job) => job.lastRun)
+    .sort((a, b) => Date.parse(b.lastRun.at) - Date.parse(a.lastRun.at))[0] ?? null;
+  const cost = (spend.rows ?? []).reduce((sum, row) => sum + row.costUSD, 0);
+  const events = audit.events ?? [];
+
+  const outcome = el(
+    "div",
+    { class: "card activity-card" },
+    el("div", { class: "label" }, "Outcome"),
+    latestJob
+      ? el(
+          "div",
+          {},
+          el("strong", {}, latestJob.name),
+          el("span", { class: latestJob.lastRun.error ? "badge err" : "badge ok" }, latestJob.lastRun.error ? "failed" : latestJob.lastRun.stopReason),
+          el("div", { class: "dim" }, `${latestJob.bot} · ${new Date(latestJob.lastRun.at).toLocaleString()} · ${fmtUsd(latestJob.lastRun.costUSD)}`),
+          latestJob.lastRun.error ? el("div", { class: "err" }, latestJob.lastRun.error) : null,
+        )
+      : el("div", { class: "dim" }, "No routine result yet."),
+    latest
+      ? el(
+          "div",
+          {},
+          el("div", { class: "label" }, "Latest run"),
+          el("strong", {}, latest.preview || latest.id),
+          el("div", { class: "dim" }, `${latest.bot} · ${new Date(latest.mtimeMs).toLocaleString()}`),
+          el("button", { onclick: () => openReplay(host, latest.id, latest.bot) }, "Open latest run"),
+        )
+      : el("div", { class: "dim" }, "No runs yet — start a chat or run the daily repo watch."),
+  );
+  const costCard = el(
+    "div",
+    { class: "card activity-card" },
+    el("div", { class: "label" }, "Cost · 7 days"),
+    el("div", { class: "activity-metric" }, fmtUsd(cost)),
+    el("div", { class: "dim" }, `${spend.byBot?.length ?? 0} active scope${spend.byBot?.length === 1 ? "" : "s"}`),
+    el("a", { href: "#activity/spend" }, "View cost details →"),
+  );
+  const auditCard = el(
+    "div",
+    { class: "card activity-card" },
+    el("div", { class: "label" }, "Audit"),
+    events.length
+      ? el(
+          "div",
+          { class: "activity-events" },
+          ...events.slice(0, 5).map((event) =>
+            el(
+              "div",
+              { class: "activity-event" },
+              el("span", { class: "badge" }, event.kind),
+              el("span", {}, event.detail),
+            ),
+          ),
+        )
+      : el("div", { class: "dim" }, "No audit events yet."),
+    el("a", { href: "#activity/audit" }, "View audit trail →"),
+  );
+  host.replaceChildren(el("div", { class: "activity-grid" }, outcome, costCard, auditCard));
+}
+
+async function panelActivity(main, subroute = "overview") {
+  const active = ACTIVITY_VIEWS.includes(subroute) ? subroute : "overview";
+  const host = el("div", { class: "section-host" });
+  main.replaceChildren(
+    el("h1", {}, "Activity"),
+    sectionTabs("activity", ACTIVITY_VIEWS, ACTIVITY_LABELS, active),
+    host,
+  );
+  if (active === "sessions") await panelSessions(host);
+  else if (active === "spend") await panelSpend(host);
+  else if (active === "audit") await panelAudit(host);
+  else if (active === "memory") await panelMemory(host);
+  else if (active === "status") await panelStatus(host);
+  else await activityOverview(host);
+}
+
+async function panelSetup(main, subroute = "bots") {
+  const active = SETUP_VIEWS.includes(subroute) ? subroute : "bots";
+  const host = el("div", { class: "section-host" });
+  main.replaceChildren(
+    el("h1", {}, "Setup"),
+    sectionTabs("setup", SETUP_VIEWS, SETUP_LABELS, active),
+    host,
+  );
+  if (active === "bots") {
+    await panelBots(host);
+  } else if (active === "provider") {
+    await panelSettings(host);
+  } else {
+    const state = await apiJson("/api/setup/state");
+    host.replaceChildren(
+      el("h2", {}, "Console access"),
+      el(
+        "div",
+        { class: "card" },
+        el("div", {}, state.hasGatewayToken ? "✓ Gateway token is configured" : "Gateway token is missing"),
+        el("p", { class: "dim" }, "Run the guided setup to create or rotate the token together with your provider, bot and trust level."),
+        el("pre", { class: "mono" }, "tenjin onboard"),
+      ),
+    );
+  }
+}
+
 const PANELS = [
   ["chat", "Chat", panelChat],
-  ["settings", "Settings", panelSettings],
+  ["activity", "Activity", panelActivity],
   ["approvals", "Approvals", panelApprovals],
-  ["jobs", "Jobs", panelJobs],
-  ["sessions", "Sessions", panelSessions],
-  ["memory", "Memory", panelMemory],
-  ["spend", "Spend", panelSpend],
-  ["audit", "Audit", panelAudit],
-  ["status", "Status", panelStatus],
-  ["bots", "Bots", panelBots],
+  ["routines", "Routines", panelJobs],
+  ["setup", "Setup", panelSetup],
 ];
 
 // #251: the 3-step first-run guide (progress + links into the real panels).
@@ -1699,8 +1833,8 @@ async function render() {
       // setup state unavailable → fall through to the normal console
     }
   }
-  const route = location.hash.replace("#", "") || "chat";
-  const panel = PANELS.find(([name]) => name === route) || PANELS[0];
+  const route = resolveConsoleRoute(location.hash);
+  const panel = PANELS.find(([name]) => name === route.name) || PANELS[0];
 
   const sidebar = el(
     "div",
@@ -1709,19 +1843,13 @@ async function render() {
     el(
       "nav",
       {},
-      // #287: group the panels (Operate / Observe / Settings) instead of a
-      // flat list. Labels are hidden on the mobile bottom-nav layout.
-      ...panelGroups(PANELS.map(([name]) => name)).flatMap((g) => [
-        g.label ? el("div", { class: "sidebar-group-label" }, g.label) : null,
-        ...g.names.map((name) => {
-          const entry = PANELS.find(([p]) => p === name);
-          return el(
-            "a",
-            { class: name === panel[0] ? "active" : "", href: `#${name}` },
-            entry[1],
-          );
-        }),
-      ]),
+      ...PRIMARY_NAV.map((item) =>
+        el(
+          "a",
+          { class: item.name === panel[0] ? "active" : "", href: item.hash },
+          item.label,
+        ),
+      ),
     ),
   );
 
@@ -1772,7 +1900,7 @@ async function render() {
   }
   refreshApprovalBadge();
   try {
-    await panel[2](main);
+    await panel[2](main, route.subroute);
     prepareTables(main);
   } catch (e) {
     if (e.message !== "unauthorized") {

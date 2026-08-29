@@ -105,7 +105,9 @@ export function writeConfigDoc(home: string, doc: Record<string, unknown>): void
   // Atomic temp+rename so a crash mid-write never corrupts the hand-maintained
   // config (a sibling `.tmp` is swapped in only once fully written).
   const tmp = `${path}.tmp`;
-  writeFileSync(tmp, preserveHeaderComments(existing, serialized));
+  // config.yaml may now contain the gateway bearer token written by onboard;
+  // keep the atomic replacement private even on a permissive umask.
+  writeFileSync(tmp, preserveHeaderComments(existing, serialized), { mode: 0o600 });
   renameSync(tmp, path);
 }
 

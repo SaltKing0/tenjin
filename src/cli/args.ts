@@ -15,6 +15,7 @@ Usage:
   tenjin --resume <id>       continue a previous session
   tenjin --fork <id> [n]     branch a copy at event n (default: end)
   tenjin --bot <name>        run as a specific bot
+  tenjin onboard             guided provider, bot, trust, Console and routine setup
   tenjin bot new|list|export|import|init-examples   manage & package bots
   tenjin bot search <repo> [query]   list bot packages in a git catalog repo
   tenjin bot install <repo>/<name> [--yes]   install a bot from a git catalog

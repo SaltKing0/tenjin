@@ -276,6 +276,41 @@ export function writeBotModel(home: string, name: string, model: string): string
   return root;
 }
 
+/**
+ * Set a bot's hard tool-policy cap without disturbing its model, routines or
+ * other hand-authored settings. Onboarding uses this as the concrete security
+ * boundary behind its user-facing trust levels.
+ */
+export function writeBotSecurityPolicy(
+  home: string,
+  name: string,
+  policy: ToolPolicy,
+): string {
+  if (!BOT_POLICIES.has(policy)) {
+    throw new ConfigError("bot security.policy must be read-only, none, or full");
+  }
+  const safe = sanitizeSkillName(name);
+  const root = botDir(home, safe);
+  if (!existsSync(root)) {
+    throw new ConfigError(`unknown bot "${safe}"`);
+  }
+  const cfgPath = join(root, "config.yaml");
+  let doc: Record<string, unknown> = {};
+  if (existsSync(cfgPath)) {
+    const parsed: unknown = YAML.parse(readFileSync(cfgPath, "utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      doc = parsed as Record<string, unknown>;
+    }
+  }
+  const current =
+    doc.security && typeof doc.security === "object" && !Array.isArray(doc.security)
+      ? (doc.security as Record<string, unknown>)
+      : {};
+  doc.security = { ...current, policy };
+  writeFileSync(cfgPath, stringifyBlockStyle(doc));
+  return root;
+}
+
 export function listBots(home: string): string[] {
   const dir = botsDir(home);
   if (!existsSync(dir)) return [];
