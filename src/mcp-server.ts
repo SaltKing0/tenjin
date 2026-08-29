@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 import { stdin, stdout } from "node:process";
+import { VERSION } from "./version";
 
 /**
  * MCP server mode (Roadmap §18 B15-7, DR14-T2, #439).
@@ -104,7 +105,7 @@ export class McpServer {
         return this.reply(id, {
           protocolVersion: MCP_PROTOCOL_VERSION,
           capabilities: { tools: {} },
-          serverInfo: { name: "tenjin", version: "0.1.0" },
+          serverInfo: { name: "tenjin", version: VERSION },
         });
       case "tools/list":
         return this.reply(id, { tools: this.exposedTools() });

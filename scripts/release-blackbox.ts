@@ -15,6 +15,7 @@ import {
   computeChecksum,
   resolveDistTarget,
 } from "../src/dist";
+import { stringifyBlockStyle } from "../src/config/block-style";
 import { buildRelease } from "./build-release";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -29,6 +30,11 @@ interface RunResult {
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
+}
+
+function mapping(value: unknown, label: string): Record<string, unknown> {
+  assert(value !== null && typeof value === "object" && !Array.isArray(value), `${label} must be a mapping`);
+  return value as Record<string, unknown>;
 }
 
 async function run(
@@ -223,6 +229,11 @@ export async function runReleaseBlackbox(providedArtifact?: string): Promise<voi
         "release-bot",
         "--role",
         "coder",
+        "--trust",
+        "supervised",
+        "--gateway-token",
+        TOKEN,
+        "--example-routine",
         "--yes",
       ],
       { cwd: work, env },
@@ -230,25 +241,44 @@ export async function runReleaseBlackbox(providedArtifact?: string): Promise<voi
     assert(onboard.code === 0, `onboarding failed:\n${onboard.stdout}${onboard.stderr}`);
     assert(existsSync(join(home, "providers.yaml")), "onboarding did not persist provider config");
     assert(existsSync(join(home, "bots", "release-bot", "SOUL.md")), "onboarding did not create the bot");
-    ok("onboarding completed from installed binary");
+
+    const configPath = join(home, "config.yaml");
+    const config = mapping(Bun.YAML.parse(readFileSync(configPath, "utf8")), "onboard config");
+    const mode = mapping(config.mode, "onboard mode");
+    const gatewayConfig = mapping(config.gateway, "onboard gateway");
+    const listen = mapping(gatewayConfig.listen, "onboard gateway.listen");
+    const jobs = gatewayConfig.jobs;
+    assert(config.defaultBot === "release-bot", "onboarding did not select the requested bot");
+    assert(mode.ladder === "manual", "supervised onboarding did not select manual mode");
+    assert(gatewayConfig.allowWrites === true, "supervised onboarding did not enable approval-gated writes");
+    assert(listen.token === TOKEN, "onboarding did not persist the requested gateway token");
+    assert(Array.isArray(jobs), "onboarding did not create a routines list");
+    const exampleRoutine = jobs.find(
+      (job) => mapping(job, "onboard routine").name === "daily-repo-watch",
+    ) as Record<string, unknown> | undefined;
+    assert(exampleRoutine, "onboarding did not create the daily repo watch");
+    assert(exampleRoutine.bot === "release-bot", "daily repo watch routes to the wrong bot");
+    assert(exampleRoutine.policy === "read-only", "daily repo watch is not read-only");
+    const botConfig = mapping(
+      Bun.YAML.parse(readFileSync(join(home, "bots", "release-bot", "config.yaml"), "utf8")),
+      "onboard bot config",
+    );
+    assert(mapping(botConfig.security, "onboard bot security").policy === "full", "supervised bot policy is not full");
+    ok("golden journey persisted provider, bot, trust, token and routine");
 
     const gatewayPort = reservePort();
+    config.memory = { ...mapping(config.memory, "onboard memory"), enabled: false };
+    config.mcpServer = { expose: ["read_file"] };
+    gatewayConfig.listen = {
+      ...listen,
+      host: "127.0.0.1",
+      port: gatewayPort,
+      token: TOKEN,
+    };
     writeFileSync(
-      join(home, "config.yaml"),
-      [
-        "provider: openai",
-        "model: mock-model",
-        "memory:",
-        "  enabled: false",
-        "mcpServer:",
-        "  expose:",
-        "    - read_file",
-        "gateway:",
-        "  listen:",
-        "    host: 127.0.0.1",
-        `    port: ${gatewayPort}`,
-        `    token: ${TOKEN}`,
-      ].join("\n") + "\n",
+      configPath,
+      stringifyBlockStyle(config),
+      { mode: 0o600 },
     );
 
     const initialize = JSON.stringify({
@@ -266,6 +296,7 @@ export async function runReleaseBlackbox(providedArtifact?: string): Promise<voi
     assert(mcp.code === 0, `mcp-serve failed:\n${mcp.stdout}${mcp.stderr}`);
     const frames = mcp.stdout.trim().split("\n").map((line) => JSON.parse(line));
     assert(frames[0]?.result?.serverInfo?.name === "tenjin", "mcp initialize response missing");
+    assert(frames[0]?.result?.serverInfo?.version === version, "mcp server version does not match package version");
     assert(
       frames[1]?.result?.tools?.some((tool: { name?: string }) => tool.name === "read_file"),
       "mcp-serve did not expose the configured tool",
@@ -302,18 +333,47 @@ export async function runReleaseBlackbox(providedArtifact?: string): Promise<voi
     assert(typeof healthBody === "object", "healthcheck returned invalid JSON");
     ok("authenticated healthcheck passed");
 
+    const authHeaders = {
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+    };
     const firstRun = await fetch(`${gatewayBase}/message`, {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${TOKEN}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ text: "Reply with the release blackbox marker." }),
+      headers: authHeaders,
+      body: JSON.stringify({ bot: "release-bot", text: "Reply with the release blackbox marker." }),
     });
     const firstRunBody = (await firstRun.json()) as { reply?: string; error?: string };
     assert(firstRun.ok, `first agent run failed: ${firstRun.status} ${JSON.stringify(firstRunBody)}`);
     assert(firstRunBody.reply?.includes(AGENT_REPLY), "first agent run returned the wrong reply");
     ok("first agent run completed");
+
+    const routineRun = await fetch(`${gatewayBase}/api/jobs/daily-repo-watch/run`, {
+      method: "POST",
+      headers: authHeaders,
+    });
+    const routineBody = (await routineRun.json()) as {
+      ok?: boolean;
+      name?: string;
+      text?: string;
+      error?: string;
+    };
+    assert(routineRun.ok, `daily repo watch failed: ${routineRun.status} ${JSON.stringify(routineBody)}`);
+    assert(routineBody.ok && routineBody.name === "daily-repo-watch", "daily repo watch returned an invalid result");
+    assert(routineBody.text?.includes(AGENT_REPLY), "daily repo watch returned the wrong reply");
+
+    const activityResponses = await Promise.all([
+      fetch(`${gatewayBase}/api/sessions?bot=all&limit=5`, { headers: authHeaders }),
+      fetch(`${gatewayBase}/api/spend?days=7`, { headers: authHeaders }),
+      fetch(`${gatewayBase}/api/audit?tail=8`, { headers: authHeaders }),
+      fetch(`${gatewayBase}/api/jobs`, { headers: authHeaders }),
+    ]);
+    assert(activityResponses.every((response) => response.ok), "one or more Activity endpoints failed");
+    const listedJobs = (await activityResponses[3]!.json()) as {
+      jobs?: Array<{ name?: string; lastRun?: { stopReason?: string } }>;
+    };
+    const completedRoutine = listedJobs.jobs?.find((job) => job.name === "daily-repo-watch");
+    assert(completedRoutine?.lastRun?.stopReason === "end_turn", "routine result was not recorded for Activity");
+    ok("golden journey pilot completed with routine, cost and audit activity");
   } catch (error) {
     if (gateway && gateway.exitCode === null) gateway.kill();
     const [stdout, stderr] = await Promise.all([

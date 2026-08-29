@@ -1,5 +1,6 @@
 import type { ToolDef } from "./registry";
 import type { HarnessConfig } from "../config/types";
+import { VERSION } from "../version";
 import { Redactor, isSensitiveKey } from "../security/redact";
 import {
   buildChildEnvironment,
@@ -368,7 +369,7 @@ export class McpClient {
     const res = await this.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "tenjin", version: "0.1.0" },
+      clientInfo: { name: "tenjin", version: VERSION },
     });
     if (res.error) {
       throw new Error(this.redactor.redact(`MCP initialize failed: ${res.error.message ?? "unknown error"}`));

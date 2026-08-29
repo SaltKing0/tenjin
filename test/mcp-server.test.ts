@@ -5,6 +5,7 @@ import {
   UNTRUSTED_MARKER,
   MCP_PROTOCOL_VERSION,
 } from "../src/mcp-server";
+import { VERSION } from "../src/version";
 
 function makeServer(
   dispatch = async (name: string, args: Record<string, unknown>) => ({
@@ -37,6 +38,7 @@ describe("MCP server handshake + allowlist", () => {
     expect(res.error).toBeUndefined();
     expect(res.result.protocolVersion).toBe(MCP_PROTOCOL_VERSION);
     expect(res.result.serverInfo.name).toBe("tenjin");
+    expect(res.result.serverInfo.version).toBe(VERSION);
   });
 
   test("tools/list shows ONLY allowlisted tools", async () => {

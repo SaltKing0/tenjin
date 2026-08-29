@@ -14,7 +14,14 @@ describe("release workflow", () => {
   });
 
   test("runs the full blackbox against each native artifact", () => {
+    expect(raw).toContain('test "$(node -p process.arch)" = "${{ matrix.native_arch }}"');
     expect(raw).toContain("scripts/release-blackbox.ts --artifact");
+  });
+
+  test("refuses mismatched tags and marks prerelease versions explicitly", () => {
+    expect(raw).toContain('test "v${PACKAGE_VERSION}" = "${GITHUB_REF_NAME}"');
+    expect(raw).toContain("prerelease: ${{ contains(github.ref_name, '-') }}");
+    expect(raw).toContain("generate_release_notes: true");
   });
 
   test("publishes flat artifact names with a matching checksum manifest", () => {
