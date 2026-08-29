@@ -79,6 +79,11 @@ returns a single answer after running as many tool steps as needed.
 
 [`src/agent/prompt.ts`](../src/agent/prompt.ts) assembles the system prompt from
 the configured `SOUL.md`, project `AGENTS.md`, facts and the memory section.
+After policy, deny rules and optional MCP tools resolve, both interactive and
+headless entry points use [`src/agent/disclosure.ts`](../src/agent/disclosure.ts)
+to append a stable Level-1 index of the effective tools and available skills.
+The index contains names and one-line descriptions only; full skill bodies are
+loaded explicitly through `use_skill`.
 [`src/agent/budget.ts`](../src/agent/budget.ts) tracks spend per session against
 `budgetUSD`.
 

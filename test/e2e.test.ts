@@ -34,6 +34,20 @@ describe("e2e: CLI against fake anthropic server", () => {
   test("full REPL session: banner, streamed reply, usage line, session log written", async () => {
     home = mkdtempSync(join(tmpdir(), "tj-e2e-"));
     const modelsSeen: string[] = [];
+    const systemsSeen: string[] = [];
+    const skillDir = join(home, "skills", "release-helper");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: release-helper",
+        "description: Release helper index marker",
+        "---",
+        "FULL_SKILL_BODY_MUST_STAY_OUT_OF_LEVEL_ONE",
+        "",
+      ].join("\n"),
+    );
 
     server = Bun.serve({
       port: 0,
@@ -42,6 +56,11 @@ describe("e2e: CLI against fake anthropic server", () => {
         if (url.pathname === "/v1/messages" && req.method === "POST") {
           const body = (await req.json()) as any;
           modelsSeen.push(body.model);
+          systemsSeen.push(
+            Array.isArray(body.system)
+              ? body.system.map((block: any) => String(block?.text ?? "")).join("\n")
+              : String(body.system ?? ""),
+          );
           expect(body.stream).toBe(true);
           return new Response(chatResponse(REPLY_TEXT), {
             headers: { "content-type": "text/event-stream" },
@@ -93,6 +112,11 @@ describe("e2e: CLI against fake anthropic server", () => {
     expect(stdout).toContain("memory on");
 
     expect(modelsSeen).toContain("mock-model");
+    expect(systemsSeen[0]).toContain("# Tools");
+    expect(systemsSeen[0]).toContain("- read_file:");
+    expect(systemsSeen[0]).toContain("# Skills");
+    expect(systemsSeen[0]).toContain("- release-helper: Release helper index marker");
+    expect(systemsSeen[0]).not.toContain("FULL_SKILL_BODY_MUST_STAY_OUT_OF_LEVEL_ONE");
 
     const sessionsDir = join(home, "sessions");
     expect(existsSync(sessionsDir)).toBe(true);

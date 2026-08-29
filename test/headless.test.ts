@@ -8,6 +8,7 @@ import type {
   ChatResponse,
   Provider,
 } from "../src/provider/types";
+import type { ToolDef } from "../src/tools/registry";
 
 let dir: string;
 
@@ -284,7 +285,7 @@ describe("runHeadless", () => {
     expect(system).toContain("shipped the auth rewrite");
   });
 
-  test("summarizeSkills listing is in the prompt and use_skill can load a skill", async () => {
+  test("runtime disclosure index lists active tools and skills; use_skill loads the body", async () => {
     const home = join(dir, "home");
     writeSkill(home, "bun-testing", "How bun tests work", "Always run bun test.");
     const provider = scriptProvider([
@@ -304,9 +305,13 @@ describe("runHeadless", () => {
     expect(first?.tools.map((t) => t.name)).toContain("use_skill");
     expect(first?.tools.map((t) => t.name)).not.toContain("save_skill");
     const system = String(first?.system);
+    expect(system).toContain("# Tools");
+    expect(system).toContain("- read_file:");
+    expect(system).toContain("- use_skill:");
+    expect(system).not.toContain("- save_skill:");
     expect(system).toContain("# Skills");
-    expect(system).toContain("bun-testing");
-    expect(system).toContain("How bun tests work");
+    expect(system).toContain("- bun-testing: How bun tests work");
+    expect(system).not.toContain("Always run bun test.");
 
     const second = provider.requests[1];
     if (!second) throw new Error("missing second request");
@@ -320,17 +325,46 @@ describe("runHeadless", () => {
     expect(skillResult.content).toContain("Always run bun test.");
   });
 
+  test("runtime disclosure index follows the final deny list and omits schema internals", async () => {
+    const probe: ToolDef = {
+      name: "runtime_probe",
+      group: "read",
+      description: "Visible first line\nHidden second line",
+      inputSchema: {
+        type: "object",
+        properties: { hidden_schema_field: { type: "string" } },
+        required: ["hidden_schema_field"],
+      },
+      async handler() {
+        return "ok";
+      },
+    };
+    const provider = base().provider as ReturnType<typeof scriptProvider>;
+    await runHeadless(base({ provider, policy: "full", denyTools: ["bash"], extraTools: [probe] }));
+
+    const first = provider.requests[0];
+    expect(first?.tools.map((tool) => tool.name)).toContain("runtime_probe");
+    expect(first?.tools.map((tool) => tool.name)).not.toContain("bash");
+    const system = String(first?.system);
+    expect(system).toContain("- runtime_probe: Visible first line");
+    expect(system).not.toContain("Hidden second line");
+    expect(system).not.toContain("hidden_schema_field");
+    expect(system).not.toContain("- bash:");
+  });
+
   test("full policy exposes save_skill; none exposes neither skill tool", async () => {
     const home = join(dir, "home");
-    mkdirSync(home, { recursive: true });
+    writeSkill(home, "policy-skill", "Only when activation is available", "Policy body.");
     const fullProvider = base().provider as ReturnType<typeof scriptProvider>;
     await runHeadless(base({ provider: fullProvider, home, policy: "full" }));
     expect(fullProvider.requests[0]?.tools.map((t) => t.name)).toContain("save_skill");
     expect(fullProvider.requests[0]?.tools.map((t) => t.name)).toContain("use_skill");
+    expect(String(fullProvider.requests[0]?.system)).toContain("- policy-skill:");
 
     const noneProvider = scriptProvider([endTurn("ok")]);
     await runHeadless(base({ provider: noneProvider, home, policy: "none" }));
     expect(noneProvider.requests[0]?.tools).toEqual([]);
+    expect(String(noneProvider.requests[0]?.system)).not.toContain("policy-skill");
   });
 
   test("globalBudget reached halts before the provider is called", async () => {
