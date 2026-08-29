@@ -22,6 +22,7 @@ import { createProvider } from "./provider/factory";
 import { ProviderRegistry } from "./provider/registry";
 import { defaultModelRef, cheapModelRef, resolveModelRef, type ModelRef } from "./config/models";
 import { loadSoul, loadAgentsMd, buildSystemPrompt } from "./agent/prompt";
+import { buildDisclosureIndex, renderDisclosureIndex } from "./agent/disclosure";
 import { buildLayeredMemory } from "./memory/layers";
 import { formatUSD } from "./agent/budget";
 import { runAgentTurn } from "./agent/loop";
@@ -291,21 +292,6 @@ async function main(): Promise<number> {
       ? { text: profile.soulText, source: "bot" as const }
       : loadSoul(home, cwd);
     const team = loadTeam(home);
-    const system = buildSystemPrompt({
-      soulText: soul.text,
-      agentsMd: loadAgentsMd(cwd, home),
-      cwd,
-      facts: readFacts(memDir),
-      memorySection:
-        memoryEnabled(config)
-          ? buildMemorySection(listSummaries(memDir), {
-              currentProject: cwd,
-              learnings: readLearnings(memDir, cwd),
-            })
-          : null,
-      coreMemory: renderCoreMemory(loadCoreBlocks(memDir)),
-      teamSection: team ? buildTeamSection(team) : null,
-    });
     let tools: ToolDef[] = [
       readTool,
       globTool,
@@ -352,6 +338,28 @@ async function main(): Promise<number> {
       else if (policy === "read-only") tools = tools.filter((t) => t.group === "read");
       tools = applyDenyTools(tools, profile.config.security?.denyTools);
     }
+    // B5-3 (#378/#470): the stable Level-1 index must reflect the final runtime
+    // surface, including optional MCP tools and bot policy/deny filtering.
+    const skills = tools.some((tool) => tool.name === "use_skill")
+      ? listSkills(home, cwd)
+      : [];
+    const disclosureIndex = renderDisclosureIndex(buildDisclosureIndex(tools, skills));
+    const system = buildSystemPrompt({
+      soulText: soul.text,
+      agentsMd: loadAgentsMd(cwd, home),
+      cwd,
+      facts: readFacts(memDir),
+      memorySection:
+        memoryEnabled(config)
+          ? buildMemorySection(listSummaries(memDir), {
+              currentProject: cwd,
+              learnings: readLearnings(memDir, cwd),
+            })
+          : null,
+      coreMemory: renderCoreMemory(loadCoreBlocks(memDir)),
+      disclosureIndex: disclosureIndex || null,
+      teamSection: team ? buildTeamSection(team) : null,
+    });
     const guard = guardForBot(config.security, profile?.config.security, (detail) =>
       audit.append("tool_block", "user", detail),
     );

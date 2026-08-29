@@ -27,10 +27,11 @@ import { buildMemorySection, loadCoreBlocks, renderCoreMemory } from "../memory/
 import { listSummaries } from "../memory/summaries";
 import { readLearnings } from "../memory/learnings";
 import { listSkills } from "../skills/loader";
-import { createUseSkillTool, summarizeSkills } from "../skills/activate";
+import { createUseSkillTool } from "../skills/activate";
 import { createSaveSkillTool } from "../tools/skill-writer";
 import { createListSkillsTool } from "../tools/skill-lister";
 import { loadTeam, buildTeamSection } from "../bots/team";
+import { buildDisclosureIndex, renderDisclosureIndex } from "./disclosure";
 
 export type ToolPolicy = "read-only" | "none" | "full";
 
@@ -191,22 +192,6 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       : undefined;
   const skills = opts.home ? listSkills(opts.home, opts.cwd) : [];
   const team = opts.home ? loadTeam(opts.home) : null;
-  const system = buildSystemPrompt({
-    soulText: opts.soulText,
-    agentsMd: opts.agentsMd ?? null,
-    cwd: opts.cwd,
-    facts: opts.memoryDir ? readFacts(opts.memoryDir) : null,
-    memorySection: opts.memoryDir
-      ? buildMemorySection(listSummaries(opts.memoryDir), {
-          currentProject: opts.cwd,
-          learnings: readLearnings(opts.memoryDir, opts.cwd),
-        })
-      : null,
-    coreMemory: opts.memoryDir ? renderCoreMemory(loadCoreBlocks(opts.memoryDir)) : null,
-    layeredMemory: opts.layeredMemory ?? null,
-    skillsSummary: skills.length > 0 ? summarizeSkills(skills) : null,
-    teamSection: team ? buildTeamSection(team) : null,
-  });
   const skillDirs = opts.home ? { home: opts.home, projectDir: opts.cwd } : undefined;
   let logger: SessionLog | undefined;
   if (opts.sessionLogDir) {
@@ -277,6 +262,28 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       }),
     );
   }
+
+  // B5-3 (#378/#470): build Level 1 only after the effective tool surface is
+  // final. This keeps denied/capped tools out of the prompt and only advertises
+  // skills when their explicit Level-2 loader is actually available.
+  const disclosedSkills = tools.some((tool) => tool.name === "use_skill") ? skills : [];
+  const disclosureIndex = renderDisclosureIndex(buildDisclosureIndex(tools, disclosedSkills));
+  const system = buildSystemPrompt({
+    soulText: opts.soulText,
+    agentsMd: opts.agentsMd ?? null,
+    cwd: opts.cwd,
+    facts: opts.memoryDir ? readFacts(opts.memoryDir) : null,
+    memorySection: opts.memoryDir
+      ? buildMemorySection(listSummaries(opts.memoryDir), {
+          currentProject: opts.cwd,
+          learnings: readLearnings(opts.memoryDir, opts.cwd),
+        })
+      : null,
+    coreMemory: opts.memoryDir ? renderCoreMemory(loadCoreBlocks(opts.memoryDir)) : null,
+    layeredMemory: opts.layeredMemory ?? null,
+    disclosureIndex: disclosureIndex || null,
+    teamSection: team ? buildTeamSection(team) : null,
+  });
 
   const result = await runAgentTurn({
     provider: opts.provider,

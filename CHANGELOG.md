@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docker` and `remote` modes, plus docker-only settings under `local`, now fail
   during config loading instead of silently executing through the local tool
   path.
+- Interactive and headless prompts now include the progressive-disclosure
+  Level-1 index built from their final policy-filtered tool and skill surface;
+  full skill bodies remain available only through explicit activation.
 
 ## [0.1.0-rc.2] - 2026-08-29
 
