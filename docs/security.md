@@ -239,8 +239,12 @@ separately constructed, trusted host integration may grant unsandboxed shell
 execution for tests or an embedding application; tool input alone cannot do so.
 Runtime and system-wide toolchain paths are an explicit compatibility allowlist;
 Tenjin does not discover per-user toolchains or expose a user's home directory.
-`tenjin doctor` does not yet execute an end-to-end sandboxed toolchain probe, so
-a tool outside that documented boundary can still fail closed at execution time.
+`tenjin doctor` reports whether a supported Bash isolation mechanism is
+available, but deliberately does not execute an arbitrary end-to-end shell
+probe; a tool outside that documented boundary can still fail closed at
+execution time. Doctor output uses mandatory redaction even when
+`security.disabled: true`, so diagnostics remain safe to attach to support
+requests.
 
 Configured MCP servers have a narrower **environment** boundary: they inherit
 the same small ambient allowlist plus only values explicitly named in that

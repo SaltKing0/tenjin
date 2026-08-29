@@ -88,6 +88,7 @@ import { gatewayCommand } from "./cli/gateway";
 import { botCommand } from "./cli/bot";
 import { pluginCommand } from "./cli/plugin";
 import { runOnboard, usage as onboardUsage } from "./cli/onboard";
+import { runDoctor } from "./cli/doctor";
 import { mcpServeCommand } from "./cli/mcp-serve";
 import { initWorkspace, renderWorkspaceStatus, workspaceDir } from "./cli/workspace";
 import { PRODUCT, VERSION } from "./version";
@@ -115,7 +116,7 @@ type CommandHandler = (args: string[]) => number | Promise<number>;
  * Top-level subcommand dispatch. Kept as a plain record (not a framework):
  * each entry maps `tenjin <name>` to its handler with the same semantics the
  * old if-chain had — including the two handlers that set `process.exitCode`
- * (forget, onboard) and doctor, which takes no args.
+ * (forget, onboard).
  */
 const COMMANDS: Record<string, CommandHandler> = {
   bot: (a) => botCommand(a),
@@ -124,7 +125,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   audit: (a) => auditCommand(a),
   spend: (a) => spendCommand(a),
   job: (a) => jobCommand(a),
-  doctor: () => doctorCommand(),
+  doctor: (a) => runDoctor(a),
   export: (a) => exportCommand(a),
   forget: async (a) => {
     process.exitCode = await forgetCommand(a);
@@ -956,101 +957,6 @@ async function oneShotNdjson(ctx: AppContext, prompt: string): Promise<number> {
 }
 
 process.exitCode = await main();
-
-function doctorCommand(): number {
-  const home = tenjinHome();
-  const cwd = process.cwd();
-  const checks: Array<{ state: "ok" | "warn" | "fail"; label: string; detail?: string }> = [];
-  const add = (state: "ok" | "warn" | "fail", label: string, detail?: string) =>
-    checks.push({ state, label, detail });
-
-  let config: HarnessConfig | null = null;
-  try {
-    const loaded = loadConfig(cwd, home, { skipModelCheck: true });
-    config = loaded.config;
-    add("ok", "config loads");
-  } catch (e) {
-    add("fail", "config loads", (e as Error).message);
-  }
-
-  if (config) {
-    const ref = defaultModelRef(config);
-    if (ref.model) add("ok", `model ${ref.provider}:${ref.model}`);
-    else add("warn", "no model configured", "set model in ~/.tenjin/config.yaml");
-
-    const needsAnthropic =
-      ref.provider === "anthropic" || cheapModelRef(config)?.provider === "anthropic";
-    const needsOpenai =
-      ref.provider === "openai" || cheapModelRef(config)?.provider === "openai";
-    if (needsAnthropic) {
-      if (process.env.ANTHROPIC_API_KEY) add("ok", "ANTHROPIC_API_KEY set");
-      else add("fail", "ANTHROPIC_API_KEY missing", "required by anthropic model tier");
-    }
-    if (needsOpenai) {
-      if (process.env.OPENAI_API_KEY) add("ok", "OPENAI_API_KEY set");
-      else add("warn", "OPENAI_API_KEY missing", "needed for openai tiers + vector memory");
-    }
-    if (vectorEnabled(config)) {
-      if (process.env.OPENAI_API_KEY) add("ok", "vector memory ready");
-      else add("warn", "vector memory on but no OPENAI_API_KEY", "recall will be unavailable");
-    }
-    if (config.security?.disabled) {
-      add("warn", "security guard DISABLED", "security.disabled: true — tools run without policy");
-    } else {
-      add("ok", "security guard active");
-    }
-    if (config.gateway && typeof config.gateway === "object") {
-      const tg = (config.gateway as Record<string, unknown>).telegram;
-      if (
-        tg &&
-        typeof tg === "object" &&
-        (tg as Record<string, unknown>).enabled === true &&
-        !process.env.TELEGRAM_BOT_TOKEN
-      ) {
-        add("fail", "TELEGRAM_BOT_TOKEN missing", "gateway.telegram is enabled");
-      } else {
-        add("ok", "gateway telegram token present or disabled");
-      }
-    }
-  }
-
-  const provPath = join(home, "providers.yaml");
-  const keyLines = (existsSync(provPath) ? readFileSync(provPath, "utf8") : "")
-    .split("\n")
-    .filter((l) => /^\s*apiKey:\s*\S/.test(l));
-  const plain = keyLines.some((l) => !l.includes(ENC_PREFIX));
-  const encrypted = keyLines.some((l) => l.includes(ENC_PREFIX));
-  if (keyLines.length === 0) {
-    add("ok", "no provider apiKeys stored", "none in providers.yaml");
-  } else if (plain) {
-    add(
-      "warn",
-      "provider apiKeys stored in plaintext",
-      encrypted ? "some keys still plaintext — re-save to encrypt all" : "`tenjin keyring init` then re-save to encrypt",
-    );
-  } else {
-    add("ok", "provider apiKeys encrypted at rest", "keyring active");
-  }
-
-  try {
-    ensureGlobalDir(home);
-    const probe = join(home, ".doctor-probe");
-    writeFileSync(probe, "x");
-    rmSync(probe);
-    add("ok", `${home} writable`);
-  } catch (e) {
-    add("fail", `${home} writable`, (e as Error).message);
-  }
-
-  const bots = listBots(home);
-  add(bots.length ? "ok" : "warn", `${bots.length} bot(s)`, bots.join(", ") || undefined);
-
-  for (const c of checks) {
-    const icon = c.state === "ok" ? "✅" : c.state === "warn" ? "⚠️ " : "❌";
-    stdout.write(`${icon} ${c.label}${c.detail ? ` — ${c.detail}` : ""}\n`);
-  }
-  return checks.some((c) => c.state === "fail") ? 1 : 0;
-}
 
 function exportCommand(args: string[]): number {
   const home = tenjinHome();

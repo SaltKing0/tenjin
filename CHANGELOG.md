@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `tenjin doctor --json` emits a stable, redacted diagnostics report for
+  deployment gates; `--online` optionally verifies the configured default
+  model with one minimal chat request. The installed-binary release blackbox
+  now gates this path as well.
+
+### Changed
+- Guided onboarding now validates the selected provider/model with a real chat
+  request before persisting credentials, closing false positives from public
+  `/models` endpoints.
+- GitHub workflows use the current Node 24-native official checkout and
+  artifact actions. Releases are published with GitHub CLI instead of a
+  deprecated third-party JavaScript action.
+- Doctor now checks configured provider credentials, gateway binding/token,
+  config permissions, routines and Bash isolation while preserving its
+  offline, no-cost default.
+
 ## [0.1.0-rc.2] - 2026-08-29
 
 ### Fixed
@@ -16,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependency-free `curl` path.
 
 ## [0.1.0-rc.1] - 2026-08-29
+
+> Superseded by `v0.1.0-rc.2`; retained for release-history traceability.
 
 ### Added
 - CLI `-v` / `--version` flag prints the version banner and exits (works with

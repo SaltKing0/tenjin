@@ -73,7 +73,10 @@ describe("CI workflow", () => {
     const uses = allSteps(wf)
       .map((s) => s.uses)
       .filter((u): u is string => typeof u === "string");
-    expect(uses.some((u) => u.startsWith("actions/checkout@"))).toBe(true);
+    expect(uses.filter((u) => u.startsWith("actions/checkout@"))).toEqual([
+      "actions/checkout@v7",
+      "actions/checkout@v7",
+    ]);
     expect(uses.some((u) => u.startsWith("oven-sh/setup-bun@"))).toBe(true);
 
     const runs = runCommands(wf);

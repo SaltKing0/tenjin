@@ -68,14 +68,31 @@ bun run src/index.ts onboard
 bun run src/index.ts gateway
 ```
 
-`tenjin onboard` validates the provider key before writing it, lets you choose
-the model, creates one bot from a role template, applies a trust level, secures
-the gateway with a generated or supplied token, and offers a daily read-only
-repository watch. Re-running the command keeps the existing bot and routine.
+`tenjin onboard` validates the exact provider/model pair with a minimal chat
+request before writing the key, creates one bot from a role template, applies a
+trust level, secures the gateway with a generated or supplied token, and offers
+a daily read-only repository watch. Re-running the command keeps the existing
+bot and routine.
 
 The trust choices are `observe` (hard read-only), `supervised` (writes require
 approval, recommended), and `autonomous` (routine writes flow while
 irreversible actions still require approval).
+
+### Preflight diagnostics
+
+Run the offline preflight before starting a gateway or after changing its
+configuration:
+
+```sh
+tenjin doctor                 # local config, credentials, permissions and isolation
+tenjin doctor --online        # plus one minimal chat request to the default model
+tenjin doctor --json          # stable report for scripts and deployment gates
+```
+
+The default command performs no provider request. `--online` is explicit
+because it uses the configured model and may incur a very small provider cost.
+Diagnostic output is always redacted, including when the normal security guard
+has been disabled. A failed check exits with status 1; warnings alone exit 0.
 
 ### Non-interactive setup
 
@@ -217,7 +234,7 @@ named `tenjin-home` volume. To connect Telegram, set `TELEGRAM_BOT_TOKEN` in
 | `tenjin gateway [--dry-run]` | Always-on gateway (channels, jobs, heartbeats, console) |
 | `tenjin audit [--tail n] [--bot x] [--kind k]` | Security event trail |
 | `tenjin spend [--days n] [--bot x]` | Spend across all sessions |
-| `tenjin doctor` | Environment diagnostics |
+| `tenjin doctor [--online] [--json]` | Redacted local/online preflight diagnostics |
 | `tenjin export` / `tenjin forget` | Session export / data deletion |
 | `tenjin backup [--out <file>]` | Archive the whole home (sans secrets) to a `.tar.gz` |
 | `tenjin restore <backup.tar.gz>` | Restore a home backup (validates first; never restores keys) |

@@ -18,7 +18,7 @@ jobs:
   metadata:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Verify tag matches package version
         shell: bash
         run: |
@@ -45,7 +45,7 @@ jobs:
             other_arch: arm64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
 
@@ -61,7 +61,7 @@ jobs:
       - name: Build (other arch)
         run: bun run scripts/build-release.ts --target bun-${{ matrix.platform }}-${{ matrix.other_arch }} --outfile tenjin-${{ matrix.platform }}-${{ matrix.other_arch }}${{ matrix.platform == 'windows' && '.exe' || '' }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.platform }}
           path: tenjin-${{ matrix.platform }}-*
@@ -70,7 +70,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
 
@@ -82,9 +82,14 @@ jobs:
           cd release
           sha256sum tenjin-* > SHA256SUMS
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: release/*
-          fail_on_unmatched_files: true
-          generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          FLAGS=(--verify-tag --generate-notes)
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            FLAGS+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" release/* "${FLAGS[@]}"
