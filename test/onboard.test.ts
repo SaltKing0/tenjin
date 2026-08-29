@@ -119,6 +119,24 @@ describe("runOnboard — non-interactive flags", () => {
     expect(listBots(home)).not.toContain("writer");
   });
 
+  test("validates the resolved model with a real provider probe before writing", async () => {
+    const calls: Array<{ provider: string; model?: string; apiKey?: string; baseUrl?: string }> = [];
+    const deps = makeDeps({
+      testProvider: async (input) => {
+        calls.push(input);
+        return { ok: false, provider: input.provider, status: 401, error: "chat rejected" };
+      },
+    });
+    const code = await runOnboard(
+      ["--provider", "openai", "--key", "sk-bad", "--model", "gpt-exact", "--bot-name", "writer"],
+      deps,
+    );
+    expect(code).toBe(1);
+    expect(calls).toEqual([{ provider: "openai", apiKey: "sk-bad", model: "gpt-exact", baseUrl: undefined }]);
+    expect(loadConfig(project, home, { skipModelCheck: true }).config.providers?.openai).toBeUndefined();
+    expect(listBots(home)).not.toContain("writer");
+  });
+
   test("requires --key when no key is configured yet", async () => {
     const code = await runOnboard(["--provider", "openai", "--model", "gpt-4o"], makeDeps());
     expect(code).toBe(2);

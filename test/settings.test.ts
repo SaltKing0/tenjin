@@ -681,6 +681,37 @@ describe("verifySettingsApply", () => {
 });
 
 describe("testProvider", () => {
+  test("model probe catches a public /models endpoint with rejected chat credentials", async () => {
+    const secret = "sk-chat-rejected-secret";
+    const server = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        const path = new URL(req.url).pathname;
+        if (path === "/v1/models") return Response.json({ data: [{ id: "gpt-test" }] });
+        if (path === "/v1/chat/completions") {
+          return new Response(`invalid credential ${secret}`, { status: 401 });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    try {
+      const baseUrl = `http://127.0.0.1:${server.port}/v1`;
+      expect((await testProvider({ provider: "openai", baseUrl, apiKey: secret })).ok).toBe(true);
+
+      const result = await testProvider({
+        provider: "openai",
+        baseUrl,
+        apiKey: secret,
+        model: "gpt-test",
+      });
+      expect(result).toMatchObject({ ok: false, provider: "openai", status: 401 });
+      expect(result.error).not.toContain(secret);
+      expect(result.error).toContain("[REDACTED]");
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("valid openai key reports ok with status", async () => {
     const server = Bun.serve({
       port: 0,

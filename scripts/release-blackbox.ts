@@ -266,6 +266,25 @@ export async function runReleaseBlackbox(providedArtifact?: string): Promise<voi
     assert(mapping(botConfig.security, "onboard bot security").policy === "full", "supervised bot policy is not full");
     ok("golden journey persisted provider, bot, trust, token and routine");
 
+    const doctor = await run([installed, "doctor", "--online", "--json"], {
+      cwd: work,
+      env,
+    });
+    assert(doctor.code === 0, `doctor preflight failed:\n${doctor.stdout}${doctor.stderr}`);
+    assert(!doctor.stdout.includes("sk-release-blackbox"), "doctor leaked the provider key");
+    assert(!doctor.stdout.includes(TOKEN), "doctor leaked the gateway token");
+    const doctorReport = mapping(JSON.parse(doctor.stdout), "doctor report");
+    assert(doctorReport.ok === true, "doctor JSON report is not healthy");
+    const doctorChecks = doctorReport.checks;
+    assert(Array.isArray(doctorChecks), "doctor JSON report has no checks array");
+    assert(
+      doctorChecks.some(
+        (check) => mapping(check, "doctor check").id === "provider_chat" && mapping(check, "doctor check").state === "ok",
+      ),
+      "doctor did not verify provider chat",
+    );
+    ok("redacted online doctor preflight passed");
+
     const gatewayPort = reservePort();
     config.memory = { ...mapping(config.memory, "onboard memory"), enabled: false };
     config.mcpServer = { expose: ["read_file"] };

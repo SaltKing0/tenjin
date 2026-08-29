@@ -269,15 +269,6 @@ export async function runOnboard(args: string[], deps: OnboardDeps): Promise<num
       return 2;
     }
 
-    // ---- validate the key before persisting anything ----
-    const testResult = await tp({ provider: providerName, baseUrl, apiKey: key });
-    if (!testResult.ok) {
-      stdout.write(
-        `provider key rejected for "${providerName}": ${testResult.error ?? `status ${testResult.status}`}\n`,
-      );
-      return 1;
-    }
-
     // ---- resolve default model ----
     let model = flags.model;
     if (!model && existingModel) {
@@ -311,6 +302,22 @@ export async function runOnboard(args: string[], deps: OnboardDeps): Promise<num
     const ref: { provider: "anthropic" | "openai"; model: string } =
       isOpenRouter ? { provider: "openai", model }
         : resolveModelRef(model, providerName);
+
+    // Validate the exact provider/model pair before persisting anything. A
+    // public /models endpoint is not enough evidence that chat credentials
+    // are usable (some OpenAI-compatible gateways expose it anonymously).
+    const testResult = await tp({
+      provider: ref.provider,
+      baseUrl,
+      apiKey: key,
+      model: ref.model,
+    });
+    if (!testResult.ok) {
+      stdout.write(
+        `provider/model rejected for "${ref.provider}:${ref.model}": ${testResult.error ?? `status ${testResult.status}`}\n`,
+      );
+      return 1;
+    }
 
     // ---- bot + role ----
     const bots = listBots(home);

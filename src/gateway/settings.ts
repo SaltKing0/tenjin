@@ -4,6 +4,8 @@ import { writeProvidersYaml } from "../config/loader";
 import { resolveModelRef } from "../config/models";
 import { ConfigError } from "../config/types";
 import { OpenAIProvider } from "../provider/openai";
+import { AnthropicProvider } from "../provider/anthropic";
+import { Redactor } from "../security/redact";
 
 export interface SettingsDeps {
   home: string;
@@ -308,19 +310,70 @@ export interface ProviderTestResult {
 }
 
 /**
- * Health check for a single provider: validates the key against the provider's
- * models endpoint without listing/returning models. Used by the console
- * settings panel to confirm a key that may not support model listing.
+ * Health check for a single provider. Without `model`, validates the key
+ * against the provider's models endpoint without returning the model list.
+ * With `model`, makes a minimal real chat request so a public `/models`
+ * endpoint cannot produce a false-positive credential result.
  */
 export async function testProvider(
   input: {
     provider: string;
     baseUrl?: string;
     apiKey?: string;
+    /** When set, perform a minimal real chat request instead of only GET /models. */
+    model?: string;
   },
   timeoutMs: number = DETECT_TIMEOUT_MS,
 ): Promise<ProviderTestResult> {
   const provider = input.provider.toLowerCase();
+  const apiKey = input.apiKey ??
+    (provider === "anthropic" ? process.env.ANTHROPIC_API_KEY : process.env.OPENAI_API_KEY) ?? "";
+  const redactor = new Redactor(true, [apiKey]);
+
+  if (input.model) {
+    if (provider !== "anthropic" && provider !== "openai") {
+      return {
+        ok: false,
+        provider: input.provider,
+        error: redactor.redact(`unknown provider "${input.provider}"`),
+      };
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(new DetectTimeoutError(provider, timeoutMs)),
+      timeoutMs,
+    );
+    try {
+      const retry = { enabled: false, maxAttempts: 1 };
+      const client = provider === "anthropic"
+        ? new AnthropicProvider(apiKey, input.baseUrl, retry, false)
+        : new OpenAIProvider(apiKey, input.baseUrl, retry);
+      await client.chat(
+        {
+          model: input.model,
+          system: "You are a connectivity check. Reply with the single word: ok",
+          messages: [{ role: "user", content: "ping" }],
+          tools: [],
+          maxTokens: 8,
+        },
+        undefined,
+        controller.signal,
+      );
+      return { ok: true, provider, status: 200 };
+    } catch (e) {
+      const error = redactor.redact(e instanceof Error ? e.message : String(e));
+      const statusMatch = error.match(/\b(?:api|http)\s+(\d{3})\b/i);
+      return {
+        ok: false,
+        provider,
+        ...(statusMatch ? { status: Number(statusMatch[1]) } : {}),
+        error,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   let url: string;
   let headers: Record<string, string>;
   try {
@@ -329,7 +382,7 @@ export async function testProvider(
       apiKey: input.apiKey,
     }));
   } catch (e) {
-    return { ok: false, provider: input.provider, error: (e as Error).message };
+    return { ok: false, provider: input.provider, error: redactor.redact((e as Error).message) };
   }
 
   const controller = new AbortController();
@@ -352,10 +405,10 @@ export async function testProvider(
       ok: false,
       provider,
       status: res.status,
-      error: `${provider} /models ${res.status}${detail ? `: ${detail}` : ""}`,
+      error: redactor.redact(`${provider} /models ${res.status}${detail ? `: ${detail}` : ""}`),
     };
   } catch (e) {
-    return { ok: false, provider, error: (e as Error).message };
+    return { ok: false, provider, error: redactor.redact((e as Error).message) };
   } finally {
     clearTimeout(timer);
   }
