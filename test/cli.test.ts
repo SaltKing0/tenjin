@@ -15,6 +15,7 @@ import {
 import { createBot } from "../src/bots/profile";
 import type { ChatRequest, ChatResponse, Provider } from "../src/provider/types";
 import type { HarnessConfig } from "../src/config/types";
+import { VERSION } from "../src/version";
 
 const testConfig: HarnessConfig = {
   provider: "anthropic",
@@ -161,13 +162,13 @@ describe("e2e: --version flag", () => {
   test("--version prints the version banner and exits 0", () => {
     const { exitCode, stdout } = run(["--version"]);
     expect(exitCode).toBe(0);
-    expect(stdout.trim()).toMatch(/^Tenjin v\d+\.\d+\.\d+$/);
+    expect(stdout.trim()).toBe(`Tenjin v${VERSION}`);
   });
 
   test("-v prints the same version banner", () => {
     const { exitCode, stdout } = run(["-v"]);
     expect(exitCode).toBe(0);
-    expect(stdout.trim()).toMatch(/^Tenjin v\d+\.\d+\.\d+$/);
+    expect(stdout.trim()).toBe(`Tenjin v${VERSION}`);
   });
 
   test("--version needs no config / keys (skips model check)", () => {
