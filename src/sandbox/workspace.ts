@@ -13,6 +13,12 @@ import { ConfigError } from "../config/types";
  * Zero runtime dependencies — Docker is driven through the `docker` CLI (or an
  * injected runner in tests), never an SDK.
  *
+ * Runtime status: only `local` is connected to the production tool surface,
+ * where Bash still uses its stricter native fail-closed sandbox. Docker and
+ * Remote remain contract implementations for integration work; config loading
+ * rejects those modes via `validateWorkspaceConfig` instead of silently
+ * falling back to host-local execution.
+ *
  * ## Contract
  * - `mount`  — expose a host path inside the workspace.
  * - `execute`— run argv inside the workspace, return a structured result.
@@ -346,6 +352,40 @@ export interface WorkspaceConfigInput {
   docker?: DockerWorkspaceConfig;
   /** Global orphan TTL for docker containers (ms). */
   ttlMs?: number;
+}
+
+/**
+ * Validate the execution-surface switch at the production config boundary.
+ *
+ * DockerWorkspace does not yet provide the async cancellation, bounded output
+ * capture and per-agent lifecycle required by the real Bash tool. Accepting
+ * `workspace.mode: docker` today would therefore be worse than an unsupported
+ * option: the product would continue on the local path and contradict the
+ * operator's isolation choice. Reject unfinished modes before any provider or
+ * tool runs. Direct construction remains available to its gated integration
+ * tests while the runtime adapter is completed.
+ */
+export function validateWorkspaceConfig(cfg: WorkspaceConfigInput | undefined): void {
+  if (cfg === undefined) return;
+  const mode = cfg.mode ?? "local";
+  if (mode !== "local" && mode !== "docker" && mode !== "remote") {
+    throw new ConfigError(
+      `Unknown workspace mode: ${JSON.stringify(mode)}. Expected one of "local", "docker", "remote".`,
+    );
+  }
+  if (mode !== "local") {
+    throw new ConfigError(
+      `workspace.mode "${mode}" is not connected to the production tool runtime; ` +
+        "refusing to fall back to host-local execution. Use workspace.mode: local " +
+        "(Bash remains fail-closed behind native isolation).",
+    );
+  }
+  if (cfg.docker !== undefined || cfg.ttlMs !== undefined) {
+    throw new ConfigError(
+      "workspace.docker and workspace.ttlMs require workspace.mode: docker, " +
+        "which is not connected to the production tool runtime yet.",
+    );
+  }
 }
 
 /** Select the implementation behind the config switch. Unknown mode = clean error. */

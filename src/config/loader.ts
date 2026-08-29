@@ -5,6 +5,7 @@ import { YAML } from "bun";
 import { stringifyBlockStyle } from "./block-style";
 import { resolveModelRef } from "./models";
 import { openKeyring, encryptProviders, isEncrypted, decrypt as decryptKey } from "../security/keyring";
+import { validateWorkspaceConfig } from "../sandbox/workspace";
 import {
   ConfigError,
   type ApprovalMode,
@@ -451,13 +452,8 @@ memory:
 #   # defaultWindow: 128000    # context window (tokens) for unknown models
 #   # windows:                 # per-model context-window override
 #   #   my-model: 32000
-# workspace:                   # B12-3 execution surface — local (default) | docker | remote
-#   mode: local                # docker runs every command in a per-session hardened container
-#   ttlMs: 600000              # orphan-container TTL (ms) for the docker GC
-#   # docker:                  # docker-only options
-#   #   image: alpine
-#   #   memoryMax: 512m
-#   #   cpuQuota: 2
+# workspace:                   # B12-3 execution surface
+#   mode: local                # only production mode today; docker/remote fail closed
 # gateway:                     # uncomment to start the HTTP API + web console (see docs/architecture.md)
 #   allowWrites: false         # gate write/edit/bash/browser tool calls behind approvals
 #   listen:
@@ -793,6 +789,7 @@ function validate(cfg: HarnessConfig, globalPath: string, skipModelCheck: boolea
   validateGlobalBudget(cfg.globalBudget);
   validateContext(cfg.context);
   validateRouting(cfg.routing);
+  validateWorkspaceConfig(cfg.workspace);
 }
 
 function validateRatePair(pair: unknown, label: string): void {

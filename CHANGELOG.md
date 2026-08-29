@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Doctor now checks configured provider credentials, gateway binding/token,
   config permissions, routines and Bash isolation while preserving its
   offline, no-cost default.
+- `workspace.mode` is no longer an inert isolation promise: unfinished
+  `docker` and `remote` modes, plus docker-only settings under `local`, now fail
+  during config loading instead of silently executing through the local tool
+  path.
 
 ## [0.1.0-rc.2] - 2026-08-29
 
