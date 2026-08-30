@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Interactive and headless prompts now include the progressive-disclosure
   Level-1 index built from their final policy-filtered tool and skill surface;
   full skill bodies remain available only through explicit activation.
+- `tenjin audit-tools [--json]` now exposes the built-in tool-surface quality
+  audit as a configuration-free product and CI command, failing only on API
+  errors while retaining non-blocking quality warnings.
 
 ## [0.1.0-rc.2] - 2026-08-29
 
