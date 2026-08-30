@@ -58,7 +58,9 @@ CLI, loads config, builds an `AppContext`, and dispatches to one of:
   repo watch. Non-interactive via flags; idempotent on re-run. Writes
   `providers.yaml`, bot security, and the relevant `config.yaml` gateway fields.
 - **`gateway`** — the always-on process (below).
-- **`audit` / `spend`** — CLI views over the event trail and spend records.
+- **`audit` / `spend`** — CLI views over the event trail and spend records;
+  `audit-tools` is the configuration-free API-quality gate for the built-in
+  tool surface.
 - **`job`** — manage scheduled gateway jobs from the headless CLI: `list`,
   `add <bot> "<cron>" "<prompt>"`, `rm <id>`, `run <id>`. Edits
   `config.yaml` in block style and validates cron with the shared parser; a

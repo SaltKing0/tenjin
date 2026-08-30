@@ -5,15 +5,11 @@ import {
   auditErrors,
   isCleanToolSurface,
 } from "../src/tools/audit";
-import { readTool } from "../src/tools/read";
-import { globTool } from "../src/tools/glob";
-import { grepTool } from "../src/tools/grep";
-import { writeTool } from "../src/tools/write";
-import { editTool } from "../src/tools/edit";
-import { applyPatchTool } from "../src/tools/apply-patch";
-import { bashTool } from "../src/tools/bash";
-import { webFetchTool } from "../src/tools/web-fetch";
-import { createWebSearchTool } from "../src/tools/web-search";
+import {
+  buildToolAuditReport,
+  defaultToolAuditSurface,
+  runToolAudit,
+} from "../src/cli/tool-audit";
 
 function tool(over: Partial<ToolDef> & { name: string }): ToolDef {
   return {
@@ -24,19 +20,6 @@ function tool(over: Partial<ToolDef> & { name: string }): ToolDef {
     ...over,
   };
 }
-
-/** The always-registered core tool surface (mirrors the runtime's base set). */
-const CORE_TOOLS: ToolDef[] = [
-  readTool,
-  globTool,
-  grepTool,
-  writeTool,
-  editTool,
-  applyPatchTool,
-  bashTool,
-  webFetchTool,
-  createWebSearchTool(),
-];
 
 describe("B2-8 static lint: duplicate tool names fail", () => {
   test("a tool registered twice is reported as an error", () => {
@@ -79,10 +62,10 @@ describe("B2-8 static lint: empty description fails", () => {
 });
 
 describe("B2-8 CI gate over the real core tool surface", () => {
-  test("the always-registered core tools are clean (no duplicate/ambiguous/empty)", () => {
-    const errors = auditErrors(CORE_TOOLS);
+  test("the baseline built-in tools are clean (no duplicate/ambiguous/empty)", () => {
+    const errors = auditErrors(defaultToolAuditSurface());
     expect(errors).toEqual([]);
-    expect(isCleanToolSurface(CORE_TOOLS)).toBe(true);
+    expect(isCleanToolSurface(defaultToolAuditSurface())).toBe(true);
   });
 });
 
@@ -106,5 +89,35 @@ describe("B2-8 quality warnings (not CI-blocking)", () => {
   test("a terse description is a warning, not an error", () => {
     const findings = auditToolSurface([tool({ name: "z", description: "short" })]);
     expect(findings.some((f) => f.code === "short_description" && f.severity === "warning")).toBe(true);
+  });
+});
+
+describe("B2-8 product command", () => {
+  test("reports the real baseline surface and a machine-readable clean result", () => {
+    const report = buildToolAuditReport(defaultToolAuditSurface());
+    expect(report).toMatchObject({ schemaVersion: 1, toolCount: 9, ok: true, errors: 0 });
+
+    let output = "";
+    const code = runToolAudit(["--json"], { write: (text) => { output += text; } });
+    expect(code).toBe(0);
+    expect(JSON.parse(output)).toMatchObject({ schemaVersion: 1, toolCount: 9, ok: true, errors: 0 });
+  });
+
+  test("returns a nonzero exit code only for audit errors", () => {
+    let output = "";
+    const code = runToolAudit([], {
+      tools: [tool({ name: "duplicate" }), tool({ name: "duplicate" })],
+      write: (text) => { output += text; },
+    });
+    expect(code).toBe(1);
+    expect(output).toContain("duplicate_tool_name");
+    expect(output).toContain("tool surface audit: FAILED");
+  });
+
+  test("rejects unknown options with usage exit code", () => {
+    let output = "";
+    expect(runToolAudit(["--bogus"], { write: (text) => { output += text; } })).toBe(2);
+    expect(output).toContain("unknown audit-tools option");
+    expect(output).toContain("usage: tenjin audit-tools");
   });
 });

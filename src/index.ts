@@ -90,6 +90,7 @@ import { botCommand } from "./cli/bot";
 import { pluginCommand } from "./cli/plugin";
 import { runOnboard, usage as onboardUsage } from "./cli/onboard";
 import { runDoctor } from "./cli/doctor";
+import { runToolAudit } from "./cli/tool-audit";
 import { mcpServeCommand } from "./cli/mcp-serve";
 import { initWorkspace, renderWorkspaceStatus, workspaceDir } from "./cli/workspace";
 import { PRODUCT, VERSION } from "./version";
@@ -124,6 +125,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   tell: (a) => tellCommand(a),
   gateway: (a) => gatewayCommand(a),
   audit: (a) => auditCommand(a),
+  "audit-tools": (a) => runToolAudit(a),
   spend: (a) => spendCommand(a),
   job: (a) => jobCommand(a),
   doctor: (a) => runDoctor(a),

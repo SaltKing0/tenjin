@@ -233,6 +233,7 @@ named `tenjin-home` volume. To connect Telegram, set `TELEGRAM_BOT_TOKEN` in
 | `tenjin bot new\|list\|export\|import\|init-examples` | Manage & package bots |
 | `tenjin gateway [--dry-run]` | Always-on gateway (channels, jobs, heartbeats, console) |
 | `tenjin audit [--tail n] [--bot x] [--kind k]` | Security event trail |
+| `tenjin audit-tools [--json]` | Lint the built-in tool API; nonzero exit on API errors |
 | `tenjin spend [--days n] [--bot x]` | Spend across all sessions |
 | `tenjin doctor [--online] [--json]` | Redacted local/online preflight diagnostics |
 | `tenjin export` / `tenjin forget` | Session export / data deletion |

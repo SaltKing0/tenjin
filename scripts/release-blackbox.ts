@@ -213,6 +213,13 @@ export async function runReleaseBlackbox(providedArtifact?: string): Promise<voi
     );
     ok("embedded version matches package.json");
 
+    const toolAudit = await run([installed, "audit-tools", "--json"], { cwd: work, env });
+    assert(toolAudit.code === 0, `tool surface audit failed:\n${toolAudit.stdout}${toolAudit.stderr}`);
+    const toolAuditReport = mapping(JSON.parse(toolAudit.stdout), "tool surface audit report");
+    assert(toolAuditReport.ok === true, "tool surface audit report is not healthy");
+    assert(toolAuditReport.errors === 0, "tool surface audit reported API errors");
+    ok("built-in tool surface audit passed");
+
     const onboard = await run(
       [
         installed,
