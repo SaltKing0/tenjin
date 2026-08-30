@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- CLI argument parsing: `-p` / `--print` no longer swallows flags that follow
+  it. `-p "say hi" --model x` now applies `--model x` instead of appending it
+  to the prompt (footgun surfaced by the headless E2E walkthrough, #471).
+  Multi-word unquoted prompts after `-p` still work; flags before `-p`
+  continue to work unchanged.
+
 ### Added
 - `tenjin doctor --json` emits a stable, redacted diagnostics report for
   deployment gates; `--online` optionally verifies the configured default

@@ -113,10 +113,16 @@ describe("parseArgs", () => {
     }
   });
 
-  test("flags after -p are ignored (prompt swallows them)", () => {
+  test("-p consumes trailing words but NOT subsequent flags", () => {
+    // Regression: E2E walkthrough surfaced `-p hi --model x` swallowing
+    // `--model x` as prompt text. Flags after -p must still parse.
     const a = parseArgs(["-p", "say", "--model", "x"]);
-    expect(a.print).toBe("say --model x");
-    expect(a.model).toBeUndefined();
+    expect(a.print).toBe("say");
+    expect(a.model).toBe("x");
+    expect(parseArgs(["--model", "x", "-p", "hello world"]).print).toBe("hello world");
+    expect(parseArgs(["--model", "x", "-p", "hi", "--model", "y"]).model).toBe("y");
+    expect(parseArgs(["-p", "hello", "--json"]).json).toBe(true);
+    expect(parseArgs(["-p", "fix", "the", "bug"]).print).toBe("fix the bug");
   });
 
   describe("--fork", () => {

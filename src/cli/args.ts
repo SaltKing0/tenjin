@@ -91,10 +91,22 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case "-p":
       case "--print": {
-        const rest = argv.slice(i + 1).join(" ").trim();
-        if (!rest) throw new ConfigError(`-p requires a prompt string`);
-        args.print = rest;
-        return args;
+        // Consume tokens until the next flag so unquoted multi-word prompts
+        // still work, then KEEP parsing the remaining argv (fixes the footgun
+        // surfaced by the E2E walkthrough: `-p hi --model x` previously
+        // swallowed `--model x` as prompt text).
+        const rest: string[] = [];
+        let j = i + 1;
+        for (; j < argv.length; j++) {
+          const tok: string = argv[j] ?? "";
+          if (tok.startsWith("-") && tok.length > 1) break;
+          rest.push(tok);
+        }
+        const prompt = rest.join(" ").trim();
+        if (!prompt) throw new ConfigError(`-p requires a prompt string`);
+        args.print = prompt;
+        i = j - 1;
+        break;
       }
       case "--model":
         args.model = needValue("--model");
