@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Removed
+- `src/provider/transform.ts` (B2-7) and its test: the provider transform
+  layer was superseded by inline adapter streaming + the canonical provider
+  IR (`provider/ir.ts`, #377). Wiring it would have been a redesign, not an
+  activation — removed per the #470 orphan scan decision.
 - `src/bots/subagents.ts` (B11-1) and its test: a parallel, unwired role
   system duplicating what profile-based delegation already covers
   (`ask_bot` ≈ Explore read-only; `handoff_bot` ≈ General-purpose with
