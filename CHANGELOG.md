@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- `src/bots/subagents.ts` (B11-1) and its test: a parallel, unwired role
+  system duplicating what profile-based delegation already covers
+  (`ask_bot` ≈ Explore read-only; `handoff_bot` ≈ General-purpose with
+  quality gate; `ask_bot_async`/`issue_bot` exceed the role system).
+  Nothing imported it at runtime (issue #470 orphan scan); no runtime
+  behavior change. Plan-role veto remains enforced by delegation design.
+
 ### Fixed
 - CLI argument parsing: `-p` / `--print` no longer swallows flags that follow
   it. `-p "say hi" --model x` now applies `--model x` instead of appending it
