@@ -10,6 +10,10 @@ import {
 } from "../memory/hybrid";
 import type { VectorStore } from "../memory/vector-store";
 import { Redactor } from "../security/redact";
+import {
+  groundResponse,
+  type GroundingContext,
+} from "../memory/grounding";
 
 /**
  * B9-14 (#394): retrieval exposed as an EXPLICIT tool, never auto-injected
@@ -62,10 +66,14 @@ async function defaultSearch(
   }
 }
 
-/** Render retrieved hits with their chunk-ids so they can be cited back. */
+/** Render retrieved hits with their chunk-ids so they can be cited back.
+ * When a GroundingContext is supplied, a machine-readable ledger is appended
+ * (fenced, last block) so the caller can gate the final answer against the
+ * exact context that was delivered this call (B9-14, #470). */
 export function formatRetrieval(
   res: HybridResult,
   redactor: Redactor = new Redactor(),
+  delivered?: GroundingContext,
 ): string {
   const head = `retrieve (route: ${res.route}${res.vectorUsed ? ", vector + bm25" : ", bm25 only"}):`;
   if (res.hits.length === 0) {
@@ -76,7 +84,17 @@ export function formatRetrieval(
     const text = safeText.length > 160 ? `${safeText.slice(0, 160)}…` : safeText;
     return `[${h.score.toFixed(3)}] chunk-id "${h.id}": ${text}`;
   });
-  return [head, ...lines].join("\n");
+  if (!delivered || delivered.chunks.size === 0) {
+    return [head, ...lines].join("\n");
+  }
+  const ledger = [
+    "```grounding-ledger",
+    "delivered-chunks:",
+    ...[...delivered.chunks.keys()].map((id) => `- ${id}`),
+    "answers MUST cite only these ids (or delivered file:line); otherwise abstain.",
+    "```",
+  ];
+  return [head, ...lines, ...ledger].join("\n");
 }
 
 export function createRetrieveTool(deps: RetrieveDeps): ToolDef {
@@ -101,7 +119,16 @@ export function createRetrieveTool(deps: RetrieveDeps): ToolDef {
       if (!query) throw new Error("query must not be empty");
       const topK = Math.min(10, Math.max(1, Number(args.topK) || 5));
       const res = await search({ query, topK });
-      return formatRetrieval(res, ctx.redactor ?? new Redactor());
+      // B9-14 (#470): the delivered-context contract is now ENFORCED, not just
+      // documented. The tool output embeds a grounding ledger: the exact chunk
+      // ids + texts delivered this call, so the agent loop can gate the final
+      // answer against what was actually handed to the model (see
+      // GroundingContext). Zero hits still returns the abstain instruction.
+      const delivered: GroundingContext = {
+        chunks: new Map(res.hits.map((h) => [h.id, h.text])),
+        files: new Map(),
+      };
+      return formatRetrieval(res, ctx.redactor ?? new Redactor(), delivered);
     },
   };
 }
