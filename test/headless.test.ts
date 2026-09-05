@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runHeadless, toolsForPolicy, capPolicy, applyDenyTools } from "../src/agent/headless";
+import { SessionLog } from "../src/session/log";
 import type {
   ChatRequest,
   ChatResponse,
@@ -129,6 +130,32 @@ describe("runHeadless", () => {
     expect(r.text).toBe("ok");
     expect(r.stopReason).toBe("end_turn");
     expect(r.costUSD).toBeCloseTo((100 * 3 + 10 * 15) / 1_000_000);
+  });
+
+  test("pre-created logger is reused without duplicate session_start/user", async () => {
+    const provider = base().provider as ReturnType<typeof scriptProvider>;
+    const log = SessionLog.create(join(dir, "sessions"));
+    log.append({
+      t: "session_start",
+      id: log.id,
+      ts: new Date().toISOString(),
+      provider: "script",
+      model: "claude-sonnet-4-5",
+    });
+    log.append({
+      t: "message",
+      role: "user",
+      content: "hello",
+      ts: new Date().toISOString(),
+    });
+    const r = await runHeadless(base({ provider, logger: log }));
+    expect(r.sessionId).toBe(log.id);
+    const events = log.events();
+    // The caller owns session_start + user message; runHeadless must NOT
+    // duplicate them, and must append the assistant turn.
+    expect(events.filter((e) => e.t === "session_start")).toHaveLength(1);
+    expect(events.filter((e) => e.t === "message" && e.role === "user")).toHaveLength(1);
+    expect(events.some((e) => e.t === "message" && e.role === "assistant")).toBe(true);
   });
 
   test("policy none sends zero tools", async () => {

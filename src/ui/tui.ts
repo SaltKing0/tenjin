@@ -15,9 +15,9 @@
  *   row R-1      status bar
  *
  * Keybindings:
- *   Tab               cycle the side panel (sessions / bots / spend / approvals)
- *   ↑ / ↓             move the session cursor in the sessions panel
- *   Enter (empty)     open the highlighted session
+ *   Tab               cycle the side panel (agents / sessions / bots / spend / approvals / memory)
+ *   ↑ / ↓             move the cursor in the sessions/agents panel
+ *   Enter (empty)     open the highlighted session/agent
  *   Ctrl-N / Ctrl-P   next / previous open session tab
  *   PgUp / PgDn       scroll the chat pane
  *   Ctrl-C            interrupt the active turn, else quit
@@ -25,10 +25,18 @@
  *   Enter             send the input line (message or /command)
  *
  * Slash commands (compact): /new /resume <id> /fork [n] /sessions /exit |
- * /model /cost /mode | /whoami /bots /skills /tools /replay /audit | /help
+ * /spawn <text> /attach [n] /agents | /model /cost /mode | /whoami /bots
+ * /skills /tools /replay /audit | /help
+ *
+ * Multi-agent dashboard: /spawn launches a DETACHED background agent (a full
+ * harness turn via runHeadless writing its own SessionLog). The "agents" side
+ * panel lists every agent with a live status badge; Enter/attach opens an
+ * agent's transcript as a tab. The runtime re-renders on every status change,
+ * so the dashboard updates while agents run in the background.
  */
 
 import { stdin, stdout } from "node:process";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import type { ChatMessage, Provider } from "../provider/types";
 import { ProviderRegistry } from "../provider/registry";
@@ -53,6 +61,9 @@ import type { SessionEvent } from "../session/events";
 import { validateMode, DEFAULT_MODE, type ModeLadder } from "../security/mode-ladder";
 import { Redactor } from "../security/redact";
 import { Screen, decodeKey, LineEditor, type Style, RESET } from "./screen";
+import { AgentRuntime, agentStatusView } from "./agents";
+import { runHeadless } from "../agent/headless";
+import { loadSoul } from "../agent/prompt";
 import type { ReplOptions } from "./repl";
 import { forwardEvent, logEvent } from "./repl";
 
@@ -67,8 +78,24 @@ const COLORS = {
   status: { dim: true } as Style,
 };
 
-const SIDE_TABS = ["sessions", "bots", "spend", "approvals", "memory"] as const;
+const SIDE_TABS = ["agents", "sessions", "bots", "spend", "approvals", "memory"] as const;
 type SideTab = (typeof SIDE_TABS)[number];
+
+/** Ambient ping via a macOS notification (best-effort, non-blocking). */
+function notifyOS(message: string): void {
+  if (process.platform !== "darwin") return;
+  try {
+    const safe = message.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const child = spawn(
+      "osascript",
+      ["-e", `display notification "${safe}" with title "Tenjin agent"`],
+      { stdio: "ignore" },
+    );
+    child.unref();
+  } catch {
+    // best-effort ambient ping
+  }
+}
 
 /** Extract a session id from a sessions-panel list line. Each line is rendered
  *  as `${marker}${id}${open}  ${when}  ${preview}` where `marker` is "▶" for
@@ -108,6 +135,49 @@ export async function startTui(opts: ReplOptions): Promise<void> {
   const pinnedSkills = new Set<string>();
   const sessionAllowed = new Set<string>();
   const sessionMode = { current: DEFAULT_MODE as ModeLadder };
+
+  // Multi-agent dashboard: detached background agents. The runtime's `run` is
+  // wired to runHeadless, so a spawned agent is a full harness turn (memory,
+  // skills, tools) writing into its own SessionLog; the TUI only watches and
+  // re-renders on status change. `notify` is the ambient ping hook (OS
+  // notification / mobile webhook is a follow-up; no-op here).
+  const agents = new AgentRuntime({
+    run: async (id, label, hooks, signal) => {
+      const log = opts.sessionsDir ? SessionLog.resolve(opts.sessionsDir, id) : undefined;
+      const result = await runHeadless({
+        provider: opts.registry.get(opts.defaultRef.provider),
+        model: opts.defaultRef.model,
+        soulText: loadSoul(opts.home, opts.cwd).text,
+        cwd: opts.cwd,
+        message: label,
+        maxTokens: opts.config.maxTokens,
+        capUSD: opts.config.budgetUSD,
+        budget,
+        home: opts.home,
+        memoryDir: opts.memoryDir,
+        logger: log,
+        guard: opts.guard,
+        redactor,
+        audit: (kind, detail, correlationId) =>
+          audit.append(kind, "user", detail, opts.bot, correlationId),
+        approve: hooks.approve,
+        onTextDelta: hooks.onTextDelta,
+        onToolActivity: hooks.onToolActivity,
+        onEvent: hooks.onEvent,
+        signal,
+      });
+      return { costUSD: result.costUSD };
+    },
+    onStatusChange: () => render(),
+    // Ambient ping: OS notification on terminal states and when an agent
+    // needs a write approval. `onPendingChange` re-renders so background
+    // approvals surface live (answer with /allow /deny).
+    notify: (rec) => {
+      const v = agentStatusView(rec.status);
+      notifyOS(`[${v.badge} ${rec.status}] ${rec.label}`);
+    },
+    onPendingChange: () => render(),
+  });
 
   // Open tabs — start with the initial session log.
   const tabs: SessionTab[] = [];
@@ -246,6 +316,15 @@ export async function startTui(opts: ReplOptions): Promise<void> {
       const open = tabs.some((t) => t.id === s.id) ? " ●" : "";
       const active = s.id === tab().id ? "▶" : " ";
       return `${active}${s.id}${open}  ${when}  ${(s.preview ?? "").slice(0, 20)}`;
+    });
+  }
+  /** Multi-agent dashboard rows: status badge · id · model · cost · last event. */
+  function loadAgents(): string[] {
+    const all = agents.list();
+    if (all.length === 0) return ["no background agents — /spawn <text>"];
+    return all.map((r) => {
+      const v = agentStatusView(r.status);
+      return `${v.badge}${r.id.slice(-6)}  ${r.model}  ${formatUSD(r.costUSD)}  ${r.lastEvent.slice(0, 24)}`;
     });
   }
   function loadBots(): string[] {
@@ -410,6 +489,8 @@ export async function startTui(opts: ReplOptions): Promise<void> {
           tab(),
           [
             "sessions:  /new  /resume <id>  /fork [n]  /sessions  /exit",
+            "agents:    /spawn <text>  /attach [n]  /agents  (Tab → agents panel)",
+            "approve:   /pending  /allow [n]  /deny [n]",
             "model:     /model [id]  /cost  /mode [rung]",
             "info:      /whoami  /bots  /skills  /tools  /replay  /audit [n]",
             "panel:     Tab cycle · ↑/↓ select · Enter open · Ctrl-N/P tabs · PgUp/PgDn scroll",
@@ -569,6 +650,80 @@ export async function startTui(opts: ReplOptions): Promise<void> {
         appendChat(tab(), dim(`pinned ${skill.name}`), COLORS.dim);
         return;
       }
+      case "/agents":
+        // Open the multi-agent dashboard as the side panel.
+        sideOpen = true;
+        sideTab = "agents";
+        sideCursor = 0;
+        return;
+      case "/spawn": {
+        const text = rest.join(" ").trim();
+        if (!text) {
+          appendChat(tab(), "usage: /spawn <text>", COLORS.err);
+          return;
+        }
+        if (!opts.sessionsDir) {
+          appendChat(tab(), "no sessions dir — sessions disabled", COLORS.err);
+          return;
+        }
+        // Reserve a SessionLog (stable id for attach) and seed it with the
+        // session_start + user message; runHeadless appends the rest.
+        const log = SessionLog.create(opts.sessionsDir);
+        logEvent(
+          log,
+          {
+            t: "session_start",
+            id: log.id,
+            ts: new Date().toISOString(),
+            provider: tab().active.provider,
+            model: tab().active.model,
+            ...(opts.bot ? { bot: opts.bot } : {}),
+          } as SessionEvent,
+          redactor,
+        );
+        logEvent(
+          log,
+          { t: "message", role: "user", content: text, ts: new Date().toISOString() } as SessionEvent,
+          redactor,
+        );
+        const id = agents.spawn(text, log.id, formatModelRef(tab().active));
+        appendChat(tab(), dim(`spawned agent ${id}: ${text}`), COLORS.dim);
+        return;
+      }
+      case "/attach": {
+        const idx = rest[0] && /^\d+$/.test(rest[0]) ? Number(rest[0]) - 1 : 0;
+        const rec = agents.list()[idx];
+        if (!rec) {
+          appendChat(tab(), "no agent at that index — /agents", COLORS.err);
+          return;
+        }
+        openSession(rec.id);
+        return;
+      }
+      case "/pending": {
+        const list = agents.pendingApprovals();
+        appendChat(
+          tab(),
+          list.length
+            ? list.map((p, i) => `${i + 1}. ${p.agentId.slice(-6)} ${p.summary}`).join("\n")
+            : "no pending background approvals",
+          COLORS.bot,
+        );
+        return;
+      }
+      case "/allow":
+      case "/deny": {
+        const idx = rest[0] && /^\d+$/.test(rest[0]) ? Number(rest[0]) - 1 : 0;
+        const p = agents.pendingApprovals()[idx];
+        if (!p) {
+          appendChat(tab(), "no pending background approval at that index — /pending", COLORS.err);
+          return;
+        }
+        const allow = cmd === "/allow";
+        agents.answerApproval(p.id, allow);
+        appendChat(tab(), dim(`${allow ? "allowed" : "denied"} ${p.tool} for agent ${p.agentId.slice(-6)}`), COLORS.dim);
+        return;
+      }
       default:
         appendChat(tab(), `unknown command ${cmd} — /help`, COLORS.err);
     }
@@ -585,7 +740,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
     // Row 0 — GrokBuild-style thin status line: identity · tabs · budget.
     const tabsBar = tabs.map((ti, i) => (i === activeIdx ? "●" : "·") + ti.id.slice(-4)).join(" ");
     const left = ` ◆ ${opts.bot ?? "solo"} · ${t.active.provider}:${t.active.model} · #${t.id.slice(-4)}${t.turnActive ? " ◆thinking" : ""}`;
-    const right = `${pct}% ctx · ${formatUSD(budget.spentUSD)}${opts.config.budgetUSD > 0 ? `/${formatUSD(opts.config.budgetUSD)}` : ""}${pendingApprovals.length > 0 ? ` · ${pendingApprovals.length} appr` : ""}`;
+    const right = `${pct}% ctx · ${formatUSD(budget.spentUSD)}${opts.config.budgetUSD > 0 ? `/${formatUSD(opts.config.budgetUSD)}` : ""}${pendingApprovals.length > 0 ? ` · ${pendingApprovals.length} appr` : ""}${agents.count() > 0 ? ` · ${agents.count()} ag` : ""}${agents.pendingCount() > 0 ? ` · ${agents.pendingCount()} bg` : ""}`;
     scr.write(0, 0, ` ${left}   [${tabsBar}]   ${right}`.slice(0, scr.cols), COLORS.header);
 
     // Side panel — GrokBuild-style overlay (right 30%), only when toggled open.
@@ -594,7 +749,8 @@ export async function startTui(opts: ReplOptions): Promise<void> {
       const sw = Math.floor(scr.cols * 0.3);
       sideLeft = scr.cols - sw;
       sideData =
-        sideTab === "sessions" ? loadSessions()
+        sideTab === "agents" ? loadAgents()
+        : sideTab === "sessions" ? loadSessions()
         : sideTab === "bots" ? loadBots()
         : sideTab === "spend" ? loadSpend()
         : sideTab === "memory" ? loadMemory()
@@ -603,7 +759,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
       const sideRows = scr.rows - 4;
       if (sideCursor >= sideData.length) sideCursor = Math.max(0, sideData.length - 1);
       sideData.slice(0, sideRows).forEach((l, i) => {
-        const selected = sideTab === "sessions" && i === sideCursor;
+        const selected = (sideTab === "sessions" || sideTab === "agents") && i === sideCursor;
         const st = selected ? { ...COLORS.bot, reverse: true } : COLORS.dim;
         scr.write(2 + i, sideLeft, (selected ? "▸ " : "  ") + l.slice(0, sw - 3), st);
       });
@@ -674,12 +830,12 @@ export async function startTui(opts: ReplOptions): Promise<void> {
           editor.right();
           break;
         case "up":
-          if (sideOpen && sideTab === "sessions" && sideData.length > 0) {
+          if (sideOpen && (sideTab === "sessions" || sideTab === "agents") && sideData.length > 0) {
             sideCursor = Math.max(0, sideCursor - 1);
           }
           break;
         case "down":
-          if (sideOpen && sideTab === "sessions" && sideData.length > 0) {
+          if (sideOpen && (sideTab === "sessions" || sideTab === "agents") && sideData.length > 0) {
             sideCursor = Math.min(sideData.length - 1, sideCursor + 1);
           }
           break;
@@ -703,7 +859,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
             // Clicking a row in the sessions side panel opens that session.
             const sw = Math.floor(scr.cols * 0.3);
             const sideLeft = scr.cols - sw;
-            if (sideTab === "sessions" && k.x >= sideLeft && k.y >= 2 && k.y <= scr.rows - 3) {
+            if ((sideTab === "sessions" || sideTab === "agents") && k.x >= sideLeft && k.y >= 2 && k.y <= scr.rows - 3) {
               const idx = k.y - 2;
               sideCursor = idx;
               openSessionAt(idx);
@@ -735,8 +891,8 @@ export async function startTui(opts: ReplOptions): Promise<void> {
           break;
         case "enter": {
           const line = editor.submit();
-          // Empty input in the (open) sessions panel → open the highlighted session.
-          if (line === "" && sideOpen && sideTab === "sessions" && sideData.length > 0) {
+          // Empty input in the (open) sessions/agents panel → open the highlighted entry.
+          if (line === "" && sideOpen && (sideTab === "sessions" || sideTab === "agents") && sideData.length > 0) {
             openSessionAt(sideCursor);
             render();
             break;
@@ -776,12 +932,17 @@ export async function startTui(opts: ReplOptions): Promise<void> {
     }
   }
   function openSessionAt(index: number): void {
-    if (sideTab !== "sessions" || !opts.sessionsDir) return;
-    const line = sideData[index];
-    if (!line) return;
-    const id = extractSessionIdFromLine(line);
-    if (!id) return;
-    openSession(id);
+    if (!opts.sessionsDir) return;
+    if (sideTab === "sessions") {
+      const line = sideData[index];
+      if (!line) return;
+      const id = extractSessionIdFromLine(line);
+      if (!id) return;
+      openSession(id);
+    } else if (sideTab === "agents") {
+      const rec = agents.list()[index];
+      if (rec) openSession(rec.id);
+    }
   }
   let inputBuf = "";
   stdin.on("data", (chunk: string) => {
