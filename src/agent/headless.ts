@@ -72,6 +72,11 @@ export interface HeadlessOptions {
   /** Entries kept per learnings.md file (#204); defaults to DEFAULT_MAX_LEARNINGS. */
   maxLearnings?: number;
   sessionLogDir?: string;
+  /** Pre-created session log to write into (multi-agent dashboard). When set,
+   *  the caller owns writing `session_start` + the user message; runHeadless
+   *  skips creating/duplicating them and only appends assistant/tool/usage
+   *  events. Takes precedence over `sessionLogDir`. */
+  logger?: SessionLog;
   sessionBot?: string;
   guard?: import("../security/guard").SecurityGuard | null;
   redactor?: Redactor | null;
@@ -194,7 +199,10 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
   const team = opts.home ? loadTeam(opts.home) : null;
   const skillDirs = opts.home ? { home: opts.home, projectDir: opts.cwd } : undefined;
   let logger: SessionLog | undefined;
-  if (opts.sessionLogDir) {
+  if (opts.logger) {
+    // Caller owns the session_start + user message; we only append the rest.
+    logger = opts.logger;
+  } else if (opts.sessionLogDir) {
     logger = SessionLog.create(opts.sessionLogDir);
     logger.append({
       t: "session_start",
