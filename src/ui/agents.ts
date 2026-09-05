@@ -2,15 +2,17 @@
  *
  * The AgentRuntime owns each agent's lifecycle as an explicit state machine
  * (idle → running → done | error | cancelled, plus awaiting_approval for the
- * future interactive approval channel) and keeps a live record per agent for
- * the dashboard view. The actual turn is performed by an INJECTED `run`
- * function, so the runtime itself is pure and headlessly testable: the TUI
- * wires `run` to runHeadless, tests inject a scripted runner.
+ * interactive approval channel) and keeps a live record per agent for the
+ * dashboard view. The actual turn is performed by an INJECTED `run` function,
+ * so the runtime itself is pure and headlessly testable: the TUI wires `run`
+ * to runHeadless, tests inject a scripted runner.
  *
- * Ambient/notification hook: `notify` fires on terminal states (done/error/
- * cancelled) so the harness can ping an out-of-band channel (OS notification,
- * mobile webhook) without blocking the TUI. The TUI passes a no-op by default;
- * this is the documented extension point.
+ * Interactive approvals: when a background agent requests a WRITE approval,
+ * the runtime does not auto-deny — it transitions the agent to
+ * `awaiting_approval`, registers a PendingApproval, and blocks until the
+ * caller answers via `answerApproval` (reads auto-allow). `onPendingChange`
+ * lets the UI re-render; `notify` fires on terminal states AND on
+ * awaiting_approval (the ambient ping that an agent needs you).
  */
 
 export type AgentStatus =
@@ -61,6 +63,16 @@ export interface AgentRunResult {
   costUSD: number;
 }
 
+/** A background agent blocked on a write approval, awaiting the user. */
+export interface PendingApproval {
+  id: string;
+  agentId: string;
+  tool: string;
+  group: "read" | "write";
+  summary: string;
+  resolve: (allow: boolean) => void;
+}
+
 export interface AgentRuntimeOptions {
   /** Injected runner — performs the actual agent turn. The runtime only
    *  manages lifecycle state around it. Receives the agent id (so the caller
@@ -74,17 +86,23 @@ export interface AgentRuntimeOptions {
   ) => Promise<AgentRunResult>;
   /** Called on every status/lastEvent change (the TUI re-renders here). */
   onStatusChange?: (rec: AgentRecord) => void;
-  /** Ambient notification hook — fired once on each terminal state. */
+  /** Ambient notification hook — fired on terminal states and on
+   *  awaiting_approval (agent needs you). */
   notify?: (rec: AgentRecord) => void;
-  /** Default approve policy for background agents (auto-allow reads, deny
-   *  writes — the safe default; interactive approval is a follow-up). */
+  /** Called whenever the pending-approval list changes (the TUI re-renders
+   *  so the user can see and answer background approvals). */
+  onPendingChange?: (pending: PendingApproval[]) => void;
+  /** Override the whole approval policy. When absent: reads auto-allow,
+   *  writes become interactive PendingApprovals answered via answerApproval. */
   approve?: (tool: string, group: "read" | "write", input: unknown) => Promise<boolean>;
 }
 
 export class AgentRuntime {
   private agents = new Map<string, AgentRecord>();
   private controllers = new Map<string, AbortController>();
+  private pending: PendingApproval[] = [];
   private seq = 0;
+  private apSeq = 0;
 
   constructor(private readonly opts: AgentRuntimeOptions) {}
 
@@ -96,6 +114,12 @@ export class AgentRuntime {
   }
   count(): number {
     return this.agents.size;
+  }
+  pendingApprovals(): PendingApproval[] {
+    return this.pending;
+  }
+  pendingCount(): number {
+    return this.pending.length;
   }
 
   /** Spawn a detached background agent. Returns its stable id immediately.
@@ -120,14 +144,45 @@ export class AgentRuntime {
     return agentId;
   }
 
-  /** Request cancellation of a running agent (best-effort; the runner must
-   *  honour the AbortSignal). */
+  /** Request cancellation of a running agent. Any pending approval for it is
+   *  resolved as denied; the runner must honour the AbortSignal. */
   abort(id: string): void {
+    let cleared = false;
+    for (const p of this.pending) {
+      if (p.agentId === id) {
+        this.pending = this.pending.filter((x) => x !== p);
+        p.resolve(false);
+        cleared = true;
+      }
+    }
+    if (cleared) this.opts.onPendingChange?.(this.pending);
     this.controllers.get(id)?.abort();
   }
 
+  /** Answer a pending background approval (by pending id or agent id).
+   *  Returns true if an approval was resolved. */
+  answerApproval(ref: string, allow: boolean): boolean {
+    const p = this.pending.find((x) => x.id === ref || x.agentId === ref);
+    if (!p) return false;
+    this.pending = this.pending.filter((x) => x !== p);
+    p.resolve(allow);
+    const rec = this.agents.get(p.agentId);
+    if (rec && rec.status === "awaiting_approval") {
+      rec.status = "running";
+      rec.lastEvent = allow ? `✓ ${p.tool}` : `denied ${p.tool}`;
+      this.emit(rec);
+    }
+    this.opts.onPendingChange?.(this.pending);
+    return true;
+  }
+
   private async run(id: string, label: string, ctrl: AbortController): Promise<void> {
-    const approve = this.opts.approve ?? (async (_t, g) => g === "read");
+    const approve =
+      this.opts.approve ??
+      (async (tool: string, group: "read" | "write", input: unknown) => {
+        if (group === "read") return true; // reads auto-allow
+        return this.awaitApproval(id, tool, group, input);
+      });
     const hooks: AgentRunHooks = {
       onTextDelta: (d) => this.touch(id, `…${d.slice(-24)}`),
       onToolActivity: (n) => this.touch(id, `◆ ${n}`),
@@ -147,6 +202,35 @@ export class AgentRuntime {
         aborted ? "cancelled" : `error: ${(e as Error)?.message ?? e}`,
       );
     }
+  }
+
+  /** Block a write approval: transition to awaiting_approval, register a
+   *  PendingApproval, ping, and wait for answerApproval. */
+  private awaitApproval(
+    agentId: string,
+    tool: string,
+    group: "read" | "write",
+    _input: unknown,
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      const p: PendingApproval = {
+        id: `ap-${this.apSeq++}`,
+        agentId,
+        tool,
+        group,
+        summary: `${tool} (${group}) — approve?`,
+        resolve,
+      };
+      this.pending.push(p);
+      const rec = this.agents.get(agentId);
+      if (rec) {
+        rec.status = "awaiting_approval";
+        rec.lastEvent = `⏳ ${tool}`;
+        this.emit(rec);
+        this.opts.notify?.(rec);
+      }
+      this.opts.onPendingChange?.(this.pending);
+    });
   }
 
   private touch(id: string, lastEvent: string): void {

@@ -36,6 +36,7 @@
  */
 
 import { stdin, stdout } from "node:process";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import type { ChatMessage, Provider } from "../provider/types";
 import { ProviderRegistry } from "../provider/registry";
@@ -79,6 +80,22 @@ const COLORS = {
 
 const SIDE_TABS = ["agents", "sessions", "bots", "spend", "approvals", "memory"] as const;
 type SideTab = (typeof SIDE_TABS)[number];
+
+/** Ambient ping via a macOS notification (best-effort, non-blocking). */
+function notifyOS(message: string): void {
+  if (process.platform !== "darwin") return;
+  try {
+    const safe = message.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const child = spawn(
+      "osascript",
+      ["-e", `display notification "${safe}" with title "Tenjin agent"`],
+      { stdio: "ignore" },
+    );
+    child.unref();
+  } catch {
+    // best-effort ambient ping
+  }
+}
 
 /** Extract a session id from a sessions-panel list line. Each line is rendered
  *  as `${marker}${id}${open}  ${when}  ${preview}` where `marker` is "▶" for
@@ -152,7 +169,14 @@ export async function startTui(opts: ReplOptions): Promise<void> {
       return { costUSD: result.costUSD };
     },
     onStatusChange: () => render(),
-    notify: () => {},
+    // Ambient ping: OS notification on terminal states and when an agent
+    // needs a write approval. `onPendingChange` re-renders so background
+    // approvals surface live (answer with /allow /deny).
+    notify: (rec) => {
+      const v = agentStatusView(rec.status);
+      notifyOS(`[${v.badge} ${rec.status}] ${rec.label}`);
+    },
+    onPendingChange: () => render(),
   });
 
   // Open tabs — start with the initial session log.
@@ -466,6 +490,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
           [
             "sessions:  /new  /resume <id>  /fork [n]  /sessions  /exit",
             "agents:    /spawn <text>  /attach [n]  /agents  (Tab → agents panel)",
+            "approve:   /pending  /allow [n]  /deny [n]",
             "model:     /model [id]  /cost  /mode [rung]",
             "info:      /whoami  /bots  /skills  /tools  /replay  /audit [n]",
             "panel:     Tab cycle · ↑/↓ select · Enter open · Ctrl-N/P tabs · PgUp/PgDn scroll",
@@ -675,6 +700,30 @@ export async function startTui(opts: ReplOptions): Promise<void> {
         openSession(rec.id);
         return;
       }
+      case "/pending": {
+        const list = agents.pendingApprovals();
+        appendChat(
+          tab(),
+          list.length
+            ? list.map((p, i) => `${i + 1}. ${p.agentId.slice(-6)} ${p.summary}`).join("\n")
+            : "no pending background approvals",
+          COLORS.bot,
+        );
+        return;
+      }
+      case "/allow":
+      case "/deny": {
+        const idx = rest[0] && /^\d+$/.test(rest[0]) ? Number(rest[0]) - 1 : 0;
+        const p = agents.pendingApprovals()[idx];
+        if (!p) {
+          appendChat(tab(), "no pending background approval at that index — /pending", COLORS.err);
+          return;
+        }
+        const allow = cmd === "/allow";
+        agents.answerApproval(p.id, allow);
+        appendChat(tab(), dim(`${allow ? "allowed" : "denied"} ${p.tool} for agent ${p.agentId.slice(-6)}`), COLORS.dim);
+        return;
+      }
       default:
         appendChat(tab(), `unknown command ${cmd} — /help`, COLORS.err);
     }
@@ -691,7 +740,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
     // Row 0 — GrokBuild-style thin status line: identity · tabs · budget.
     const tabsBar = tabs.map((ti, i) => (i === activeIdx ? "●" : "·") + ti.id.slice(-4)).join(" ");
     const left = ` ◆ ${opts.bot ?? "solo"} · ${t.active.provider}:${t.active.model} · #${t.id.slice(-4)}${t.turnActive ? " ◆thinking" : ""}`;
-    const right = `${pct}% ctx · ${formatUSD(budget.spentUSD)}${opts.config.budgetUSD > 0 ? `/${formatUSD(opts.config.budgetUSD)}` : ""}${pendingApprovals.length > 0 ? ` · ${pendingApprovals.length} appr` : ""}${agents.count() > 0 ? ` · ${agents.count()} ag` : ""}`;
+    const right = `${pct}% ctx · ${formatUSD(budget.spentUSD)}${opts.config.budgetUSD > 0 ? `/${formatUSD(opts.config.budgetUSD)}` : ""}${pendingApprovals.length > 0 ? ` · ${pendingApprovals.length} appr` : ""}${agents.count() > 0 ? ` · ${agents.count()} ag` : ""}${agents.pendingCount() > 0 ? ` · ${agents.pendingCount()} bg` : ""}`;
     scr.write(0, 0, ` ${left}   [${tabsBar}]   ${right}`.slice(0, scr.cols), COLORS.header);
 
     // Side panel — GrokBuild-style overlay (right 30%), only when toggled open.
