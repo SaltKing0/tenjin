@@ -95,21 +95,88 @@ describe("AgentRuntime lifecycle", () => {
     expect(notified[0]?.id).toBe(id);
     expect(notified[0]?.status).toBe("done");
   });
+});
 
-  test("default approve allows reads and denies writes", async () => {
+describe("AgentRuntime interactive approvals", () => {
+  test("default approve auto-allows reads and queues writes as pending", async () => {
     let read: boolean | undefined;
-    let write: boolean | undefined;
+    let writeResolved: boolean | undefined;
     const rt = new AgentRuntime({
       run: async (_id, _label, hooks) => {
         read = await hooks.approve("read_file", "read", {});
-        write = await hooks.approve("write_file", "write", {});
+        writeResolved = await hooks.approve("write_file", "write", {});
         return { costUSD: 0 };
       },
     });
     const id = rt.spawn("x");
-    await until(() => rt.get(id)?.status === "done");
+    await until(() => rt.pendingCount() === 1);
     expect(read).toBe(true);
-    expect(write).toBe(false);
+    expect(rt.get(id)?.status).toBe("awaiting_approval");
+    // allow it → runner resumes and completes
+    rt.answerApproval(rt.pendingApprovals()[0]!.id, true);
+    await until(() => rt.get(id)?.status === "done");
+    expect(writeResolved).toBe(true);
+    expect(rt.pendingCount()).toBe(0);
+  });
+
+  test("denying a pending write resolves the runner with false", async () => {
+    let writeResolved: boolean | undefined;
+    const rt = new AgentRuntime({
+      run: async (_id, _label, hooks) => {
+        writeResolved = await hooks.approve("write_file", "write", {});
+        return { costUSD: 0 };
+      },
+    });
+    const id = rt.spawn("x");
+    await until(() => rt.pendingCount() === 1);
+    rt.answerApproval(rt.pendingApprovals()[0]!.id, false);
+    await until(() => rt.get(id)?.status === "done");
+    expect(writeResolved).toBe(false);
+  });
+
+  test("answerApproval can target an agent by id", async () => {
+    const rt = new AgentRuntime({
+      run: async (_id, _label, hooks) => {
+        await hooks.approve("write_file", "write", {});
+        return { costUSD: 0 };
+      },
+    });
+    const id = rt.spawn("x");
+    await until(() => rt.pendingCount() === 1);
+    expect(rt.answerApproval(id, true)).toBe(true);
+    await until(() => rt.get(id)?.status === "done");
+  });
+
+  test("notify fires when an agent awaits approval (ambient ping)", async () => {
+    const { rt, notified } = makeRuntime({
+      run: async (_id, _label, hooks) => {
+        await hooks.approve("write_file", "write", {});
+        return { costUSD: 0 };
+      },
+    });
+    const id = rt.spawn("x");
+    await until(() => rt.pendingCount() === 1);
+    expect(rt.get(id)?.status).toBe("awaiting_approval");
+    expect(notified.some((n) => n.status === "awaiting_approval")).toBe(true);
+    rt.answerApproval(rt.pendingApprovals()[0]!.id, true);
+    await until(() => rt.get(id)?.status === "done");
+  });
+
+  test("abort resolves a pending approval as denied and clears it", async () => {
+    let writeResolved: boolean | undefined;
+    const rt = new AgentRuntime({
+      run: async (_id, _label, hooks, signal) => {
+        writeResolved = await hooks.approve("write_file", "write", {});
+        if (signal.aborted) throw new Error("AbortError");
+        return { costUSD: 0 };
+      },
+    });
+    const id = rt.spawn("x");
+    await until(() => rt.pendingCount() === 1);
+    rt.abort(id);
+    expect(rt.pendingCount()).toBe(0);
+    await until(() => rt.get(id)?.status === "cancelled");
+    expect(writeResolved).toBe(false);
   });
 
   test("a custom approve option is forwarded to the runner", async () => {
@@ -124,5 +191,6 @@ describe("AgentRuntime lifecycle", () => {
     const id = rt.spawn("x");
     await until(() => rt.get(id)?.status === "done");
     expect(saw).toBe(true);
+    expect(rt.pendingCount()).toBe(0); // override short-circuits, no pending
   });
 });
