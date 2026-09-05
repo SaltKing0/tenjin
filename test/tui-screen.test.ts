@@ -27,6 +27,7 @@ describe("styleAnsi", () => {
     expect(styleAnsi({ fg: 1 })).toBe("\x1b[31m");
     expect(styleAnsi({ fg: 9 })).toBe("\x1b[91m"); // bright red
     expect(styleAnsi({ bg: 4 })).toBe("\x1b[44m");
+    expect(styleAnsi({ reverse: true })).toBe("\x1b[7m"); // reverse video
   });
 });
 
@@ -95,6 +96,12 @@ describe("decodeKey", () => {
     const é = new TextEncoder().encode("é");
     expect(decodeKey(é)).toEqual([{ type: "char", ch: "é" }]);
   });
+  test("decodes Alt+digit (ESC prefix) as alt-number for tab jump", () => {
+    expect(decodeKey(new TextEncoder().encode("\x1b1"))).toEqual([{ type: "alt-number", n: 1 }]);
+    expect(decodeKey(new TextEncoder().encode("\x1b9"))).toEqual([{ type: "alt-number", n: 9 }]);
+    // a bare ESC is still an esc event (not conflated with Alt+digit)
+    expect(decodeKey(new Uint8Array([0x1b]))).toEqual([{ type: "esc" }]);
+  });
 });
 
 describe("LineEditor", () => {
@@ -120,6 +127,47 @@ describe("LineEditor", () => {
     ed.end();
     ed.ctrlK();
     expect(ed.text).toBe("zabc");
+  });
+  test("history: submit pushes non-empty lines, ↑/↓ navigate", () => {
+    const ed = new LineEditor();
+    ed.insert("hello");
+    expect(ed.submit()).toBe("hello");
+    ed.insert("/help");
+    expect(ed.submit()).toBe("/help");
+    ed.historyPrev();
+    expect(ed.text).toBe("/help");
+    ed.historyPrev();
+    expect(ed.text).toBe("hello");
+    ed.historyPrev();
+    expect(ed.text).toBe("hello"); // at oldest — no-op
+    ed.historyNext();
+    expect(ed.text).toBe("/help");
+    ed.historyNext();
+    expect(ed.text).toBe(""); // back to live edit
+    ed.historyNext();
+    expect(ed.text).toBe(""); // stays at live
+  });
+  test("history: empty submits are not pushed, duplicates collapse", () => {
+    const ed = new LineEditor();
+    ed.insert("/x");
+    expect(ed.submit()).toBe("/x");
+    ed.insert("");
+    expect(ed.submit()).toBe(""); // empty not pushed
+    ed.insert("/x");
+    expect(ed.submit()).toBe("/x"); // duplicate not re-pushed
+    ed.historyPrev();
+    expect(ed.text).toBe("/x");
+  });
+  test("history: editing after navigating returns to a fresh edit", () => {
+    const ed = new LineEditor();
+    ed.insert("abc");
+    ed.submit();
+    ed.historyPrev();
+    expect(ed.text).toBe("abc");
+    ed.insert("d");
+    expect(ed.text).toBe("abcd"); // editing leaves history position
+    ed.historyPrev();
+    expect(ed.text).toBe("abc"); // from live again
   });
 });
 
