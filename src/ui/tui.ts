@@ -16,9 +16,10 @@
  *
  * Keybindings:
  *   Tab               cycle the side panel (agents / sessions / bots / spend / approvals / memory)
- *   ↑ / ↓             move the cursor in the sessions/agents panel
+ *   ↑ / ↓             move the cursor in the sessions/agents panel; input history when closed
  *   Enter (empty)     open the highlighted session/agent
  *   Ctrl-N / Ctrl-P   next / previous open session tab
+ *   Alt-1..9          jump straight to tab N (needs Option-as-Meta in macOS Terminal)
  *   PgUp / PgDn       scroll the chat pane
  *   Ctrl-C            interrupt the active turn, else quit
  *   Ctrl-D (empty)    quit
@@ -61,7 +62,7 @@ import type { SessionEvent } from "../session/events";
 import { validateMode, DEFAULT_MODE, type ModeLadder } from "../security/mode-ladder";
 import { Redactor } from "../security/redact";
 import { Screen, decodeKey, LineEditor, type Style, RESET } from "./screen";
-import { AgentRuntime, agentStatusView } from "./agents";
+import { AgentRuntime, agentStatusView, type AgentStatus } from "./agents";
 import { runHeadless } from "../agent/headless";
 import { loadSoul } from "../agent/prompt";
 import type { ReplOptions } from "./repl";
@@ -94,6 +95,22 @@ function notifyOS(message: string): void {
     child.unref();
   } catch {
     // best-effort ambient ping
+  }
+}
+
+/** Dashboard row colour by agent status (green/yellow/red/dim). */
+function statusStyle(status: AgentStatus): Style {
+  switch (status) {
+    case "running":
+      return { fg: 2 }; // green
+    case "awaiting_approval":
+      return { fg: 3 }; // yellow
+    case "error":
+      return { fg: 1 }; // red
+    case "done":
+    case "cancelled":
+    default:
+      return { dim: true };
   }
 }
 
@@ -168,7 +185,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
       });
       return { costUSD: result.costUSD };
     },
-    onStatusChange: () => render(),
+    onStatusChange: () => scheduleRender(),
     // Ambient ping: OS notification on terminal states and when an agent
     // needs a write approval. `onPendingChange` re-renders so background
     // approvals surface live (answer with /allow /deny).
@@ -176,7 +193,7 @@ export async function startTui(opts: ReplOptions): Promise<void> {
       const v = agentStatusView(rec.status);
       notifyOS(`[${v.badge} ${rec.status}] ${rec.label}`);
     },
-    onPendingChange: () => render(),
+    onPendingChange: () => scheduleRender(),
   });
 
   // Open tabs — start with the initial session log.
@@ -245,6 +262,15 @@ export async function startTui(opts: ReplOptions): Promise<void> {
   function switchTab(delta: number): void {
     if (tabs.length === 0) return;
     activeIdx = (activeIdx + delta + tabs.length) % tabs.length;
+    sideCursor = 0;
+    render();
+  }
+  /** Jump straight to a tab by 1-based number (Alt-1..9). */
+  function switchTabTo(n: number): void {
+    if (tabs.length === 0) return;
+    const idx = Math.max(0, Math.min(tabs.length - 1, n - 1));
+    if (idx === activeIdx) return;
+    activeIdx = idx;
     sideCursor = 0;
     render();
   }
@@ -731,6 +757,17 @@ export async function startTui(opts: ReplOptions): Promise<void> {
   const dim = (s: string) => s;
 
   // ---------- render ----------
+  // Coalesce high-frequency background renders (agent status/tool events) into
+  // one paint per macrotask so a burst of events doesn't thrash the screen.
+  let renderPending = false;
+  function scheduleRender(): void {
+    if (renderPending) return;
+    renderPending = true;
+    setTimeout(() => {
+      renderPending = false;
+      render();
+    }, 0);
+  }
   function render(): void {
     scr.clear();
     const t = tab();
@@ -760,7 +797,11 @@ export async function startTui(opts: ReplOptions): Promise<void> {
       if (sideCursor >= sideData.length) sideCursor = Math.max(0, sideData.length - 1);
       sideData.slice(0, sideRows).forEach((l, i) => {
         const selected = (sideTab === "sessions" || sideTab === "agents") && i === sideCursor;
-        const st = selected ? { ...COLORS.bot, reverse: true } : COLORS.dim;
+        const st = selected
+          ? { ...COLORS.bot, reverse: true }
+          : sideTab === "agents"
+            ? statusStyle(agents.list()[i]?.status ?? "idle")
+            : COLORS.dim;
         scr.write(2 + i, sideLeft, (selected ? "▸ " : "  ") + l.slice(0, sw - 3), st);
       });
     }
@@ -774,13 +815,18 @@ export async function startTui(opts: ReplOptions): Promise<void> {
       if (line) scr.write(1 + i, 0, line.text.slice(0, cw), line.st);
     }
 
-    // Prompt + input (row R-2), hint line (row R-1) — GrokBuild-style.
+    // Prompt + input (row R-2), hint/toast line (row R-1) — GrokBuild-style.
     scr.write(scr.rows - 2, 0, `${PROMPT}${editor.text}`, COLORS.input);
+    const pending = agents.pendingApprovals();
+    const hint =
+      pending.length > 0
+        ? ` ⏳ ${pending[0]!.agentId.slice(-6)}: ${pending[0]!.tool} — /allow 1`
+        : ` Enter:run │ Ctrl-N/P:tabs │ Alt-1..9:jump │ Tab:panel │ Esc:clear │ Ctrl-C:interrupt`;
     scr.write(
       scr.rows - 1,
       0,
-      ` Enter:run │ Ctrl-N/P:tabs │ Tab:panel │ Esc:clear │ /exit:quit │ Ctrl-C:interrupt`.slice(0, scr.cols),
-      COLORS.status,
+      hint.slice(0, scr.cols),
+      pending.length > 0 ? { ...COLORS.ok, reverse: true } : COLORS.status,
     );
     scr.render(stdout, { row: scr.rows - 2, col: Math.min(2 + editor.cursor, scr.cols - 1) });
   }
@@ -832,11 +878,15 @@ export async function startTui(opts: ReplOptions): Promise<void> {
         case "up":
           if (sideOpen && (sideTab === "sessions" || sideTab === "agents") && sideData.length > 0) {
             sideCursor = Math.max(0, sideCursor - 1);
+          } else {
+            editor.historyPrev();
           }
           break;
         case "down":
           if (sideOpen && (sideTab === "sessions" || sideTab === "agents") && sideData.length > 0) {
             sideCursor = Math.min(sideData.length - 1, sideCursor + 1);
+          } else {
+            editor.historyNext();
           }
           break;
         case "home":
@@ -853,6 +903,9 @@ export async function startTui(opts: ReplOptions): Promise<void> {
           continue;
         case "ctrl-p":
           switchTab(-1);
+          continue;
+        case "alt-number":
+          switchTabTo(k.n);
           continue;
         case "mouse":
           if (sideOpen && k.pressed && k.button === 0) {

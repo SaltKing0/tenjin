@@ -15,6 +15,7 @@ export interface Style {
   bg?: number; // 0-15
   bold?: boolean;
   dim?: boolean;
+  reverse?: boolean; // reverse video (selected-row highlight)
 }
 
 export const RESET = "\x1b[0m";
@@ -31,6 +32,7 @@ export function styleAnsi(s?: Style): string {
   let out = "";
   if (s?.bold) out += "\x1b[1m";
   if (s?.dim) out += "\x1b[2m";
+  if (s?.reverse) out += "\x1b[7m";
   if (s?.fg !== undefined) out += fgAnsi(s.fg);
   if (s?.bg !== undefined) out += bgAnsi(s.bg);
   return out;
@@ -52,7 +54,8 @@ function sameStyle(a: Style, b: Style): boolean {
     (a.fg ?? -1) === (b.fg ?? -1) &&
     (a.bg ?? -1) === (b.bg ?? -1) &&
     !!a.bold === !!b.bold &&
-    !!a.dim === !!b.dim
+    !!a.dim === !!b.dim &&
+    !!a.reverse === !!b.reverse
   );
 }
 
@@ -204,6 +207,7 @@ export type KeyEvent =
   | { type: "ctrl-l" }
   | { type: "ctrl-n" }
   | { type: "ctrl-p" }
+  | { type: "alt-number"; n: number }
   | { type: "unknown"; bytes: string }
   | { type: "mouse"; x: number; y: number; button: number; pressed: boolean };
 
@@ -263,6 +267,10 @@ export function decodeKey(buf: Uint8Array): KeyEvent[] {
         out.push({ type: "unknown", bytes: seq });
       }
       i = j;
+    } else if (b === 0x1b && i + 1 < buf.length && buf[i + 1]! >= 0x31 && buf[i + 1]! <= 0x39) {
+      // Alt+digit (ESC prefix + digit) — e.g. Alt-1..9 to jump to a tab.
+      out.push({ type: "alt-number", n: buf[i + 1]! - 0x30 });
+      i += 2;
     } else if (b === 0x1b) {
       // Bare ESC (not a CSI/SS3 sequence) — e.g. GrokBuild-style "Esc:clear".
       out.push({ type: "esc" });
@@ -312,17 +320,24 @@ export function decodeKey(buf: Uint8Array): KeyEvent[] {
 export class LineEditor {
   text = "";
   cursor = 0;
+  /** Submitted lines, oldest→newest (commands + messages). */
+  private history: string[] = [];
+  /** -1 = live edit position; otherwise index into `history`. */
+  private historyIdx = -1;
 
   insert(ch: string): void {
+    this.leaveHistory();
     this.text = this.text.slice(0, this.cursor) + ch + this.text.slice(this.cursor);
     this.cursor += ch.length;
   }
   backspace(): void {
+    this.leaveHistory();
     if (this.cursor <= 0) return;
     this.text = this.text.slice(0, this.cursor - 1) + this.text.slice(this.cursor);
     this.cursor--;
   }
   del(): void {
+    this.leaveHistory();
     if (this.cursor >= this.text.length) return;
     this.text = this.text.slice(0, this.cursor) + this.text.slice(this.cursor + 1);
   }
@@ -339,15 +354,45 @@ export class LineEditor {
     this.cursor = this.text.length;
   }
   ctrlK(): void {
+    this.leaveHistory();
     this.text = this.text.slice(0, this.cursor);
   }
   clear(): void {
     this.text = "";
     this.cursor = 0;
+    this.historyIdx = -1;
   }
   submit(): string {
     const v = this.text;
+    if (v && this.history[this.history.length - 1] !== v) this.history.push(v);
     this.clear();
     return v;
+  }
+  /** Step back through submitted lines (↑). No-op when at the oldest. */
+  historyPrev(): void {
+    if (this.history.length === 0) return;
+    if (this.historyIdx === -1) this.historyIdx = this.history.length - 1;
+    else if (this.historyIdx > 0) this.historyIdx--;
+    this.setText(this.history[this.historyIdx] ?? "");
+  }
+  /** Step forward through submitted lines (↓). Returns to a blank live edit. */
+  historyNext(): void {
+    if (this.history.length === 0) return;
+    if (this.historyIdx === -1) return; // already at the live edit
+    this.historyIdx++;
+    if (this.historyIdx >= this.history.length) {
+      this.historyIdx = -1;
+      this.setText("");
+    } else {
+      this.setText(this.history[this.historyIdx] ?? "");
+    }
+  }
+  private setText(t: string): void {
+    this.text = t;
+    this.cursor = t.length;
+  }
+  /** Editing after navigating history returns to a fresh live edit. */
+  private leaveHistory(): void {
+    this.historyIdx = -1;
   }
 }
