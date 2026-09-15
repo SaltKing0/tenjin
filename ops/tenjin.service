@@ -10,8 +10,8 @@ Description=Tenjin personal agent gateway
 After=network-online.target
 
 [Service]
-ExecStart=/usr/bin/env bun run /path/to/stealth/src/index.ts gateway
-WorkingDirectory=/path/to/stealth
+ExecStart=/usr/bin/env bun run /path/to/tenjin/src/index.ts gateway
+WorkingDirectory=/path/to/tenjin
 Restart=on-failure
 RestartSec=5
 EnvironmentFile=/your/home/.tenjin/gateway.env

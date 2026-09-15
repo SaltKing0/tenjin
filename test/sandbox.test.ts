@@ -206,7 +206,7 @@ describe("macOS Seatbelt profile (inspection only; not a Bash lifecycle boundary
     expect(args[1]).toBe("-p");
     expect(args).not.toContain("-f");
     expect(args[2]).toContain('(subpath "/private/tmp/tenjin-private")');
-    expect(args).not.toContain("/tmp/stealth-seatbelt");
+    expect(args).not.toContain("/tmp/tenjin-seatbelt");
   });
 });
 

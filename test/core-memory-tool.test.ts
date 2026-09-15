@@ -10,7 +10,7 @@ let dir: string;
 let tool: ReturnType<typeof createCoreMemoryTool>;
 
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), "stealth-core-memory-tool-"));
+  dir = mkdtempSync(join(tmpdir(), "tenjin-core-memory-tool-"));
   tool = createCoreMemoryTool({ memoryDirPath: dir });
 });
 

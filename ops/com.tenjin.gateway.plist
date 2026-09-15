@@ -18,7 +18,7 @@
   <array>
     <string>/path/to/tenjin-launchd.sh</string>
   </array>
-  <key>WorkingDirectory</key><string>/path/to/stealth</string>
+  <key>WorkingDirectory</key><string>/path/to/tenjin</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>/your/home/.tenjin/gateway.log</string>
