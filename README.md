@@ -6,7 +6,7 @@ that lives in your messaging apps and a web console. It is built to be read and
 extended: plain TypeScript, zero runtime dependencies, and an architecture that
 splits cleanly into small, focused modules.
 
-It is the reference harness this repository documents. Repo codename: `stealth`.
+It is the reference harness this repository documents.
 
 ## Highlights
 
@@ -47,7 +47,7 @@ sh install.sh --version=v0.1.0-rc.2
 ~/.local/bin/tenjin --version
 
 # Once the repository/release is public, this is the zero-checkout path:
-curl -fsSL https://raw.githubusercontent.com/SaltKing0/Stealth/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/SaltKing0/tenjin/main/install.sh | sh
 ~/.local/bin/tenjin --version
 ```
 

@@ -52,9 +52,9 @@ const IGNORE_NAMES = new Set([".git", "node_modules", ".checkpoint"]);
 
 const GIT_ENV = [
   "-c",
-  "user.name=stealth-checkpoints",
+  "user.name=tenjin-checkpoints",
   "-c",
-  "user.email=checkpoints@stealth.local",
+  "user.email=checkpoints@tenjin.local",
   "-c",
   "commit.gpgsign=false",
 ];

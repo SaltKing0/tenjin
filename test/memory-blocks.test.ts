@@ -18,7 +18,7 @@ import {
 let dir: string;
 
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), "stealth-memory-blocks-"));
+  dir = mkdtempSync(join(tmpdir(), "tenjin-memory-blocks-"));
 });
 
 afterAll(() => {
@@ -178,7 +178,7 @@ describe("storage round-trip", () => {
   });
 
   test("loadCoreBlocks on a fresh dir returns empty blocks", () => {
-    const fresh = mkdtempSync(join(tmpdir(), "stealth-memory-fresh-"));
+    const fresh = mkdtempSync(join(tmpdir(), "tenjin-memory-fresh-"));
     try {
       const b = loadCoreBlocks(fresh);
       for (const name of CORE_BLOCK_NAMES) expect(b[name]).toBe("");

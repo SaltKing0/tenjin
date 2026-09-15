@@ -10,7 +10,7 @@
 # No hardcoded binaries/paths here — resolve them so this works on Apple Silicon
 # and Intel, Homebrew and non-Homebrew installs alike (#242):
 #   TENJIN_BUN   path to the bun binary (default: `command -v bun`; must exist)
-#   TENJIN_REPO  path to the Stealth checkout (default: parent dir of this script)
+#   TENJIN_REPO  path to the Tenjin checkout (default: parent dir of this script)
 #   TENJIN_ENV_FILE  secrets file to source before exec
 #                    (default: $HOME/.tenjin/gateway.env)
 set -euo pipefail

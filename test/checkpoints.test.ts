@@ -41,7 +41,7 @@ function write(dir: string, rel: string, content: string): void {
 }
 
 beforeAll(() => {
-  root = mkdtempSync(join(tmpdir(), "stealth-checkpoints-"));
+  root = mkdtempSync(join(tmpdir(), "tenjin-checkpoints-"));
   project = join(root, "project");
   store = join(root, "shadow");
   mkdirSync(project, { recursive: true });
@@ -193,7 +193,7 @@ describe("loop integration (B13-6)", () => {
   }
 
   test("snapshots at the prompt boundary AND before the edit tool, with correct contents", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "stealth-cp-loop-"));
+    const dir = mkdtempSync(join(tmpdir(), "tenjin-cp-loop-"));
     try {
       const proj = join(dir, "proj");
       const st = join(dir, "shadow");
@@ -257,7 +257,7 @@ describe("loop integration (B13-6)", () => {
 
 describe("checkpoint tool", () => {
   test("lists checkpoints and restores files / conversation / both through the tool", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "stealth-cp-tool-"));
+    const dir = mkdtempSync(join(tmpdir(), "tenjin-cp-tool-"));
     try {
       const proj = join(dir, "proj");
       const st = join(dir, "shadow");
@@ -301,7 +301,7 @@ describe("checkpoint tool", () => {
   });
 
   test("rejects unknown action and unknown restore mode", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "stealth-cp-toolbad-"));
+    const dir = mkdtempSync(join(tmpdir(), "tenjin-cp-toolbad-"));
     try {
       const tool = (await import("../src/tools/checkpoint")).createCheckpointTool({
         storeDir: join(dir, "shadow"),

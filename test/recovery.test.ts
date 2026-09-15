@@ -245,7 +245,7 @@ describe("loop integration (B3-3)", () => {
   });
 
   test("records an ON_TOOL_CALL checkpoint + recovery audit during a tool turn", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "stealth-recovery-loop-"));
+    const dir = mkdtempSync(join(tmpdir(), "tenjin-recovery-loop-"));
     try {
       const audit: string[] = [];
       const session = new RecoverySession((d) => audit.push(d));

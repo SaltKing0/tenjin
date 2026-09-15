@@ -88,10 +88,10 @@ describe("B13-5 mode ladder — bypass refused without isolation flag", () => {
   });
 
   test("isIsolationEnvReady detects a set, truthy flag", () => {
-    expect(isIsolationEnvReady("STEALTH_ISOLATION", { STEALTH_ISOLATION: "1" })).toBe(true);
-    expect(isIsolationEnvReady("STEALTH_ISOLATION", { STEALTH_ISOLATION: "true" })).toBe(true);
-    expect(isIsolationEnvReady("STEALTH_ISOLATION", { STEALTH_ISOLATION: "0" })).toBe(false);
-    expect(isIsolationEnvReady("STEALTH_ISOLATION", {})).toBe(false);
+    expect(isIsolationEnvReady("TENJIN_ISOLATION", { TENJIN_ISOLATION: "1" })).toBe(true);
+    expect(isIsolationEnvReady("TENJIN_ISOLATION", { TENJIN_ISOLATION: "true" })).toBe(true);
+    expect(isIsolationEnvReady("TENJIN_ISOLATION", { TENJIN_ISOLATION: "0" })).toBe(false);
+    expect(isIsolationEnvReady("TENJIN_ISOLATION", {})).toBe(false);
     expect(isIsolationEnvReady(undefined, {})).toBe(false);
   });
 });

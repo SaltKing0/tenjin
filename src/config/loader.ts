@@ -393,7 +393,7 @@ approval:                  # ask | allow | deny, per tool
 # mode:                     # B13-5 mode ladder (default: manual) — higher-level
 #   ladder: manual          #   higher-level than approval; never widens the T2 law.
 #                           #   manual | acceptEdits | auto | dontAsk | bypass
-#   bypassEnv: STEALTH_ISOLATION   # env var required before bypass is usable
+#   bypassEnv: TENJIN_ISOLATION   # env var required before bypass is usable
 #   askRules: [bash]        # tool names that force a human checkpoint even in auto
   bash: ask
 # pricing:

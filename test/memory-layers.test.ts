@@ -24,7 +24,7 @@ import {
 let dir: string;
 
 beforeAll(() => {
-  dir = mkdtempSync(join(tmpdir(), "stealth-layers-"));
+  dir = mkdtempSync(join(tmpdir(), "tenjin-layers-"));
 });
 
 afterAll(() => {
@@ -146,7 +146,7 @@ describe("learning toggle", () => {
 describe("workspace-convention adapter (B9-9 → #460)", () => {
   let ws: string;
   beforeAll(() => {
-    ws = mkdtempSync(join(tmpdir(), "stealth-ws-layers-"));
+    ws = mkdtempSync(join(tmpdir(), "tenjin-ws-layers-"));
   });
   afterAll(() => {
     rmSync(ws, { recursive: true, force: true });
@@ -182,7 +182,7 @@ describe("workspace-convention adapter (B9-9 → #460)", () => {
   });
 
   test("buildLayeredMemory returns null when enabled but files are empty", () => {
-    const empty = mkdtempSync(join(tmpdir(), "stealth-ws-empty-"));
+    const empty = mkdtempSync(join(tmpdir(), "tenjin-ws-empty-"));
     try {
       writeFileSync(join(empty, "USER.md"), "   \n", "utf8");
       expect(buildLayeredMemory(empty, { layers: { enabled: true } })).toBeNull();

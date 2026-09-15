@@ -6,7 +6,7 @@ import { queryFacts } from "./facts";
 // ===========================================================================
 // Contradiction detection (IdeaGraph-derived, "kontrastiert mit")
 // ---------------------------------------------------------------------------
-// Stealth's facts tier tracks TIME (validity window + supersedes chain) but not
+// Tenjin's facts tier tracks TIME (validity window + supersedes chain) but not
 // SEMANTIC TENSION: two facts can be simultaneously active yet contradict each
 // other, and nothing ever notices. This module closes that gap. When a new
 // durable assertion (e.g. a consolidation learning) contradicts an ACTIVE fact

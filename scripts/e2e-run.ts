@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * e2e-run.ts — headless end-to-end walkthrough of the Tenjin/Stealth harness.
+ * e2e-run.ts — headless end-to-end walkthrough of the Tenjin harness.
  *
  * Mirrors the Roadmap "BIG E2E TEST" as a single runnable script. Boots a mock
  * Anthropic-compatible provider (no real API keys, no network), then drives the
