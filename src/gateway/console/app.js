@@ -1540,7 +1540,7 @@ async function panelMemory(main) {
   );
 }
 
-const DOCS_URL = "https://github.com/SaltKing0/Stealth/tree/main/docs";
+const DOCS_URL = "https://github.com/SaltKing0/tenjin/tree/main/docs";
 
 // #256: slim persistent top bar above every panel — SSE state (click to
 // reconnect), active bot switcher, budget spent today, docs link.
