@@ -1,7 +1,7 @@
 #!/bin/sh
 # Tenjin one-command installer (B15-5, #442).
 #
-#   curl -fsSL https://raw.githubusercontent.com/SaltKing0/Stealth/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/SaltKing0/tenjin/main/install.sh | sh
 #   sh install.sh [--platform=<os>] [--arch=<arch>] [--version=<tag>] [--dir=<dest>]
 #
 # Resolves the host platform/arch, downloads the matching release binary from
@@ -10,7 +10,7 @@
 # a clear message on any unsupported platform/arch — it never guesses.
 set -eu
 
-REPO="${TENJIN_REPO:-SaltKing0/Stealth}"
+REPO="${TENJIN_REPO:-SaltKing0/tenjin}"
 VERSION="${TENJIN_VERSION:-latest}"
 RELEASES_URL_OVERRIDE="${TENJIN_RELEASES_URL:-}"
 RELEASES_URL="${RELEASES_URL_OVERRIDE:-https://github.com/${REPO}/releases}"
