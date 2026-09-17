@@ -214,7 +214,10 @@ async function main(): Promise<number> {
     }
     const registry = new ProviderRegistry(
       config.providers?.openai?.baseUrl,
-      undefined,
+      {
+        anthropic: config.providers?.anthropic?.apiKey,
+        openai: config.providers?.openai?.apiKey,
+      },
       config.retry,
       config.providers?.anthropic?.caching,
       config.providers?.anthropic?.baseUrl,
